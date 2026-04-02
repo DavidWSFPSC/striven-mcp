@@ -300,15 +300,23 @@ def api_health() -> dict:
 # Entry point
 # ---------------------------------------------------------------------------
 # Mode is detected automatically:
-#   PORT env var present  → Render / production → streamable-http on 0.0.0.0
+#   PORT env var present  → Render / production → uvicorn on 0.0.0.0
 #   PORT env var absent   → local development   → stdio (Claude Desktop / Code)
+#
+# We run uvicorn directly (instead of mcp.run()) so we can explicitly bind
+# to host="0.0.0.0" — FastMCP.run() does not accept a host argument and
+# uvicorn defaults to 127.0.0.1, which Render cannot reach.
 
 if __name__ == "__main__":
     port_env = os.environ.get("PORT")
     if port_env:
+        import uvicorn
         port = int(port_env)
         print(f"[mcp_server] Starting HTTP mode on 0.0.0.0:{port}", flush=True)
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
+        # Get FastMCP's Starlette ASGI app and hand it to uvicorn directly.
+        # This gives us full control over host/port binding.
+        app = mcp.streamable_http_app()
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     else:
         print("[mcp_server] Starting stdio mode", flush=True)
         mcp.run()
