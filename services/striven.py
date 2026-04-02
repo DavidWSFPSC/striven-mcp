@@ -3,21 +3,41 @@ import os
 import time
 import requests
 
-# Base URL for the Striven API
-STRIVEN_BASE_URL = "https://api.striven.com/v1"
-# Auth endpoint lives at the root — no /v1 prefix
-STRIVEN_AUTH_URL = "https://api.striven.com/accesstoken"
+# Base URL for the Striven API — override with BASE_URL env var if set
+STRIVEN_BASE_URL = os.environ.get("BASE_URL", "https://api.striven.com/v1")
+# Auth endpoint — override with TOKEN_URL env var if set
+STRIVEN_AUTH_URL = os.environ.get("TOKEN_URL", "https://api.striven.com/accesstoken")
 
 
 class StrivenClient:
     """
     Client for authenticating with and querying the Striven API.
     Handles the client_credentials OAuth2 flow and token caching.
+
+    Supports two env var naming conventions:
+        STRIVEN_CLIENT_ID  / CLIENT_ID
+        STRIVEN_CLIENT_SECRET / CLIENT_SECRET
     """
 
     def __init__(self):
-        self.client_id = os.environ["STRIVEN_CLIENT_ID"]
-        self.client_secret = os.environ["STRIVEN_CLIENT_SECRET"]
+        # Accept either naming convention — Render uses CLIENT_ID/CLIENT_SECRET
+        self.client_id = (
+            os.environ.get("STRIVEN_CLIENT_ID") or os.environ.get("CLIENT_ID")
+        )
+        self.client_secret = (
+            os.environ.get("STRIVEN_CLIENT_SECRET") or os.environ.get("CLIENT_SECRET")
+        )
+
+        if not self.client_id or not self.client_secret:
+            raise EnvironmentError(
+                "Missing Striven API credentials. "
+                "Set STRIVEN_CLIENT_ID (or CLIENT_ID) and "
+                "STRIVEN_CLIENT_SECRET (or CLIENT_SECRET) in the environment."
+            )
+
+        print(f"[StrivenClient] Initialised — base_url={STRIVEN_BASE_URL} "
+              f"client_id={self.client_id[:6]}...", flush=True)
+
         self._token: str | None = None
         self._token_expires_at: float = 0
 

@@ -31,17 +31,19 @@ load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Startup env var check — runs at import time so Gunicorn fails loudly
+# Accepts either STRIVEN_CLIENT_ID or CLIENT_ID (Render convention)
 # ---------------------------------------------------------------------------
-_REQUIRED_VARS = ("STRIVEN_CLIENT_ID", "STRIVEN_CLIENT_SECRET")
-_missing = [v for v in _REQUIRED_VARS if not os.environ.get(v)]
-if _missing:
+_client_id     = os.environ.get("STRIVEN_CLIENT_ID") or os.environ.get("CLIENT_ID")
+_client_secret = os.environ.get("STRIVEN_CLIENT_SECRET") or os.environ.get("CLIENT_SECRET")
+
+if not _client_id or not _client_secret:
     raise EnvironmentError(
-        f"[striven-api] STARTUP FAILED — missing required environment variables: "
-        f"{', '.join(_missing)}. "
-        f"Set these in the Render dashboard under Environment."
+        "[striven-api] STARTUP FAILED — Striven credentials not found. "
+        "Set STRIVEN_CLIENT_ID (or CLIENT_ID) and "
+        "STRIVEN_CLIENT_SECRET (or CLIENT_SECRET) in the Render Environment tab."
     )
-else:
-    print(f"[striven-api] Environment OK — all required vars present.", flush=True)
+
+print(f"[striven-api] Startup OK — credentials found, initialising...", flush=True)
 
 app = Flask(__name__)
 
