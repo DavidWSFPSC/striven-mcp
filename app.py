@@ -14,7 +14,9 @@ SAFETY POLICY:
 """
 
 import os
-from flask import Flask, jsonify, request
+import json
+import anthropic
+from flask import Flask, jsonify, request, render_template
 from dotenv import load_dotenv
 from requests import HTTPError
 
@@ -339,6 +341,231 @@ def estimates_by_customer():
         return jsonify({"count": len(records), "records": records})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Chat UI — WilliamSmith web interface
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT = """You are WilliamSmith, a sharp and reliable business assistant for WilliamSmith Fireplaces.
+You have direct access to live company data from Striven (our business management platform).
+
+YOUR ROLE
+Answer questions about estimates, customers, job values, and the sales pipeline.
+Be concise, accurate, and business-focused. Always call a tool to get real data — never guess or invent numbers.
+
+ESTIMATES & SALES ORDERS
+In our system "estimates" and "sales orders" are the same thing.
+Status codes: 18=Incomplete  19=Quoted  20=Pending Approval  22=Approved  25=In Progress  27=Completed
+
+TOOL ROUTING
+- "How many estimates?"              → count_estimates
+- "Biggest / highest value jobs"     → high_value_estimates
+- "Estimates for [customer name]"    → search_estimates_by_customer
+- "Approved / quoted / in-progress"  → search_estimates with status filter
+- "Estimates from [date] to [date]"  → search_estimates with date filters
+- "Tell me about estimate #N"        → get_estimate_by_id
+- "Missing portal flag / audit"      → portal_flag_audit  (warn: takes ~60 s)
+
+FORMAT
+Lead with the direct answer. Use a markdown table for lists of estimates
+(columns: #, Customer, Total, Status). Round dollar amounts to nearest dollar.
+End with a short follow-up offer."""
+
+_CHAT_TOOLS = [
+    {
+        "name": "count_estimates",
+        "description": "Return the total number of estimates stored in the database.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "high_value_estimates",
+        "description": "Return up to 25 estimates with total value over $10,000, sorted highest first.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "search_estimates_by_customer",
+        "description": "Search estimates by customer name. Case-insensitive, partial match supported.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Customer name or partial name"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "search_estimates",
+        "description": (
+            "Flexible estimate search. "
+            "Status codes: 18=Incomplete 19=Quoted 20=Pending 22=Approved 25=In Progress 27=Completed"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status":      {"type": "integer", "description": "Filter by status ID"},
+                "date_from":   {"type": "string",  "description": "Start date YYYY-MM-DD"},
+                "date_to":     {"type": "string",  "description": "End date YYYY-MM-DD"},
+                "keyword":     {"type": "string",  "description": "Filter by estimate name"},
+                "page_size":   {"type": "integer", "description": "Results per page (default 25)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_estimate_by_id",
+        "description": "Fetch the full detail of a single estimate by its Striven ID.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "estimate_id": {"type": "integer", "description": "Striven estimate / sales order ID"},
+            },
+            "required": ["estimate_id"],
+        },
+    },
+    {
+        "name": "portal_flag_audit",
+        "description": (
+            "Audit ALL estimates and return those missing the Customer Portal display flag. "
+            "Takes 30–60 seconds."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+]
+
+
+def _execute_tool(name: str, tool_input: dict) -> dict:
+    """Map a Claude tool call to the real Striven / Supabase function."""
+    try:
+        if name == "count_estimates":
+            return {"total": count_estimates()}
+
+        if name == "high_value_estimates":
+            records = get_high_value_estimates(min_total=10000, limit=25)
+            return {"count": len(records), "records": records}
+
+        if name == "search_estimates_by_customer":
+            records = get_estimates_by_customer(tool_input["name"])
+            return {"count": len(records), "records": records}
+
+        if name == "search_estimates":
+            body: dict = {
+                "pageIndex": 1,
+                "pageSize":  tool_input.get("page_size", 25),
+            }
+            if "status"    in tool_input: body["StatusChangedTo"] = tool_input["status"]
+            if "keyword"   in tool_input: body["Name"]            = tool_input["keyword"]
+            if "date_from" in tool_input or "date_to" in tool_input:
+                date_range: dict = {}
+                if "date_from" in tool_input: date_range["DateFrom"] = tool_input["date_from"]
+                if "date_to"   in tool_input: date_range["DateTo"]   = tool_input["date_to"]
+                body["DateCreatedRange"] = date_range
+            raw = striven.search_estimates(body)
+            records = [
+                {
+                    "id":              r.get("id"),
+                    "estimate_number": r.get("number"),
+                    "customer_name":   (r.get("customer") or {}).get("name"),
+                    "total":           r.get("total"),
+                    "date":            r.get("dateCreated"),
+                    "status":          (r.get("status") or {}).get("name"),
+                }
+                for r in (raw.get("data") or [])
+            ]
+            return {"total_count": raw.get("totalCount"), "count": len(records), "estimates": records}
+
+        if name == "get_estimate_by_id":
+            return striven.get_estimate(tool_input["estimate_id"])
+
+        if name == "portal_flag_audit":
+            all_estimates = striven.get_all_estimates()
+            portal_field_name = "do not show items on estimate in the customer portal display"
+            broken = []
+            for est in all_estimates:
+                custom_fields = est.get("customFields") or []
+                field = next(
+                    (f for f in custom_fields
+                     if isinstance(f.get("name"), str)
+                     and f["name"].strip().lower() == portal_field_name),
+                    None,
+                )
+                if field is None or field.get("value") is not True:
+                    customer = est.get("customer") or {}
+                    broken.append({
+                        "estimate_id":     est.get("id"),
+                        "estimate_number": est.get("number"),
+                        "estimate_name":   est.get("name"),
+                        "customer_name":   customer.get("name"),
+                        "status":          (est.get("status") or {}).get("name"),
+                    })
+            return {
+                "summary": {"total_checked": len(all_estimates), "total_missing": len(broken)},
+                "records": broken,
+            }
+
+        return {"error": f"Unknown tool: {name}"}
+
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@app.get("/")
+def chat_ui():
+    """Serve the WilliamSmith chat interface."""
+    return render_template("index.html")
+
+
+@app.post("/api/chat")
+def chat_api():
+    """
+    Agentic chat endpoint.
+    Accepts: { messages: [{role, content}, ...] }
+    Returns: { response: "<markdown string>" }
+    """
+    data     = request.get_json(force=True)
+    messages = data.get("messages", [])
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return jsonify({"error": "ANTHROPIC_API_KEY not configured on server."}), 500
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    # Agentic loop — keep going until Claude stops calling tools
+    while True:
+        response = client.messages.create(
+            model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
+            max_tokens=4096,
+            system=_SYSTEM_PROMPT,
+            tools=_CHAT_TOOLS,
+            messages=messages,
+        )
+
+        if response.stop_reason == "tool_use":
+            # Execute every tool Claude asked for
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = _execute_tool(block.name, block.input)
+                    tool_results.append({
+                        "type":        "tool_result",
+                        "tool_use_id": block.id,
+                        "content":     json.dumps(result),
+                    })
+
+            # Add assistant turn + tool results and loop
+            messages = messages + [
+                {"role": "assistant", "content": response.content},
+                {"role": "user",      "content": tool_results},
+            ]
+
+        else:
+            # Final text response
+            text = next(
+                (block.text for block in response.content if hasattr(block, "text")),
+                "No response generated.",
+            )
+            return jsonify({"response": text})
 
 
 # ---------------------------------------------------------------------------

@@ -16,6 +16,8 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
 
   # -----------------------------------------------------------------------
   # Service 2: MCP HTTP server — Claude.ai remote MCP integration
