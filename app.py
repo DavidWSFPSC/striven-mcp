@@ -30,31 +30,18 @@ from services.supabase_client import (
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Startup — debug env dump, then soft credential check (no crash)
+# Startup credential check
 # ---------------------------------------------------------------------------
-
-print("[DEBUG] ENV KEYS:", list(os.environ.keys()), flush=True)
-print("[DEBUG] STRIVEN_CLIENT_ID RAW:", os.environ.get("STRIVEN_CLIENT_ID"), flush=True)
-print("[DEBUG] STRIVEN_CLIENT_SECRET RAW:", os.environ.get("STRIVEN_CLIENT_SECRET"), flush=True)
-print("[DEBUG] CLIENT_ID RAW:", os.environ.get("CLIENT_ID"), flush=True)
-print("[DEBUG] CLIENT_SECRET RAW:", os.environ.get("CLIENT_SECRET"), flush=True)
-
-client_id     = os.getenv("STRIVEN_CLIENT_ID") or os.getenv("CLIENT_ID")
-client_secret = os.getenv("STRIVEN_CLIENT_SECRET") or os.getenv("CLIENT_SECRET")
+client_id     = os.getenv("CLIENT_ID")
+client_secret = os.getenv("CLIENT_SECRET")
 
 if not client_id or not client_secret:
-    print("[WARNING] Missing credentials — continuing startup for debugging", flush=True)
-else:
-    print("[OK] Credentials detected", flush=True)
+    raise EnvironmentError("Missing CLIENT_ID or CLIENT_SECRET.")
 
 app = Flask(__name__)
 
-# Single shared client — wrapped so a missing credential doesn't kill startup
-try:
-    striven = StrivenClient()
-except Exception as e:
-    print(f"[WARNING] StrivenClient failed to init: {e}", flush=True)
-    striven = None
+# Single shared client; token is cached internally and refreshed as needed
+striven = StrivenClient()
 
 
 # ---------------------------------------------------------------------------
