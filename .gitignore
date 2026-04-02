@@ -1,0 +1,11 @@
+# Never commit credentials
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+*.egg-info/
+
+# Render / deployment artifacts
+*.log
