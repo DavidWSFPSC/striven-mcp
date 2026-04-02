@@ -29,6 +29,20 @@ from services.supabase_client import (
 # Load environment variables from .env (ignored in production if not present)
 load_dotenv()
 
+# ---------------------------------------------------------------------------
+# Startup env var check — runs at import time so Gunicorn fails loudly
+# ---------------------------------------------------------------------------
+_REQUIRED_VARS = ("STRIVEN_CLIENT_ID", "STRIVEN_CLIENT_SECRET")
+_missing = [v for v in _REQUIRED_VARS if not os.environ.get(v)]
+if _missing:
+    raise EnvironmentError(
+        f"[striven-api] STARTUP FAILED — missing required environment variables: "
+        f"{', '.join(_missing)}. "
+        f"Set these in the Render dashboard under Environment."
+    )
+else:
+    print(f"[striven-api] Environment OK — all required vars present.", flush=True)
+
 app = Flask(__name__)
 
 # Single shared client; token is cached internally and refreshed as needed

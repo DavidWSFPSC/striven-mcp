@@ -1,7 +1,7 @@
 services:
-  # Flask API — data layer (Striven + Supabase)
+  # Flask API — serves all endpoints including /search-estimates
   - type: web
-    name: striven-api
+    name: striven-mcp-v2
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --workers 2 --timeout 120
@@ -14,13 +14,3 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
-
-  # MCP HTTP server — Claude.ai integration endpoint
-  - type: web
-    name: striven-mcp
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python mcp_server.py --http
-    envVars:
-      - key: FLASK_API_URL
-        value: https://striven-api.onrender.com
