@@ -86,8 +86,8 @@ def search_estimates():
 
     # Always send explicit pagination — never send an empty body to Striven
     body: dict = {
-        "PageIndex": int(args.get("pageIndex", 0)),
-        "PageSize":  int(args.get("pageSize", 25)),
+        "pageIndex": int(args.get("pageIndex", 1)),
+        "pageSize":  int(args.get("pageSize", 25)),
     }
 
     if "customerId" in args:
