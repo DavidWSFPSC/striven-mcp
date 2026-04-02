@@ -24,10 +24,7 @@ Supabase only — it never modifies Striven).
 import os
 import requests
 from mcp.server.fastmcp import FastMCP
-from starlette.applications import Starlette
-from starlette.routing import Route, Mount
 from starlette.responses import JSONResponse
-from starlette.requests import Request
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -301,11 +298,22 @@ def api_health() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Health endpoint — keeps Render warm and allows UptimeRobot pings
+# Health middleware — intercepts /health before FastMCP sees it.
+# This lets UptimeRobot ping us every 5 min and keep Render warm.
 # ---------------------------------------------------------------------------
 
-async def health(request: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok", "service": "striven-mcp-server"})
+class HealthMiddleware:
+    """Lightweight ASGI middleware that handles GET /health directly."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and scope.get("path") == "/health":
+            response = JSONResponse({"status": "ok", "service": "striven-mcp-server"})
+            await response(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
 
 
 # ---------------------------------------------------------------------------
@@ -314,11 +322,6 @@ async def health(request: Request) -> JSONResponse:
 # Mode is detected automatically:
 #   PORT env var present  → Render / production → uvicorn on 0.0.0.0
 #   PORT env var absent   → local development   → stdio (Claude Desktop / Code)
-#
-# We run uvicorn directly so we can bind to 0.0.0.0 explicitly.
-# We also wrap the FastMCP ASGI app in a Starlette router so we can add
-# a /health route — this lets UptimeRobot ping us every 5 min and prevent
-# the Render free tier from spinning down mid-conversation.
 
 if __name__ == "__main__":
     port_env = os.environ.get("PORT")
@@ -327,14 +330,11 @@ if __name__ == "__main__":
         port = int(port_env)
         print(f"[mcp_server] Starting HTTP mode on 0.0.0.0:{port}", flush=True)
 
-        # Get FastMCP's ASGI app (handles /mcp route internally)
+        # FastMCP's ASGI app handles all /mcp traffic
         mcp_asgi = mcp.streamable_http_app()
 
-        # Wrap with a Starlette app that adds /health alongside the MCP routes
-        app = Starlette(routes=[
-            Route("/health", health),
-            Mount("/", app=mcp_asgi),
-        ])
+        # Wrap with health middleware so /health responds without touching FastMCP
+        app = HealthMiddleware(mcp_asgi)
 
         uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     else:
