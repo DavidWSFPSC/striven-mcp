@@ -30,20 +30,26 @@ from services.supabase_client import (
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Startup env var check — runs at import time so Gunicorn fails loudly
-# Accepts either STRIVEN_CLIENT_ID or CLIENT_ID (Render convention)
+# Startup env var check
+# Supports both Render convention (CLIENT_ID) and explicit (STRIVEN_CLIENT_ID)
 # ---------------------------------------------------------------------------
-_client_id     = os.environ.get("STRIVEN_CLIENT_ID") or os.environ.get("CLIENT_ID")
-_client_secret = os.environ.get("STRIVEN_CLIENT_SECRET") or os.environ.get("CLIENT_SECRET")
 
-if not _client_id or not _client_secret:
-    raise EnvironmentError(
-        "[striven-api] STARTUP FAILED — Striven credentials not found. "
-        "Set STRIVEN_CLIENT_ID (or CLIENT_ID) and "
-        "STRIVEN_CLIENT_SECRET (or CLIENT_SECRET) in the Render Environment tab."
+# Debug: print exactly what each variable resolves to at startup
+print(f"[startup] STRIVEN_CLIENT_ID present: {bool(os.getenv('STRIVEN_CLIENT_ID'))}", flush=True)
+print(f"[startup] CLIENT_ID present:         {bool(os.getenv('CLIENT_ID'))}", flush=True)
+print(f"[startup] STRIVEN_CLIENT_SECRET present: {bool(os.getenv('STRIVEN_CLIENT_SECRET'))}", flush=True)
+print(f"[startup] CLIENT_SECRET present:         {bool(os.getenv('CLIENT_SECRET'))}", flush=True)
+
+client_id     = os.getenv("STRIVEN_CLIENT_ID") or os.getenv("CLIENT_ID")
+client_secret = os.getenv("STRIVEN_CLIENT_SECRET") or os.getenv("CLIENT_SECRET")
+
+if not client_id or not client_secret:
+    raise RuntimeError(
+        "Missing Striven credentials. "
+        "Set CLIENT_ID/CLIENT_SECRET or STRIVEN_CLIENT_ID/STRIVEN_CLIENT_SECRET."
     )
 
-print(f"[striven-api] Startup OK — credentials found, initialising...", flush=True)
+print(f"[startup] Credentials OK — client_id={client_id[:6]}...", flush=True)
 
 app = Flask(__name__)
 
