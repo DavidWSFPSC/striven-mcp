@@ -347,7 +347,7 @@ def estimates_by_customer():
 
 if __name__ == "__main__":
     # Fail fast if credentials are missing
-    for var in ("STRIVEN_CLIENT_ID", "STRIVEN_CLIENT_SECRET"):
+    for var in ("CLIENT_ID", "CLIENT_SECRET"):
         if not os.environ.get(var):
             raise RuntimeError(f"Environment variable {var!r} is not set.")
 

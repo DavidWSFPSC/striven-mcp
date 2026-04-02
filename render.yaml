@@ -6,9 +6,9 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --workers 2 --timeout 120
     envVars:
-      - key: STRIVEN_CLIENT_ID
+      - key: CLIENT_ID
         sync: false
-      - key: STRIVEN_CLIENT_SECRET
+      - key: CLIENT_SECRET
         sync: false
       - key: SUPABASE_URL
         sync: false

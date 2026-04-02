@@ -18,6 +18,9 @@ class StrivenClient:
         self.client_id     = os.getenv("CLIENT_ID")
         self.client_secret = os.getenv("CLIENT_SECRET")
 
+        print("[StrivenClient DEBUG] client_id present:", bool(self.client_id), flush=True)
+        print("[StrivenClient DEBUG] client_secret present:", bool(self.client_secret), flush=True)
+
         if not self.client_id or not self.client_secret:
             raise EnvironmentError(
                 "Missing CLIENT_ID or CLIENT_SECRET."
