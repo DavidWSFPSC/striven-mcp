@@ -72,32 +72,24 @@ def search_estimates():
     """
     Search estimates (Striven sales orders) with optional query filters.
 
-    The Striven search endpoint is POST /v1/sales-orders/search and accepts
-    a JSON body. This route maps query-string params to the correct body fields.
-
     Query params (all optional):
-        pageIndex      — zero-based page number (default 0)
-        pageSize       — results per page (default 100)
-        customerId     — filter by customer ID (int)
-        number         — filter by sales order number (string)
-        name           — filter by sales order name (string)
-        statusChangedTo — status ID to filter by:
-                          18=Incomplete, 19=Quoted, 20=Pending Approval,
-                          22=Approved, 25=In Progress, 27=Completed
-        dateCreatedFrom — ISO 8601 start of creation date range
-        dateCreatedTo   — ISO 8601 end of creation date range
-
-    Example:
-        GET /search-estimates?statusChangedTo=19&pageSize=25
+        pageIndex       — zero-based page number (default 0)
+        pageSize        — results per page (default 25)
+        customerId      — filter by customer ID (int)
+        number          — filter by sales order number
+        name            — filter by sales order name
+        statusChangedTo — 18=Incomplete 19=Quoted 20=Pending 22=Approved 25=In Progress 27=Completed
+        dateCreatedFrom — ISO 8601 start date
+        dateCreatedTo   — ISO 8601 end date
     """
     args = request.args
 
-    body: dict = {}
+    # Always send explicit pagination — never send an empty body to Striven
+    body: dict = {
+        "PageIndex": int(args.get("pageIndex", 0)),
+        "PageSize":  int(args.get("pageSize", 25)),
+    }
 
-    if "pageIndex" in args:
-        body["PageIndex"] = int(args["pageIndex"])
-    if "pageSize" in args:
-        body["PageSize"] = int(args["pageSize"])
     if "customerId" in args:
         body["CustomerId"] = int(args["customerId"])
     if "number" in args:
@@ -107,9 +99,8 @@ def search_estimates():
     if "statusChangedTo" in args:
         body["StatusChangedTo"] = int(args["statusChangedTo"])
 
-    # Build DateCreatedRange if either bound is supplied
     date_from = args.get("dateCreatedFrom")
-    date_to = args.get("dateCreatedTo")
+    date_to   = args.get("dateCreatedTo")
     if date_from or date_to:
         date_range: dict = {}
         if date_from:
@@ -119,23 +110,26 @@ def search_estimates():
         body["DateCreatedRange"] = date_range
 
     try:
-        data = striven.search_estimates(body or None)
+        raw = striven.search_estimates(body)
 
-        # Shape each record to the fields Claude and the MCP layer need
+        # Log raw Striven response to Render/server stdout for debugging
+        print(f"[search-estimates] Striven raw: totalCount={raw.get('totalCount')} "
+              f"data_len={len(raw.get('data') or [])}", flush=True)
+
         records = [
             {
-                "id":            r.get("id"),
+                "id":              r.get("id"),
                 "estimate_number": r.get("number"),
-                "customer_name": (r.get("customer") or {}).get("name"),
-                "total":         r.get("total"),           # null on summary view; enriched by detail call
-                "date":          r.get("dateCreated"),
-                "status":        (r.get("status") or {}).get("name"),
+                "customer_name":   (r.get("customer") or {}).get("name"),
+                "total":           r.get("total"),
+                "date":            r.get("dateCreated"),
+                "status":          (r.get("status") or {}).get("name"),
             }
-            for r in (data.get("data") or [])
+            for r in (raw.get("data") or [])
         ]
 
         return jsonify({
-            "total_count": data.get("totalCount"),
+            "total_count": raw.get("totalCount"),
             "count":       len(records),
             "estimates":   records,
         })
