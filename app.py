@@ -110,11 +110,12 @@ def search_estimates():
         body["DateCreatedRange"] = date_range
 
     try:
+        import json as _json
+        print(f"[search-estimates] REQUEST body sent to Striven: {_json.dumps(body)}", flush=True)
+
         raw = striven.search_estimates(body)
 
-        # Log raw Striven response to Render/server stdout for debugging
-        print(f"[search-estimates] Striven raw: totalCount={raw.get('totalCount')} "
-              f"data_len={len(raw.get('data') or [])}", flush=True)
+        print(f"[search-estimates] RESPONSE from Striven (full): {_json.dumps(raw)}", flush=True)
 
         records = [
             {
