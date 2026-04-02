@@ -1,5 +1,7 @@
 services:
-  # Flask API — serves all endpoints including /search-estimates
+  # -----------------------------------------------------------------------
+  # Service 1: Flask REST API — all data endpoints
+  # -----------------------------------------------------------------------
   - type: web
     name: striven-mcp-v2
     runtime: python
@@ -14,3 +16,18 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
+
+  # -----------------------------------------------------------------------
+  # Service 2: MCP HTTP server — Claude.ai remote MCP integration
+  # Endpoint: https://striven-mcp-server.onrender.com/mcp
+  # -----------------------------------------------------------------------
+  - type: web
+    name: striven-mcp-server
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python mcp_server.py --http
+    envVars:
+      - key: FLASK_API_URL
+        value: https://striven-mcp-v2.onrender.com
+      - key: PORT
+        value: "8000"
