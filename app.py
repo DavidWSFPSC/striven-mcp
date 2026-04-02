@@ -42,7 +42,7 @@ striven = StrivenClient()
 @app.get("/health")
 def health():
     """Simple liveness probe — returns 200 if the server is running."""
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "service": "striven-api"})
 
 
 # ---------------------------------------------------------------------------
