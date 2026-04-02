@@ -120,7 +120,25 @@ def search_estimates():
 
     try:
         data = striven.search_estimates(body or None)
-        return jsonify(data)
+
+        # Shape each record to the fields Claude and the MCP layer need
+        records = [
+            {
+                "id":            r.get("id"),
+                "estimate_number": r.get("number"),
+                "customer_name": (r.get("customer") or {}).get("name"),
+                "total":         r.get("total"),           # null on summary view; enriched by detail call
+                "date":          r.get("dateCreated"),
+                "status":        (r.get("status") or {}).get("name"),
+            }
+            for r in (data.get("data") or [])
+        ]
+
+        return jsonify({
+            "total_count": data.get("totalCount"),
+            "count":       len(records),
+            "estimates":   records,
+        })
     except HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 502
         return jsonify({"error": str(exc)}), status
