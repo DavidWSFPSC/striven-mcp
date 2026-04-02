@@ -8,19 +8,20 @@ the "Ask WilliamSmith" Claude.ai project can answer natural-language business
 questions with live company data.
 
 Usage:
-  stdio (Claude Desktop / Claude Code):
+  Local (stdio — Claude Desktop / Claude Code):
       python mcp_server.py
 
-  HTTP (Render / Claude.ai remote MCP):
-      python mcp_server.py --http
-      → MCP endpoint: https://<your-render-url>/mcp
+  Production (Render — HTTP mode):
+      python mcp_server.py
+      Render injects PORT automatically; the server detects it and
+      starts in streamable-http mode. No flags needed.
+      MCP endpoint: https://<your-render-url>/mcp
 
 All tools are READ-ONLY unless explicitly noted (sync-estimates writes to
 Supabase only — it never modifies Striven).
 """
 
 import os
-import sys
 import requests
 from mcp.server.fastmcp import FastMCP
 
@@ -298,13 +299,16 @@ def api_health() -> dict:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-# Two modes:
-#   python mcp_server.py          → stdio (Claude Desktop / Claude Code)
-#   python mcp_server.py --http   → HTTP server (Render / Claude.ai)
+# Mode is detected automatically:
+#   PORT env var present  → Render / production → streamable-http on 0.0.0.0
+#   PORT env var absent   → local development   → stdio (Claude Desktop / Code)
 
 if __name__ == "__main__":
-    if "--http" in sys.argv:
-        port = int(os.environ.get("PORT", 8000))
+    port_env = os.environ.get("PORT")
+    if port_env:
+        port = int(port_env)
+        print(f"[mcp_server] Starting HTTP mode on 0.0.0.0:{port}", flush=True)
         mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
     else:
+        print("[mcp_server] Starting stdio mode", flush=True)
         mcp.run()
