@@ -30,31 +30,31 @@ from services.supabase_client import (
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Startup env var check
-# Supports both Render convention (CLIENT_ID) and explicit (STRIVEN_CLIENT_ID)
+# Startup — debug env dump, then soft credential check (no crash)
 # ---------------------------------------------------------------------------
 
-# Debug: print exactly what each variable resolves to at startup
-print(f"[startup] STRIVEN_CLIENT_ID present: {bool(os.getenv('STRIVEN_CLIENT_ID'))}", flush=True)
-print(f"[startup] CLIENT_ID present:         {bool(os.getenv('CLIENT_ID'))}", flush=True)
-print(f"[startup] STRIVEN_CLIENT_SECRET present: {bool(os.getenv('STRIVEN_CLIENT_SECRET'))}", flush=True)
-print(f"[startup] CLIENT_SECRET present:         {bool(os.getenv('CLIENT_SECRET'))}", flush=True)
+print("[DEBUG] ENV KEYS:", list(os.environ.keys()), flush=True)
+print("[DEBUG] STRIVEN_CLIENT_ID RAW:", os.environ.get("STRIVEN_CLIENT_ID"), flush=True)
+print("[DEBUG] STRIVEN_CLIENT_SECRET RAW:", os.environ.get("STRIVEN_CLIENT_SECRET"), flush=True)
+print("[DEBUG] CLIENT_ID RAW:", os.environ.get("CLIENT_ID"), flush=True)
+print("[DEBUG] CLIENT_SECRET RAW:", os.environ.get("CLIENT_SECRET"), flush=True)
 
 client_id     = os.getenv("STRIVEN_CLIENT_ID") or os.getenv("CLIENT_ID")
 client_secret = os.getenv("STRIVEN_CLIENT_SECRET") or os.getenv("CLIENT_SECRET")
 
 if not client_id or not client_secret:
-    raise RuntimeError(
-        "Missing Striven credentials. "
-        "Set CLIENT_ID/CLIENT_SECRET or STRIVEN_CLIENT_ID/STRIVEN_CLIENT_SECRET."
-    )
-
-print(f"[startup] Credentials OK — client_id={client_id[:6]}...", flush=True)
+    print("[WARNING] Missing credentials — continuing startup for debugging", flush=True)
+else:
+    print("[OK] Credentials detected", flush=True)
 
 app = Flask(__name__)
 
-# Single shared client; token is cached internally and refreshed as needed
-striven = StrivenClient()
+# Single shared client — wrapped so a missing credential doesn't kill startup
+try:
+    striven = StrivenClient()
+except Exception as e:
+    print(f"[WARNING] StrivenClient failed to init: {e}", flush=True)
+    striven = None
 
 
 # ---------------------------------------------------------------------------
