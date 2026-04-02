@@ -15,14 +15,18 @@ Usage (after Render deployment):
 All tools are READ-ONLY. No data is modified anywhere.
 """
 
+import os
+import sys
 import requests
 from mcp.server.fastmcp import FastMCP
 
 # ---------------------------------------------------------------------------
-# Configuration — update this after Render deploys your app
+# Configuration
 # ---------------------------------------------------------------------------
 
-BASE_URL = "https://striven-api.onrender.com"   # ← replace with your Render URL
+# When deployed to Render, FLASK_API_URL env var overrides this default.
+# Locally, it points to whatever is running on localhost.
+BASE_URL = os.environ.get("FLASK_API_URL", "https://striven-api.onrender.com")
 
 TIMEOUT = 20  # seconds — Render free tier can be slow on cold start
 
@@ -90,6 +94,13 @@ def api_health() -> dict:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+# Two modes:
+#   python mcp_server.py          → stdio (Claude Desktop / Claude Code)
+#   python mcp_server.py --http   → HTTP server (Render / Claude.ai integration)
 
 if __name__ == "__main__":
-    mcp.run()
+    if "--http" in sys.argv:
+        port = int(os.environ.get("PORT", 8000))
+        mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
+    else:
+        mcp.run()

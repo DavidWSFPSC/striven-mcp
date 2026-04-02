@@ -1,4 +1,5 @@
 services:
+  # Flask API — data layer (Striven + Supabase)
   - type: web
     name: striven-api
     runtime: python
@@ -13,3 +14,13 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
+
+  # MCP HTTP server — Claude.ai integration endpoint
+  - type: web
+    name: striven-mcp
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python mcp_server.py --http
+    envVars:
+      - key: FLASK_API_URL
+        value: https://striven-api.onrender.com
