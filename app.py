@@ -434,20 +434,66 @@ _CHAT_TOOLS = [
 ]
 
 
+def _fmt(r: dict) -> dict:
+    """Normalise a raw Striven sales-order record into a clean dict."""
+    return {
+        "id":              r.get("id"),
+        "estimate_number": r.get("number"),
+        "customer_name":   (r.get("customer") or {}).get("name"),
+        "total":           r.get("total"),
+        "date":            r.get("dateCreated"),
+        "status":          (r.get("status") or {}).get("name"),
+    }
+
+
 def _execute_tool(name: str, tool_input: dict) -> dict:
-    """Map a Claude tool call to the real Striven / Supabase function."""
+    """Map a Claude tool call directly to the live Striven API. No local cache."""
     try:
+        # ── count_estimates ──────────────────────────────────────────────────
+        # Send the smallest possible search (pageSize=1) just to read totalCount.
         if name == "count_estimates":
-            return {"total": count_estimates()}
+            raw = striven.search_estimates({"pageIndex": 1, "pageSize": 1})
+            total = raw.get("totalCount", 0)
+            print(f"[Striven] count_estimates → totalCount={total}", flush=True)
+            return {
+                "total":  total,
+                "source": "striven_live",
+                "note":   "Live count from Striven /v1/sales-orders/search totalCount field",
+            }
 
+        # ── high_value_estimates ─────────────────────────────────────────────
+        # Fetch 100 recent records, filter client-side for total > $10,000,
+        # sort highest-first, return top 25.
         if name == "high_value_estimates":
-            records = get_high_value_estimates(min_total=10000, limit=25)
-            return {"count": len(records), "records": records}
+            raw     = striven.search_estimates({"pageIndex": 1, "pageSize": 100})
+            records = raw.get("data") or []
+            print(f"[Striven] high_value_estimates → fetched {len(records)} records", flush=True)
+            high = sorted(
+                [_fmt(r) for r in records if (r.get("total") or 0) >= 10000],
+                key=lambda x: x["total"] or 0,
+                reverse=True,
+            )[:25]
+            return {"count": len(high), "records": high, "source": "striven_live"}
 
+        # ── search_estimates_by_customer ─────────────────────────────────────
+        # Striven has no customer-name filter, so fetch up to 200 records
+        # across 2 pages and filter client-side by customer name substring.
         if name == "search_estimates_by_customer":
-            records = get_estimates_by_customer(tool_input["name"])
-            return {"count": len(records), "records": records}
+            search_name = tool_input.get("name", "").lower().strip()
+            matched = []
+            for page in (1, 2):
+                raw     = striven.search_estimates({"pageIndex": page, "pageSize": 100})
+                records = raw.get("data") or []
+                print(f"[Striven] search_by_customer page={page} → {len(records)} records", flush=True)
+                for r in records:
+                    cname = ((r.get("customer") or {}).get("name") or "").lower()
+                    if search_name in cname:
+                        matched.append(_fmt(r))
+                if not records:
+                    break
+            return {"count": len(matched), "records": matched, "source": "striven_live"}
 
+        # ── search_estimates ─────────────────────────────────────────────────
         if name == "search_estimates":
             body: dict = {
                 "pageIndex": 1,
@@ -460,18 +506,9 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                 if "date_from" in tool_input: date_range["DateFrom"] = tool_input["date_from"]
                 if "date_to"   in tool_input: date_range["DateTo"]   = tool_input["date_to"]
                 body["DateCreatedRange"] = date_range
-            raw = striven.search_estimates(body)
-            records = [
-                {
-                    "id":              r.get("id"),
-                    "estimate_number": r.get("number"),
-                    "customer_name":   (r.get("customer") or {}).get("name"),
-                    "total":           r.get("total"),
-                    "date":            r.get("dateCreated"),
-                    "status":          (r.get("status") or {}).get("name"),
-                }
-                for r in (raw.get("data") or [])
-            ]
+            raw     = striven.search_estimates(body)
+            records = [_fmt(r) for r in (raw.get("data") or [])]
+            print(f"[Striven] search_estimates → totalCount={raw.get('totalCount')} returned={len(records)}", flush=True)
             return {"total_count": raw.get("totalCount"), "count": len(records), "estimates": records}
 
         if name == "get_estimate_by_id":
