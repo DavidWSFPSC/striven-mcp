@@ -128,3 +128,36 @@ def get_estimates_by_customer(name: str) -> list[dict]:
         .execute()
     )
     return res.data or []
+
+
+# ---------------------------------------------------------------------------
+# Chat log helpers — record every WilliamSmith conversation turn
+# ---------------------------------------------------------------------------
+
+def log_chat(user_message: str, tools_called: list[str], response: str) -> None:
+    """
+    Insert one row into chat_logs for each completed chat turn.
+
+    Args:
+        user_message:  The raw question the user typed.
+        tools_called:  List of tool names WilliamSmith invoked (may be empty).
+        response:      The final answer text (truncated to 500 chars for storage).
+    """
+    _get_client().table("chat_logs").insert({
+        "user_message":    user_message[:1000],
+        "tools_called":    ", ".join(tools_called) if tools_called else "none",
+        "response_preview": response[:500],
+    }).execute()
+
+
+def get_chat_logs(limit: int = 100) -> list[dict]:
+    """Return the most recent chat log rows, newest first."""
+    res = (
+        _get_client()
+        .table("chat_logs")
+        .select("id, created_at, user_message, tools_called, response_preview")
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return res.data or []

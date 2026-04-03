@@ -26,6 +26,8 @@ from services.supabase_client import (
     count_estimates,
     get_high_value_estimates,
     get_estimates_by_customer,
+    log_chat,
+    get_chat_logs,
 )
 
 # Load environment variables from .env (ignored in production if not present)
@@ -512,8 +514,9 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
         # ── search_estimates_by_customer ─────────────────────────────────────
         # Two-step: (1) POST /v1/customers/search → get customer IDs,
         # then (2) paginate through ALL pages of POST /v1/sales-orders/search
-        # with CustomerId so we never miss an estimate.
+        # with CustomerId so we never miss a single estimate.
         if name == "search_estimates_by_customer":
+            print("🔥 PAGINATION FUNCTION RUNNING 🔥", flush=True)
             search_name = tool_input.get("name", "").strip()
             print(f"[Striven] search_customers → name='{search_name}'", flush=True)
 
@@ -533,7 +536,7 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                     "source":  "striven_live",
                 }
 
-            # Step 2 — for each matched customer, paginate through ALL estimates
+            # Step 2 — for each matched customer, paginate ALL estimates by customer ID
             PAGE_SIZE     = 25
             all_estimates: list[dict] = []
 
@@ -541,8 +544,8 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                 cust_id   = cust.get("Id") or cust.get("id")
                 cust_name = cust.get("Name") or cust.get("name")
 
-                page_index       = 1
-                total_count      = 1  # set to 1 so we always enter the loop; updated from first API response
+                total_count      = 1   # guarantees loop entry; updated from first API response
+                page_index       = 0   # 0-based per Striven docs
                 customer_records: list[dict] = []
 
                 while len(customer_records) < total_count:
@@ -552,24 +555,32 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                         "CustomerId": cust_id,
                     })
 
-                    data        = est_raw.get("data") or []
-                    total_count = est_raw.get("totalCount") or 0  # update every page
+                    print(f"RAW RESPONSE KEYS: {list(est_raw.keys())}", flush=True)
 
-                    print(
-                        f"[Striven] '{cust_name}' (ID={cust_id}) — "
-                        f"page {page_index}, "
-                        f"collected {len(customer_records) + len(data)} / {total_count}",
-                        flush=True,
+                    # Handle both TitleCase (customers) and lowercase (sales-orders) key variants
+                    data        = est_raw.get("Data") or est_raw.get("data") or []
+                    total_count = (
+                        est_raw.get("TotalCount")
+                        or est_raw.get("totalCount")
+                        or len(data)
                     )
 
                     if not data:
+                        print("⚠️ No data returned, breaking loop", flush=True)
                         break
 
                     customer_records.extend([_fmt(r) for r in data])
+
+                    print(
+                        f"LOOP HIT: page_index={page_index}, "
+                        f"collected={len(customer_records)}, total={total_count}",
+                        flush=True,
+                    )
+
                     page_index += 1
 
                 print(
-                    f"[Striven] '{cust_name}' — done: {len(customer_records)} estimates fetched",
+                    f"[Striven] '{cust_name}' — done: {len(customer_records)} / {total_count} estimates fetched",
                     flush=True,
                 )
                 all_estimates.extend(customer_records)
@@ -640,6 +651,17 @@ def chat_ui():
     return render_template("index.html")
 
 
+@app.get("/logs")
+def view_logs():
+    """Admin view — shows the last 100 WilliamSmith search queries."""
+    try:
+        rows = get_chat_logs(limit=100)
+    except Exception as exc:
+        rows = []
+        print(f"[logs] Failed to fetch chat logs: {exc}", flush=True)
+    return render_template("logs.html", logs=rows)
+
+
 @app.post("/api/chat")
 def chat_api():
     """
@@ -656,6 +678,16 @@ def chat_api():
 
     client = anthropic.Anthropic(api_key=api_key)
 
+    # Capture the user's question for logging (last user message in the chain)
+    user_question = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            content = m.get("content", "")
+            user_question = content if isinstance(content, str) else str(content)
+            break
+
+    tools_used: list[str] = []
+
     # Agentic loop — keep going until Claude stops calling tools
     while True:
         response = client.messages.create(
@@ -671,6 +703,7 @@ def chat_api():
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
+                    tools_used.append(block.name)
                     result = _execute_tool(block.name, block.input)
                     tool_results.append({
                         "type":        "tool_result",
@@ -690,6 +723,13 @@ def chat_api():
                 (block.text for block in response.content if hasattr(block, "text")),
                 "No response generated.",
             )
+
+            # Log the completed turn to Supabase (never let logging crash the chat)
+            try:
+                log_chat(user_question, tools_used, text)
+            except Exception as log_exc:
+                print(f"[log_chat] WARNING: failed to log — {log_exc}", flush=True)
+
             return jsonify({"response": text})
 
 
