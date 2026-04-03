@@ -32,6 +32,17 @@ from services.supabase_client import (
 load_dotenv()
 
 # ---------------------------------------------------------------------------
+# Startup logging — Part 4
+# ---------------------------------------------------------------------------
+print("=" * 60, flush=True)
+print("WilliamSmith API starting", flush=True)
+print(f"  BASE_URL    : {os.getenv('BASE_URL', 'https://api.striven.com/v1')}", flush=True)
+_cid = os.getenv("CLIENT_ID", "")
+print(f"  CLIENT_ID   : {_cid[:6]}{'*' * max(0, len(_cid) - 6) if _cid else '(NOT SET)'}", flush=True)
+print(f"  SUPABASE_URL: {os.getenv('SUPABASE_URL', '(not set)')}", flush=True)
+print("=" * 60, flush=True)
+
+# ---------------------------------------------------------------------------
 # Startup credential check
 # ---------------------------------------------------------------------------
 client_id     = os.getenv("CLIENT_ID")
@@ -44,6 +55,7 @@ app = Flask(__name__)
 
 # Single shared client; token is cached internally and refreshed as needed
 striven = StrivenClient()
+print("StrivenClient initialised — ready to serve live data.", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -352,23 +364,40 @@ You have direct access to live company data from Striven (our business managemen
 
 YOUR ROLE
 Answer questions about estimates, customers, job values, and the sales pipeline.
-Be concise, accurate, and business-focused. Always call a tool to get real data — never guess or invent numbers.
+Be concise, accurate, and business-focused.
+
+CRITICAL RULE — ALWAYS USE TOOLS
+You MUST call the appropriate tool for EVERY data question. Never answer from
+memory, never guess, never use a hardcoded number. The tools return live data
+directly from Striven. A wrong number is worse than a slow one.
+
+ESTIMATE COUNT — MANDATORY TOOL CALL
+ANY question that involves counting estimates MUST call count_estimates.
+This includes (but is not limited to):
+  "how many estimates"
+  "total estimates"
+  "estimate count"
+  "how many orders"
+  "what is our total"
+  "how many records"
+You must NEVER answer an estimate count question without calling count_estimates first.
+The tool returns the real live TotalCount from Striven — not a guess, not a cache.
 
 ESTIMATES & SALES ORDERS
 In our system "estimates" and "sales orders" are the same thing.
 Status codes: 18=Incomplete  19=Quoted  20=Pending Approval  22=Approved  25=In Progress  27=Completed
 
 TOOL ROUTING
-- "How many estimates?"              → count_estimates
-- "Biggest / highest value jobs"     → high_value_estimates
-- "Estimates for [customer name]"    → search_estimates_by_customer
-- "Approved / quoted / in-progress"  → search_estimates with status filter
-- "Estimates from [date] to [date]"  → search_estimates with date filters
-- "Tell me about estimate #N"        → get_estimate_by_id
-- "Missing portal flag / audit"      → portal_flag_audit  (warn: takes ~60 s)
+- Any count / total / "how many" question       → count_estimates (MANDATORY)
+- "Biggest / highest value jobs"                → high_value_estimates
+- "Estimates for [customer name]"               → search_estimates_by_customer
+- "Approved / quoted / in-progress estimates"   → search_estimates with status filter
+- "Estimates from [date] to [date]"             → search_estimates with date range
+- "Tell me about estimate #N"                   → get_estimate_by_id
+- "Missing portal flag / portal audit"          → portal_flag_audit (warn: ~60 s)
 
 FORMAT
-Lead with the direct answer. Use a markdown table for lists of estimates
+Lead with the direct answer and the live number. Use a markdown table for lists
 (columns: #, Customer, Total, Status). Round dollar amounts to nearest dollar.
 End with a short follow-up offer."""
 
@@ -450,15 +479,20 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
     """Map a Claude tool call directly to the live Striven API. No local cache."""
     try:
         # ── count_estimates ──────────────────────────────────────────────────
-        # Send the smallest possible search (pageSize=1) just to read totalCount.
+        # POST /v1/sales-orders/search with pageSize=1.
+        # We only need totalCount — no records are read.
+        # NO fallback, NO Supabase, NO cache. Live Striven only.
         if name == "count_estimates":
-            raw = striven.search_estimates({"pageIndex": 1, "pageSize": 1})
+            print("[Striven] Calling Striven for estimate count...", flush=True)
+            payload = {"pageIndex": 1, "pageSize": 1}
+            raw   = striven.search_estimates(payload)
+            print(f"[Striven] Full response JSON: {json.dumps(raw)}", flush=True)
             total = raw.get("totalCount", 0)
-            print(f"[Striven] count_estimates → totalCount={total}", flush=True)
+            print(f"[Striven] Extracted TotalCount: {total}", flush=True)
             return {
                 "total":  total,
                 "source": "striven_live",
-                "note":   "Live count from Striven /v1/sales-orders/search totalCount field",
+                "note":   "Live count from Striven /v1/sales-orders/search → totalCount field",
             }
 
         # ── high_value_estimates ─────────────────────────────────────────────
