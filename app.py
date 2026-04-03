@@ -511,18 +511,18 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
 
         # ── search_estimates_by_customer ─────────────────────────────────────
         # Two-step: (1) POST /v1/customers/search → get customer IDs,
-        # then (2) POST /v1/sales-orders/search with CustomerId for each match.
-        # This returns ALL estimates for that customer, not just the first 200.
+        # then (2) paginate through ALL pages of POST /v1/sales-orders/search
+        # with CustomerId so we never miss an estimate.
         if name == "search_estimates_by_customer":
             search_name = tool_input.get("name", "").strip()
             print(f"[Striven] search_customers → name='{search_name}'", flush=True)
 
             # Step 1 — find matching customers by name
             cust_raw   = striven.search_customers(search_name, page_size=10)
-            # Striven returns TitleCase keys for customers
+            # Striven returns TitleCase keys for the customers endpoint
             customers  = cust_raw.get("Data") or cust_raw.get("data") or []
             total_cust = cust_raw.get("TotalCount") or cust_raw.get("totalCount") or 0
-            print(f"[Striven] customers found: {total_cust}, returning first {len(customers)}", flush=True)
+            print(f"[Striven] customers found: {total_cust}, using first {len(customers)}", flush=True)
 
             if not customers:
                 return {
@@ -533,26 +533,52 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                     "source":  "striven_live",
                 }
 
-            # Step 2 — for each matched customer, fetch their estimates by ID
+            # Step 2 — for each matched customer, paginate through ALL estimates
+            PAGE_SIZE     = 25
             all_estimates: list[dict] = []
+
             for cust in customers[:5]:   # cap at 5 customers to avoid hammering the API
                 cust_id   = cust.get("Id") or cust.get("id")
                 cust_name = cust.get("Name") or cust.get("name")
-                est_raw   = striven.search_estimates({
-                    "pageIndex":  1,
-                    "pageSize":   100,
-                    "CustomerId": cust_id,
-                })
-                batch = [_fmt(r) for r in (est_raw.get("data") or [])]
-                print(f"[Striven] Customer '{cust_name}' (ID={cust_id}) → "
-                      f"totalCount={est_raw.get('totalCount')} returned={len(batch)}", flush=True)
-                all_estimates.extend(batch)
+
+                page_index       = 1
+                total_count      = 1  # set to 1 so we always enter the loop; updated from first API response
+                customer_records: list[dict] = []
+
+                while len(customer_records) < total_count:
+                    est_raw = striven.search_estimates({
+                        "pageIndex":  page_index,
+                        "pageSize":   PAGE_SIZE,
+                        "CustomerId": cust_id,
+                    })
+
+                    data        = est_raw.get("data") or []
+                    total_count = est_raw.get("totalCount") or 0  # update every page
+
+                    print(
+                        f"[Striven] '{cust_name}' (ID={cust_id}) — "
+                        f"page {page_index}, "
+                        f"collected {len(customer_records) + len(data)} / {total_count}",
+                        flush=True,
+                    )
+
+                    if not data:
+                        break
+
+                    customer_records.extend([_fmt(r) for r in data])
+                    page_index += 1
+
+                print(
+                    f"[Striven] '{cust_name}' — done: {len(customer_records)} estimates fetched",
+                    flush=True,
+                )
+                all_estimates.extend(customer_records)
 
             return {
-                "count":              len(all_estimates),
-                "records":            all_estimates,
-                "customers_matched":  len(customers),
-                "source":             "striven_live",
+                "count":             len(all_estimates),
+                "records":           all_estimates,
+                "customers_matched": len(customers),
+                "source":            "striven_live",
             }
 
         # ── search_estimates ─────────────────────────────────────────────────

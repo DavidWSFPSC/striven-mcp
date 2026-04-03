@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "striven": {
+      "command": "C:\\Users\\David\\Desktop\\Striven-MCP\\venv\\Scripts\\python.exe",
+      "args": ["C:\\Users\\David\\Desktop\\Striven-MCP\\mcp_server.py"]
+    }
+  }
+}
