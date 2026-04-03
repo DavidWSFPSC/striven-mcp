@@ -158,6 +158,29 @@ class StrivenClient:
         """
         return self._post("/sales-orders/search", body=filters)
 
+    def search_customers(self, name: str, page_size: int = 25) -> dict:
+        """
+        Search customers by name.
+
+        POST /v1/customers/search
+
+        Note: PageIndex is 0-based for this endpoint (unlike sales-orders).
+
+        Response shape:
+            {
+                "TotalCount": <int>,
+                "Data": [
+                    {"Id": <int>, "Name": <str>, "Number": <str>, ...},
+                    ...
+                ]
+            }
+        """
+        return self._post("/customers/search", body={
+            "PageIndex": 0,
+            "PageSize":  page_size,
+            "Name":      name,
+        })
+
     def get_all_estimates(self, page_size: int = 100) -> list[dict]:
         """
         Paginate through ALL sales orders and return every record as a flat list.

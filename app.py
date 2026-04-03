@@ -510,22 +510,50 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
             return {"count": len(high), "records": high, "source": "striven_live"}
 
         # ── search_estimates_by_customer ─────────────────────────────────────
-        # Striven has no customer-name filter, so fetch up to 200 records
-        # across 2 pages and filter client-side by customer name substring.
+        # Two-step: (1) POST /v1/customers/search → get customer IDs,
+        # then (2) POST /v1/sales-orders/search with CustomerId for each match.
+        # This returns ALL estimates for that customer, not just the first 200.
         if name == "search_estimates_by_customer":
-            search_name = tool_input.get("name", "").lower().strip()
-            matched = []
-            for page in (1, 2):
-                raw     = striven.search_estimates({"pageIndex": page, "pageSize": 100})
-                records = raw.get("data") or []
-                print(f"[Striven] search_by_customer page={page} → {len(records)} records", flush=True)
-                for r in records:
-                    cname = ((r.get("customer") or {}).get("name") or "").lower()
-                    if search_name in cname:
-                        matched.append(_fmt(r))
-                if not records:
-                    break
-            return {"count": len(matched), "records": matched, "source": "striven_live"}
+            search_name = tool_input.get("name", "").strip()
+            print(f"[Striven] search_customers → name='{search_name}'", flush=True)
+
+            # Step 1 — find matching customers by name
+            cust_raw   = striven.search_customers(search_name, page_size=10)
+            # Striven returns TitleCase keys for customers
+            customers  = cust_raw.get("Data") or cust_raw.get("data") or []
+            total_cust = cust_raw.get("TotalCount") or cust_raw.get("totalCount") or 0
+            print(f"[Striven] customers found: {total_cust}, returning first {len(customers)}", flush=True)
+
+            if not customers:
+                return {
+                    "count":   0,
+                    "records": [],
+                    "message": f"No customers found matching '{search_name}'. "
+                               "Try a shorter or different spelling.",
+                    "source":  "striven_live",
+                }
+
+            # Step 2 — for each matched customer, fetch their estimates by ID
+            all_estimates: list[dict] = []
+            for cust in customers[:5]:   # cap at 5 customers to avoid hammering the API
+                cust_id   = cust.get("Id") or cust.get("id")
+                cust_name = cust.get("Name") or cust.get("name")
+                est_raw   = striven.search_estimates({
+                    "pageIndex":  1,
+                    "pageSize":   100,
+                    "CustomerId": cust_id,
+                })
+                batch = [_fmt(r) for r in (est_raw.get("data") or [])]
+                print(f"[Striven] Customer '{cust_name}' (ID={cust_id}) → "
+                      f"totalCount={est_raw.get('totalCount')} returned={len(batch)}", flush=True)
+                all_estimates.extend(batch)
+
+            return {
+                "count":              len(all_estimates),
+                "records":            all_estimates,
+                "customers_matched":  len(customers),
+                "source":             "striven_live",
+            }
 
         # ── search_estimates ─────────────────────────────────────────────────
         if name == "search_estimates":
