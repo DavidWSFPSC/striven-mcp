@@ -15,20 +15,8 @@ class StrivenClient:
     """
 
     def __init__(self):
-        print("----- STRIVEN DEBUG START -----", flush=True)
-        print("ENV KEYS:", list(os.environ.keys()), flush=True)
-        print("CLIENT_ID RAW:", repr(os.getenv("CLIENT_ID")), flush=True)
-        print("CLIENT_SECRET RAW:", repr(os.getenv("CLIENT_SECRET")), flush=True)
-        print("BASE_URL RAW:", repr(os.getenv("BASE_URL")), flush=True)
-        print("TOKEN_URL RAW:", repr(os.getenv("TOKEN_URL")), flush=True)
-
         self.client_id     = os.getenv("CLIENT_ID")
         self.client_secret = os.getenv("CLIENT_SECRET")
-
-        print("client_id present:", bool(self.client_id), flush=True)
-        print("client_secret present:", bool(self.client_secret), flush=True)
-        print("About to initialize StrivenClient with:",
-              repr(self.client_id), repr(self.client_secret), flush=True)
 
         if not self.client_id or not self.client_secret:
             raise EnvironmentError(
