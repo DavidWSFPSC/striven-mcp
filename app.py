@@ -1225,12 +1225,37 @@ def simple_chat():
     if not message:
         return jsonify({"error": "Field 'message' is required."}), 400
 
+    print(f"[CHAT] Incoming message: {message!r}", flush=True)
+
+    # ── TEMPORARY HARD OVERRIDE — force gas_log_audit for any "gas log" message ──
+    # Remove once we confirm the correct execution path in Render logs.
+    if "gas log" in message.lower():
+        print("[CHAT] FORCED gas_log_audit path", flush=True)
+        print("[CHAT] Running _run_gas_log_audit()...", flush=True)
+        try:
+            result = _run_gas_log_audit()
+            print(f"[CHAT] Result keys: {list(result.keys())}", flush=True)
+            print(f"[CHAT] Result: total_checked={result.get('total_checked')} "
+                  f"gas_log_installs={result.get('gas_log_installs')} "
+                  f"missing_removal_fee={result.get('missing_removal_fee')}", flush=True)
+            return jsonify({
+                "intent":   "gas_log_audit_forced",
+                "response": _format_gas_log_audit(result),
+                "raw":      result,
+            })
+        except Exception as exc:
+            print(f"[CHAT] ERROR in forced gas_log_audit: {exc}", flush=True)
+            return jsonify({"intent": "gas_log_audit_forced", "error": str(exc)}), 500
+    # ── END TEMPORARY OVERRIDE ──────────────────────────────────────────────────
+
     intent, params = _detect_intent(message)
-    print(f"[/chat] message={message!r}  intent={intent}  params={params}", flush=True)
+    print(f"[CHAT] Detected intent: {intent!r}  params={params}", flush=True)
 
     try:
         if intent == "gas_log_audit":
+            print("[CHAT] Running gas_log_audit()", flush=True)
             result   = _run_gas_log_audit()
+            print(f"[CHAT] Result: {result}", flush=True)
             response = _format_gas_log_audit(result)
 
         elif intent == "high_value":
