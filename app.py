@@ -40,6 +40,7 @@ import os
 import io
 import csv
 import json
+import datetime
 import anthropic
 from flask import Flask, jsonify, request, render_template, Response
 from dotenv import load_dotenv
@@ -83,6 +84,93 @@ app = Flask(__name__)
 # Single shared client; token is cached internally and refreshed as needed
 striven = StrivenClient()
 print("StrivenClient initialised — ready to serve live data.", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Safety layer — write operations are BLOCKED pending confirmation
+# ---------------------------------------------------------------------------
+#
+# DESIGN
+# ──────
+# The system is read-only.  Write tools (create_task, update_task) do NOT
+# call the Striven API.  Instead they:
+#   1. Build a structured "pending action" record
+#   2. Append it to _ACTION_LOG (in-memory audit trail)
+#   3. Return a confirmation prompt to Claude, which surfaces it to the user
+#
+# FUTURE EXECUTION PATH (not yet active)
+# ───────────────────────────────────────
+# When confirmation is implemented:
+#   - User replies with "CONFIRM <action_id>"
+#   - /api/chat parses the token and calls _execute_confirmed(action_id)
+#   - _execute_confirmed() looks up _ACTION_LOG, calls the real Striven API,
+#     updates the log entry with executed=True + timestamp
+#   - Full audit trail preserved either way
+#
+# WRITE TOOLS SET
+# ───────────────
+# Add any new mutating tool name here to automatically block it.
+_WRITE_TOOLS: frozenset[str] = frozenset({"create_task", "update_task"})
+
+# In-memory action log.  Resets on dyno restart — persistent storage can be
+# added later (Supabase table recommended).  Each entry is a plain dict.
+_ACTION_LOG: list[dict] = []
+
+
+def _log_action(
+    action_type: str,
+    target_id: str | int | None,
+    intended_change: dict,
+    acting_user: str,
+    executed: bool = False,
+) -> dict:
+    """
+    Append a structured entry to _ACTION_LOG and print to server logs.
+
+    Returns the log entry (includes generated action_id for confirmation flow).
+    """
+    action_id = f"{action_type.upper()}_{len(_ACTION_LOG) + 1:04d}"
+    entry = {
+        "action_id":       action_id,
+        "action_type":     action_type,
+        "target_id":       str(target_id) if target_id is not None else None,
+        "acting_user":     acting_user,
+        "timestamp":       datetime.datetime.utcnow().isoformat() + "Z",
+        "intended_change": intended_change,
+        "executed":        executed,
+    }
+    _ACTION_LOG.append(entry)
+    print(
+        f"[ACTION LOG] action_id={action_id} type={action_type} "
+        f"target={target_id} user={acting_user} executed={executed}",
+        flush=True,
+    )
+    return entry
+
+
+def _pending_confirmation(action_type: str, target_id, summary: str, acting_user: str) -> dict:
+    """
+    Return a structured confirmation-required response.
+
+    This is returned to Claude as the tool result.  Claude surfaces it to
+    the user verbatim.  NO Striven API call has been made.
+    """
+    return {
+        "status":       "PENDING_CONFIRMATION",
+        "action_type":  action_type,
+        "target_id":    str(target_id) if target_id is not None else "NEW",
+        "acting_user":  acting_user,
+        "summary":      summary,
+        "instruction":  (
+            f"⚠️ **Action requires confirmation.**\n\n"
+            f"**Action:** {action_type}\n"
+            f"**Target:** {target_id or 'New record'}\n"
+            f"**Details:** {summary}\n"
+            f"**Requested by:** {acting_user}\n\n"
+            f"Type **CONFIRM** to authorise this action, or **CANCEL** to abort.\n"
+            f"*(No changes have been made yet.)*"
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -955,6 +1043,24 @@ To find tasks for a specific estimate: use related_entity_id = the estimate's nu
 Status IDs are integers — if unsure, search without a status filter and report what you see.
 
 ════════════════════════════════════════════════════════
+SAFETY — READ-ONLY SYSTEM
+════════════════════════════════════════════════════════
+This system is currently READ-ONLY.
+
+create_task and update_task DO NOT write to Striven.
+When you call them, the tool returns a PENDING_CONFIRMATION response.
+
+When a tool returns status="PENDING_CONFIRMATION":
+  1. Show the user the instruction field VERBATIM — do not paraphrase it
+  2. Wait for the user to type CONFIRM or CANCEL
+  3. Do NOT call any other tools
+  4. Do NOT tell the user the action has been completed — it has NOT
+
+The acting_user for any write action is the person currently using the chat.
+If no user is identified, state "acting as: unknown" in the confirmation.
+════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════
 FAST MODE vs DEEP MODE
 ════════════════════════════════════════════════════════
 You operate in FAST MODE by default. Switch to DEEP MODE only when the
@@ -1186,8 +1292,9 @@ _CHAT_TOOLS = [
     {
         "name": "create_task",
         "description": (
-            "Create a new task in Striven. Use when the user wants to log a follow-up, "
-            "assign work, or create a reminder tied to an estimate or job."
+            "Propose creating a new task in Striven. SAFE — does NOT write to Striven immediately. "
+            "Returns a confirmation prompt that the user must approve before any action is taken. "
+            "Use when the user wants to log a follow-up, assign work, or create a reminder."
         ),
         "input_schema": {
             "type": "object",
@@ -1205,7 +1312,8 @@ _CHAT_TOOLS = [
     {
         "name": "update_task",
         "description": (
-            "Update an existing task — change its status, due date, assignee, or description. "
+            "Propose updating an existing task. SAFE — does NOT write to Striven immediately. "
+            "Returns a confirmation prompt that the user must approve before any action is taken. "
             "Pass only the fields that need to change."
         ),
         "input_schema": {
@@ -1388,8 +1496,14 @@ def _paginated_customer_search(search_name: str) -> dict:
     }
 
 
-def _execute_tool(name: str, tool_input: dict) -> dict:
-    """Map a Claude tool call directly to the live Striven API. No local cache."""
+def _execute_tool(name: str, tool_input: dict, acting_user: str = "unknown") -> dict:
+    """
+    Map a Claude tool call to the live Striven API (read) or safety layer (write).
+
+    Read tools execute immediately and return live data.
+    Write tools (_WRITE_TOOLS) NEVER call the Striven API — they log the
+    intended action and return a confirmation prompt instead.
+    """
     try:
         # ── count_estimates ──────────────────────────────────────────────────
         # POST /v1/sales-orders/search with pageSize=1.
@@ -1595,38 +1709,46 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
             raw = striven.get_task(task_id)
             return _fmt_task(raw)
 
-        # ── create_task ──────────────────────────────────────────────────────
+        # ── create_task ── WRITE BLOCKED — returns confirmation, never executes ──
         if name == "create_task":
-            body = {
-                "Name":       tool_input["name"],
-                "TaskTypeId": tool_input.get("task_type_id", 1),
+            intended = {
+                "name":               tool_input.get("name"),
+                "task_type_id":       tool_input.get("task_type_id", 1),
+                "description":        tool_input.get("description"),
+                "due_date":           tool_input.get("due_date"),
+                "assigned_to":        tool_input.get("assigned_to"),
+                "related_entity_id":  tool_input.get("related_entity_id"),
             }
-            if "description"      in tool_input: body["Description"]    = tool_input["description"]
-            if "due_date"         in tool_input: body["DueDate"]         = tool_input["due_date"]
-            if "assigned_to"      in tool_input: body["AssignedToId"]    = tool_input["assigned_to"]
-            if "related_entity_id" in tool_input: body["RelatedEntityId"] = tool_input["related_entity_id"]
-            print(f"[create_task] Creating task: {body.get('Name')}", flush=True)
-            raw = striven.create_task(body)
-            result = _fmt_task(raw)
-            print(f"[create_task] Created task id={result.get('id')}", flush=True)
-            return result
+            summary = (
+                f"Create task \"{intended['name']}\""
+                + (f" due {intended['due_date']}" if intended.get("due_date") else "")
+                + (f" assigned to user {intended['assigned_to']}" if intended.get("assigned_to") else "")
+                + (f" linked to entity {intended['related_entity_id']}" if intended.get("related_entity_id") else "")
+            )
+            _log_action(
+                action_type="create_task",
+                target_id=None,
+                intended_change=intended,
+                acting_user=acting_user,
+            )
+            print(f"[create_task] BLOCKED — confirmation required. user={acting_user}", flush=True)
+            return _pending_confirmation("create_task", None, summary, acting_user)
 
-        # ── update_task ──────────────────────────────────────────────────────
+        # ── update_task ── WRITE BLOCKED — returns confirmation, never executes ──
         if name == "update_task":
-            task_id = tool_input["task_id"]
-            body: dict = {}
-            if "name"        in tool_input: body["Name"]        = tool_input["name"]
-            if "status_id"   in tool_input: body["StatusId"]    = tool_input["status_id"]
-            if "due_date"    in tool_input: body["DueDate"]      = tool_input["due_date"]
-            if "assigned_to" in tool_input: body["AssignedToId"] = tool_input["assigned_to"]
-            if "description" in tool_input: body["Description"]  = tool_input["description"]
-            if not body:
+            task_id  = tool_input.get("task_id")
+            intended = {k: v for k, v in tool_input.items() if k != "task_id"}
+            if not intended:
                 return {"error": "update_task requires at least one field to update"}
-            print(f"[update_task] Updating task id={task_id} fields={list(body.keys())}", flush=True)
-            raw = striven.update_task(task_id, body)
-            result = _fmt_task(raw)
-            print(f"[update_task] Updated task id={result.get('id')} status={result.get('status')}", flush=True)
-            return result
+            summary = f"Update task {task_id} — change(s): {', '.join(intended.keys())}"
+            _log_action(
+                action_type="update_task",
+                target_id=task_id,
+                intended_change=intended,
+                acting_user=acting_user,
+            )
+            print(f"[update_task] BLOCKED — confirmation required. task_id={task_id} user={acting_user}", flush=True)
+            return _pending_confirmation("update_task", task_id, summary, acting_user)
 
         return {"error": f"Unknown tool: {name}"}
 
@@ -1660,6 +1782,10 @@ def chat_api():
     """
     data     = request.get_json(force=True)
     messages = data.get("messages", [])
+    # Optional user identity — passed from the frontend session or request body.
+    # Falls back to "unknown" if not provided.  Used in action log and
+    # confirmation prompts so every write attempt is attributed.
+    acting_user: str = (data.get("user") or "unknown").strip() or "unknown"
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
@@ -1693,7 +1819,7 @@ def chat_api():
             for block in response.content:
                 if block.type == "tool_use":
                     tools_used.append(block.name)
-                    result = _execute_tool(block.name, block.input)
+                    result = _execute_tool(block.name, block.input, acting_user=acting_user)
                     tool_results.append({
                         "type":        "tool_result",
                         "tool_use_id": block.id,
@@ -1720,6 +1846,27 @@ def chat_api():
                 print(f"[log_chat] WARNING: failed to log — {log_exc}", flush=True)
 
             return jsonify({"response": text})
+
+
+# ---------------------------------------------------------------------------
+# Action log — audit trail for all attempted write operations
+# ---------------------------------------------------------------------------
+
+@app.get("/action-log")
+def action_log():
+    """
+    Return the in-memory action log for all write attempts this session.
+
+    Each entry includes: action_id, action_type, target_id, acting_user,
+    timestamp, intended_change, executed.
+
+    Note: resets on server restart.  Persistent storage (Supabase) can be
+    added later — the _log_action() helper is already structured for it.
+    """
+    return jsonify({
+        "total":   len(_ACTION_LOG),
+        "entries": list(reversed(_ACTION_LOG)),  # most recent first
+    })
 
 
 # ---------------------------------------------------------------------------
