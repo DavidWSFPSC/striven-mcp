@@ -269,85 +269,113 @@ def report_preview():
 PORTAL_FLAG_FIELD = "do not show items on estimate in the customer portal display"
 
 
-@app.get("/missing-portal-flag")
-def missing_portal_flag():
+def _run_portal_flag_audit() -> dict:
     """
-    Audit all estimates and return those where the custom field
-    "Do not show items on estimate in the Customer Portal display"
-    is either missing or not set to true.
+    Streaming portal-flag audit — checks every estimate without loading all into RAM.
 
-    This endpoint paginates through every sales order in Striven,
-    inspects each record's customFields array, and flags any record
-    that is not correctly configured.
+    Paginates through POST /v1/sales-orders/search (100 records per page),
+    processes each page immediately, and discards it — peak memory is one page
+    of stubs at a time (never the full 3,000+ record list).
 
-    Response shape:
-        {
-            "summary": {
-                "total_estimates_checked": <int>,
-                "total_missing_flag": <int>
-            },
-            "records": [
-                {
-                    "estimate_id": <int>,
-                    "estimate_number": <str>,
-                    "estimate_name": <str>,
-                    "customer_name": <str>,
-                    "sales_rep": <str|null>,
-                    "status": <str>
-                },
-                ...
-            ]
-        }
+    The search endpoint returns customFields in each stub, so no per-record
+    detail GET is required — this audit is purely search-based and fast.
+
+    Returns a plain dict (not a Flask response) so _execute_tool() can reuse it.
     """
-    try:
-        # Fetch every estimate across all pages (~100 records per API call)
-        all_estimates = striven.get_all_estimates()
+    import time as _time
+    t_start   = _time.monotonic()
+    PAGE_SIZE = 100
 
-        broken_records = []
+    print("[portal-flag-audit] Starting — streaming all estimates", flush=True)
 
-        for estimate in all_estimates:
-            custom_fields = estimate.get("customFields") or []
+    total_checked = 0
+    broken: list[dict] = []
+    page_index = 0
 
-            # Find the portal flag field by name (case-insensitive)
+    while True:
+        raw  = striven.search_sales_orders({"PageIndex": page_index, "PageSize": PAGE_SIZE})
+        data = raw.get("data") or []
+        total_count = raw.get("totalCount", 0)
+
+        if not data:
+            print("[portal-flag-audit] Empty page — stopping.", flush=True)
+            break
+
+        print(
+            f"[portal-flag-audit] Page {page_index}: {len(data)} stubs "
+            f"(total={total_count})",
+            flush=True,
+        )
+
+        for est in data:
+            total_checked += 1
+            custom_fields = est.get("customFields") or []
+
+            # Locate the portal flag field by exact name (case-insensitive)
             portal_field = next(
                 (
                     f for f in custom_fields
                     if isinstance(f.get("name"), str)
                     and f["name"].strip().lower() == PORTAL_FLAG_FIELD
                 ),
-                None,  # Field not present on this record at all
+                None,
             )
 
-            # Flag if the field is missing entirely OR its value is not true
-            field_missing = portal_field is None
-            field_not_true = (
-                not field_missing
-                and portal_field.get("value") is not True
+            # Flag if missing entirely OR value is not True
+            is_set = (
+                portal_field is not None
+                and portal_field.get("value") is True
             )
 
-            if field_missing or field_not_true:
-                # Safely extract nested fields — Striven may omit optional keys
-                customer = estimate.get("customer") or {}
-                sales_rep_obj = estimate.get("salesRep") or {}
-                status_obj = estimate.get("status") or {}
-
-                broken_records.append({
-                    "estimate_id": estimate.get("id"),
-                    "estimate_number": estimate.get("number"),
-                    "estimate_name": estimate.get("name"),
-                    "customer_name": customer.get("name"),
-                    "sales_rep": sales_rep_obj.get("name"),  # null if unassigned
-                    "status": status_obj.get("name"),
+            if not is_set:
+                customer     = est.get("customer")  or est.get("Customer")  or {}
+                sales_rep    = est.get("salesRep")  or est.get("SalesRep")  or {}
+                status_obj   = est.get("status")    or est.get("Status")    or {}
+                broken.append({
+                    "estimate_id":     est.get("id")     or est.get("Id"),
+                    "estimate_number": est.get("number") or est.get("Number"),
+                    "estimate_name":   est.get("name")   or est.get("Name"),
+                    "customer_name":   customer.get("name")  or customer.get("Name"),
+                    "sales_rep":       sales_rep.get("name") or sales_rep.get("Name"),
+                    "status":          status_obj.get("name") or status_obj.get("Name"),
+                    "url": (
+                        "https://app.striven.com/next/crm#/sales-orders/"
+                        + str(est.get("id") or est.get("Id") or "")
+                    ),
                 })
 
-        return jsonify({
-            "summary": {
-                "total_estimates_checked": len(all_estimates),
-                "total_missing_flag": len(broken_records),
-            },
-            "records": broken_records,
-        })
+        if total_checked >= total_count:
+            break
 
+        page_index += 1
+
+    elapsed = round(_time.monotonic() - t_start, 2)
+    print(
+        f"[portal-flag-audit] Complete — checked={total_checked} "
+        f"missing={len(broken)} elapsed={elapsed}s",
+        flush=True,
+    )
+
+    return {
+        "summary": {
+            "total_estimates_checked": total_checked,
+            "total_missing_flag":      len(broken),
+        },
+        "records": broken,
+    }
+
+
+@app.get("/missing-portal-flag")
+@app.get("/portal-flag-audit")
+def missing_portal_flag():
+    """
+    Audit every estimate for the Customer Portal display flag.
+
+    Streams through all records page-by-page (no RAM accumulation).
+    Also reachable at /portal-flag-audit.
+    """
+    try:
+        return jsonify(_run_portal_flag_audit())
     except HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 502
         return jsonify({"error": str(exc)}), status
@@ -550,8 +578,7 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
             # All pages for this status exhausted
             if status_total is not None and (page_index + 1) * PAGE_SIZE >= status_total:
                 print(
-                    f"[gas-log-audit] Status {status_id} exhausted — "
-                    f"cache size so far: {len(item_category_cache)}",
+                    f"[gas-log-audit] Status {status_id} exhausted.",
                     flush=True,
                 )
                 break
@@ -1031,30 +1058,15 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
             return result
 
         if name == "portal_flag_audit":
-            all_estimates = striven.get_all_estimates()
-            portal_field_name = "do not show items on estimate in the customer portal display"
-            broken = []
-            for est in all_estimates:
-                custom_fields = est.get("customFields") or []
-                field = next(
-                    (f for f in custom_fields
-                     if isinstance(f.get("name"), str)
-                     and f["name"].strip().lower() == portal_field_name),
-                    None,
-                )
-                if field is None or field.get("value") is not True:
-                    customer = est.get("customer") or {}
-                    broken.append({
-                        "estimate_id":     est.get("id"),
-                        "estimate_number": est.get("number"),
-                        "estimate_name":   est.get("name"),
-                        "customer_name":   customer.get("name"),
-                        "status":          (est.get("status") or {}).get("name"),
-                    })
-            return {
-                "summary": {"total_checked": len(all_estimates), "total_missing": len(broken)},
-                "records": broken,
-            }
+            print("[TOOL] portal_flag_audit called — running _run_portal_flag_audit()", flush=True)
+            result = _run_portal_flag_audit()
+            print(
+                f"[TOOL] portal_flag_audit complete — "
+                f"checked={result['summary']['total_estimates_checked']} "
+                f"missing={result['summary']['total_missing_flag']}",
+                flush=True,
+            )
+            return result
 
         return {"error": f"Unknown tool: {name}"}
 
