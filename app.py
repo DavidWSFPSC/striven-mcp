@@ -491,19 +491,22 @@ def _paginated_customer_search(search_name: str) -> dict:
     print(f"[Striven] search_customers → name='{search_name}'", flush=True)
 
     # ── Step 1: resolve customer name → ID(s) ───────────────────────────────
-    cust_raw   = striven.search_customers(search_name, page_size=10)
+    cust_raw = striven.search_customers(search_name, page_size=10)
+    print(f"CUSTOMER RAW RESPONSE: {json.dumps(cust_raw)[:2000]}", flush=True)
+    print(f"CUSTOMER RAW KEYS: {list(cust_raw.keys())}", flush=True)
+
     customers  = cust_raw.get("Data") or cust_raw.get("data") or []
     total_cust = cust_raw.get("TotalCount") or cust_raw.get("totalCount") or 0
     print(f"[Striven] customers found: {total_cust}, using first {len(customers)}", flush=True)
 
     if not customers:
         return {
-            "count":   0,
-            "estimates": [],
+            "count":       0,
+            "estimates":   [],
             "total_count": 0,
-            "message": f"No customers found matching '{search_name}'. "
-                       "Try a shorter or different spelling.",
-            "source":  "striven_live",
+            "message":     f"No customers found matching '{search_name}'. "
+                           "Try a shorter or different spelling.",
+            "source":      "striven_live",
         }
 
     # ── Step 2: paginate ALL estimates for each matched customer ─────────────
@@ -513,38 +516,66 @@ def _paginated_customer_search(search_name: str) -> dict:
     for cust in customers[:5]:          # cap at 5 customers to avoid rate limits
         cust_id   = cust.get("Id") or cust.get("id")
         cust_name = cust.get("Name") or cust.get("name")
+        print(f"\n--- Customer: '{cust_name}' | ID: {cust_id} ---", flush=True)
 
-        total_count      = 1            # guarantees loop entry; updated after first call
+        # Read total_count ONCE on the first page — never overwrite it.
+        # Some APIs return per-page count on subsequent pages; capturing it
+        # once guarantees we loop against the true grand total.
+        total_count      = None
         page_index       = 0            # 0-based per Striven docs
         customer_records: list[dict] = []
 
-        while len(customer_records) < total_count:
+        while True:
             est_raw = striven.search_estimates({
                 "pageIndex":  page_index,
                 "pageSize":   PAGE_SIZE,
                 "CustomerId": cust_id,
             })
 
+            # ── Full raw dump so we can see exactly what Striven returns ──
+            print(f"RAW RESPONSE (page {page_index}): {json.dumps(est_raw)[:1000]}", flush=True)
             print(f"RAW RESPONSE KEYS: {list(est_raw.keys())}", flush=True)
 
-            data        = est_raw.get("Data") or est_raw.get("data") or []
-            total_count = (
-                est_raw.get("TotalCount")
-                or est_raw.get("totalCount")
-                or len(data)
+            # ── Extract records — try every known key variant ─────────────
+            data = (
+                est_raw.get("data")
+                or est_raw.get("Data")
+                or est_raw.get("results")
+                or est_raw.get("Results")
+                or []
             )
+            print(f"RECORDS EXTRACTED: {len(data)} (key='data'/'Data'/'results')", flush=True)
 
+            # ── Extract total — captured ONCE on page 0 only ──────────────
+            if total_count is None:
+                total_count = (
+                    est_raw.get("totalCount")
+                    or est_raw.get("TotalCount")
+                    or est_raw.get("total_count")
+                    or est_raw.get("total")
+                    or 0
+                )
+                print(f"TOTAL COUNT CAPTURED (page 0): {total_count}", flush=True)
+
+            # ── Guard: no records returned → stop ─────────────────────────
             if not data:
-                print("⚠️ No data returned, breaking loop", flush=True)
+                print("⚠️ No data returned — breaking loop", flush=True)
                 break
 
             customer_records.extend([_fmt(r) for r in data])
 
             print(
-                f"LOOP HIT: page_index={page_index}, "
-                f"collected={len(customer_records)}, total={total_count}",
+                f"LOOP HIT: page_index={page_index} | "
+                f"this_page={len(data)} | "
+                f"collected={len(customer_records)} | "
+                f"total={total_count}",
                 flush=True,
             )
+
+            # ── Stop when we have everything ───────────────────────────────
+            if len(customer_records) >= (total_count or 0):
+                print(f"✅ All {total_count} records collected — stopping", flush=True)
+                break
 
             page_index += 1
 
@@ -557,7 +588,7 @@ def _paginated_customer_search(search_name: str) -> dict:
     return {
         "count":             len(all_estimates),
         "estimates":         all_estimates,
-        "total_count":       total_count,
+        "total_count":       total_count or 0,
         "customers_matched": len(customers),
         "source":            "striven_live",
     }
