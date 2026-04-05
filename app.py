@@ -602,12 +602,14 @@ def _paginated_customer_search(search_name: str) -> dict:
     t_start = _time.monotonic()
 
     # ── Step 1: resolve customer name → ID(s) ───────────────────────────────
+    print(f"[customer-search] REQUEST → POST /v1/customers/search {{\"Name\": \"{search_name}\", \"PageSize\": 10}}", flush=True)
     cust_raw  = striven.search_customers(search_name, page_size=10)
     customers = cust_raw.get("Data", [])
     if not customers:
-        print(f"[customer-search] WARNING: 'Data' key missing — keys={list(cust_raw.keys())}", flush=True)
+        print(f"[customer-search] WARNING: 'Data' missing — response keys={list(cust_raw.keys())}", flush=True)
     print(
-        f"[customer-search] '{search_name}' → {cust_raw.get('TotalCount', 0)} customer(s) found",
+        f"[customer-search] RESPONSE → TotalCount={cust_raw.get('TotalCount', 0)} "
+        f"customers=[{', '.join(str(c.get('Id','?')) + ':' + str(c.get('Name','?')) for c in customers[:3])}]",
         flush=True,
     )
 
@@ -634,11 +636,14 @@ def _paginated_customer_search(search_name: str) -> dict:
         customer_records: list[dict] = []
 
         while True:
-            est_raw = striven.search_sales_orders({
+            request_body = {
                 "PageIndex":  page_index,
                 "PageSize":   PAGE_SIZE,
                 "CustomerId": cust_id,
-            })
+            }
+            print(f"[customer-search] REQUEST → POST /v1/sales-orders/search {json.dumps(request_body)}", flush=True)
+
+            est_raw = striven.search_sales_orders(request_body)
 
             data = est_raw.get("Data", [])
 
@@ -646,9 +651,11 @@ def _paginated_customer_search(search_name: str) -> dict:
                 total_count  = est_raw.get("TotalCount", 0)
                 grand_total += total_count
                 if not data:
-                    print(f"[customer-search] WARNING: 'Data' key missing — keys={list(est_raw.keys())}", flush=True)
+                    print(f"[customer-search] WARNING: 'Data' missing — response keys={list(est_raw.keys())}", flush=True)
                 print(f"[customer-search] '{cust_name}' (ID={cust_id}) → TotalCount={total_count}", flush=True)
                 print(f"[customer-search] First record sample: {data[0] if data else 'EMPTY'}", flush=True)
+
+            print(f"[customer-search] page={page_index} records_returned={len(data)} collected={len(customer_records) + len(data)}/{total_count}", flush=True)
 
             if not data:
                 break
