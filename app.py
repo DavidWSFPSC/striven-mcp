@@ -939,6 +939,20 @@ TOOL ROUTING
 - "Tell me about estimate #N"                   → get_estimate_by_id
 - "Missing portal flag / portal audit"          → portal_flag_audit (warn: ~60 s)
 - ANY gas log / removal fee / burner question   → gas_log_audit (MANDATORY — see below)
+- "Find customer / look up [name]"              → search_customers
+- "What tasks / show tasks / open tasks"        → search_tasks
+- "Tasks due this week / overdue tasks"         → search_tasks with due_from + due_to
+- "Tasks for estimate #N"                       → search_tasks with related_entity_id
+- "Tell me about task #N"                       → get_task_by_id
+- "Create a task / add a follow-up"             → create_task
+- "Mark task done / update task"                → update_task
+
+TASKS — HOW TO USE THEM
+Tasks track operational work: follow-ups, site visits, installs, callbacks.
+When a user asks about workload or delays, search_tasks is the right tool.
+Key fields returned: name, status, task_type, assigned_to, due_date, related_entity.
+To find tasks for a specific estimate: use related_entity_id = the estimate's numeric ID.
+Status IDs are integers — if unsure, search without a status filter and report what you see.
 
 ════════════════════════════════════════════════════════
 FAST MODE vs DEEP MODE
@@ -1122,29 +1136,146 @@ _CHAT_TOOLS = [
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "search_customers",
+        "description": (
+            "Search customers by name. Returns customer ID, name, number, email, and phone. "
+            "Use when the user asks about a specific customer or wants to look up contact info."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name":      {"type": "string",  "description": "Customer name or partial name to search"},
+                "page_size": {"type": "integer", "description": "Max results to return (default 25)"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "search_tasks",
+        "description": (
+            "Search tasks in Striven. Use to understand workload, find overdue tasks, "
+            "check what's assigned to someone, or find tasks linked to a specific estimate or project. "
+            "Supports filtering by status, assignee, due date range, and related entity."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status_id":        {"type": "integer", "description": "Filter by task status ID"},
+                "assigned_to":      {"type": "integer", "description": "Filter by assignee user ID"},
+                "task_type_id":     {"type": "integer", "description": "Filter by task type ID"},
+                "due_from":         {"type": "string",  "description": "Due date range start YYYY-MM-DD"},
+                "due_to":           {"type": "string",  "description": "Due date range end YYYY-MM-DD"},
+                "related_entity_id":{"type": "integer", "description": "Filter by linked estimate or project ID"},
+                "page_size":        {"type": "integer", "description": "Max results (default 25, max 50)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_task_by_id",
+        "description": "Fetch full detail of a single task by its Striven ID.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "Striven task ID"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "create_task",
+        "description": (
+            "Create a new task in Striven. Use when the user wants to log a follow-up, "
+            "assign work, or create a reminder tied to an estimate or job."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name":              {"type": "string",  "description": "Task title (required)"},
+                "task_type_id":      {"type": "integer", "description": "Task type ID (default 1)"},
+                "description":       {"type": "string",  "description": "Task details or notes"},
+                "due_date":          {"type": "string",  "description": "Due date YYYY-MM-DD"},
+                "assigned_to":       {"type": "integer", "description": "Assignee user ID"},
+                "related_entity_id": {"type": "integer", "description": "Linked estimate or project ID"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "update_task",
+        "description": (
+            "Update an existing task — change its status, due date, assignee, or description. "
+            "Pass only the fields that need to change."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id":     {"type": "integer", "description": "Striven task ID (required)"},
+                "name":        {"type": "string",  "description": "Updated task title"},
+                "status_id":   {"type": "integer", "description": "New status ID"},
+                "due_date":    {"type": "string",  "description": "New due date YYYY-MM-DD"},
+                "assigned_to": {"type": "integer", "description": "New assignee user ID"},
+                "description": {"type": "string",  "description": "Updated description or notes"},
+            },
+            "required": ["task_id"],
+        },
+    },
 ]
 
 
 def _fmt(r: dict) -> dict:
     """
-    Normalise a raw Striven sales-order record into a clean dict.
+    Normalise a raw Striven sales-order search record into a clean dict.
 
-    POST /v1/sales-orders/search returns TitleCase keys per the API schema:
-        Id, Number, Name, Customer{Id,Name}, Status{Id,Name}, DateCreated
+    POST /v1/sales-orders/search returns TitleCase keys:
+        Id, Number, Name, Customer{Id,Name}, Status{Id,Name},
+        SalesRep{Id,Name}, DateCreated, DateApproved, OrderTotal
     We check TitleCase first, then fall back to camelCase for safety.
 
-    Note: the search endpoint does NOT return a total/price field.
-    OrderTotal is only available on the single-record GET endpoint.
+    Note: OrderTotal is not always populated on search stubs — it IS
+    available on the single-record GET endpoint (get_estimate_by_id).
     """
-    customer = r.get("Customer") or r.get("customer") or {}
-    status   = r.get("Status")   or r.get("status")   or {}
+    customer  = r.get("Customer")  or r.get("customer")  or {}
+    status    = r.get("Status")    or r.get("status")    or {}
+    sales_rep = r.get("SalesRep")  or r.get("salesRep")  or {}
     return {
-        "id":              r.get("Id")          or r.get("id"),
-        "estimate_number": r.get("Number")      or r.get("number"),
-        "customer_name":   customer.get("Name") or customer.get("name"),
-        "total":           r.get("OrderTotal")  or r.get("total"),
-        "date":            r.get("DateCreated") or r.get("dateCreated"),
-        "status":          status.get("Name")   or status.get("name"),
+        "id":              r.get("Id")           or r.get("id"),
+        "estimate_number": r.get("Number")       or r.get("number"),
+        "name":            r.get("Name")         or r.get("name"),
+        "customer_name":   customer.get("Name")  or customer.get("name"),
+        "customer_id":     customer.get("Id")    or customer.get("id"),
+        "sales_rep":       sales_rep.get("Name") or sales_rep.get("name"),
+        "status":          status.get("Name")    or status.get("name"),
+        "total":           r.get("OrderTotal")   or r.get("orderTotal")  or r.get("total"),
+        "date_created":    r.get("DateCreated")  or r.get("dateCreated"),
+        "date_approved":   r.get("DateApproved") or r.get("dateApproved"),
+    }
+
+
+def _fmt_task(t: dict) -> dict:
+    """
+    Normalise a raw Striven task record into a clean dict.
+
+    GET/POST /v2/tasks returns a mix of TitleCase and camelCase keys.
+    Normalised to snake_case for consistent Claude consumption.
+    """
+    assigned  = t.get("AssignedTo")    or t.get("assignedTo")    or {}
+    status    = t.get("Status")        or t.get("status")        or {}
+    task_type = t.get("TaskType")      or t.get("taskType")      or {}
+    related   = t.get("RelatedEntity") or t.get("relatedEntity") or {}
+    return {
+        "id":                t.get("Id")          or t.get("id"),
+        "name":              t.get("Name")        or t.get("name"),
+        "description":       t.get("Description") or t.get("description"),
+        "status":            status.get("Name")   or status.get("name"),
+        "status_id":         status.get("Id")     or status.get("id"),
+        "task_type":         task_type.get("Name") or task_type.get("name"),
+        "assigned_to":       assigned.get("Name") or assigned.get("name"),
+        "due_date":          t.get("DueDate")     or t.get("dueDate"),
+        "date_created":      t.get("DateCreated") or t.get("dateCreated"),
+        "related_entity":    related.get("Name")  or related.get("name"),
+        "related_entity_id": related.get("Id")    or related.get("id"),
     }
 
 
@@ -1357,7 +1488,39 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                         "note": "Fast mode — 1 page, most recent first"}
 
         if name == "get_estimate_by_id":
-            return striven.get_estimate(tool_input["estimate_id"])
+            raw    = striven.get_estimate(tool_input["estimate_id"])
+            # Normalise line items into a clean summary for Claude
+            raw_items = (
+                raw.get("lineItems") or raw.get("items")
+                or raw.get("LineItems") or []
+            )
+            line_items = []
+            for li in raw_items:
+                item_obj = li.get("item") or li.get("Item") or {}
+                line_items.append({
+                    "name":        item_obj.get("name") or item_obj.get("Name") or li.get("name") or li.get("Name"),
+                    "description": li.get("description") or li.get("Description"),
+                    "quantity":    li.get("quantity")    or li.get("Quantity"),
+                    "unit_price":  li.get("unitPrice")   or li.get("UnitPrice"),
+                    "total":       li.get("total")       or li.get("Total"),
+                })
+            customer  = raw.get("customer")  or raw.get("Customer")  or {}
+            status    = raw.get("status")    or raw.get("Status")    or {}
+            sales_rep = raw.get("salesRep")  or raw.get("SalesRep")  or {}
+            return {
+                "id":              raw.get("id")          or raw.get("Id"),
+                "estimate_number": raw.get("number")      or raw.get("Number"),
+                "name":            raw.get("name")        or raw.get("Name"),
+                "customer_name":   customer.get("name")   or customer.get("Name"),
+                "sales_rep":       sales_rep.get("name")  or sales_rep.get("Name"),
+                "status":          status.get("name")     or status.get("Name"),
+                "total":           raw.get("orderTotal")  or raw.get("OrderTotal"),
+                "date_created":    raw.get("dateCreated") or raw.get("DateCreated"),
+                "date_approved":   raw.get("dateApproved") or raw.get("DateApproved"),
+                "notes":           raw.get("notes")       or raw.get("Notes"),
+                "line_items":      line_items,
+                "line_item_count": len(line_items),
+            }
 
         if name == "gas_log_audit":
             print("[TOOL] gas_log_audit called — running _run_gas_log_audit()", flush=True)
@@ -1380,6 +1543,89 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                 f"missing={result['summary']['total_missing_flag']}",
                 flush=True,
             )
+            return result
+
+        # ── search_customers ─────────────────────────────────────────────────
+        if name == "search_customers":
+            query     = tool_input.get("name", "").strip()
+            page_size = min(tool_input.get("page_size", 25), 50)
+            print(f"[search_customers] query='{query}' page_size={page_size}", flush=True)
+            raw   = striven.search_customers(name=query, page_size=page_size)
+            data  = raw.get("data") or raw.get("Data") or []
+            total = raw.get("totalCount") or raw.get("TotalCount") or 0
+            customers = [
+                {
+                    "id":     c.get("id")     or c.get("Id"),
+                    "name":   c.get("name")   or c.get("Name"),
+                    "number": c.get("number") or c.get("Number"),
+                    "email":  c.get("email")  or c.get("Email"),
+                    "phone":  c.get("phone")  or c.get("Phone"),
+                }
+                for c in data
+            ]
+            print(f"[search_customers] TotalCount={total} returned={len(customers)}", flush=True)
+            return {"total": total, "count": len(customers), "customers": customers}
+
+        # ── search_tasks ─────────────────────────────────────────────────────
+        if name == "search_tasks":
+            page_size = min(tool_input.get("page_size", 25), 50)
+            body: dict = {"PageIndex": 0, "PageSize": page_size}
+            if "status_id"    in tool_input: body["StatusId"]        = tool_input["status_id"]
+            if "assigned_to"  in tool_input: body["AssignedToId"]    = tool_input["assigned_to"]
+            if "task_type_id" in tool_input: body["TaskTypeId"]      = tool_input["task_type_id"]
+            if "due_from"  in tool_input or "due_to" in tool_input:
+                due_range: dict = {}
+                if "due_from" in tool_input: due_range["DateFrom"] = tool_input["due_from"]
+                if "due_to"   in tool_input: due_range["DateTo"]   = tool_input["due_to"]
+                body["DueDateRange"] = due_range
+            if "related_entity_id" in tool_input:
+                body["RelatedEntityId"] = tool_input["related_entity_id"]
+            print(f"[search_tasks] body={body}", flush=True)
+            raw   = striven.search_tasks(body)
+            data  = raw.get("data") or raw.get("Data") or []
+            total = raw.get("totalCount") or raw.get("TotalCount") or 0
+            tasks = [_fmt_task(t) for t in data]
+            print(f"[search_tasks] TotalCount={total} returned={len(tasks)}", flush=True)
+            return {"total": total, "count": len(tasks), "tasks": tasks}
+
+        # ── get_task_by_id ───────────────────────────────────────────────────
+        if name == "get_task_by_id":
+            task_id = tool_input["task_id"]
+            print(f"[get_task_by_id] id={task_id}", flush=True)
+            raw = striven.get_task(task_id)
+            return _fmt_task(raw)
+
+        # ── create_task ──────────────────────────────────────────────────────
+        if name == "create_task":
+            body = {
+                "Name":       tool_input["name"],
+                "TaskTypeId": tool_input.get("task_type_id", 1),
+            }
+            if "description"      in tool_input: body["Description"]    = tool_input["description"]
+            if "due_date"         in tool_input: body["DueDate"]         = tool_input["due_date"]
+            if "assigned_to"      in tool_input: body["AssignedToId"]    = tool_input["assigned_to"]
+            if "related_entity_id" in tool_input: body["RelatedEntityId"] = tool_input["related_entity_id"]
+            print(f"[create_task] Creating task: {body.get('Name')}", flush=True)
+            raw = striven.create_task(body)
+            result = _fmt_task(raw)
+            print(f"[create_task] Created task id={result.get('id')}", flush=True)
+            return result
+
+        # ── update_task ──────────────────────────────────────────────────────
+        if name == "update_task":
+            task_id = tool_input["task_id"]
+            body: dict = {}
+            if "name"        in tool_input: body["Name"]        = tool_input["name"]
+            if "status_id"   in tool_input: body["StatusId"]    = tool_input["status_id"]
+            if "due_date"    in tool_input: body["DueDate"]      = tool_input["due_date"]
+            if "assigned_to" in tool_input: body["AssignedToId"] = tool_input["assigned_to"]
+            if "description" in tool_input: body["Description"]  = tool_input["description"]
+            if not body:
+                return {"error": "update_task requires at least one field to update"}
+            print(f"[update_task] Updating task id={task_id} fields={list(body.keys())}", flush=True)
+            raw = striven.update_task(task_id, body)
+            result = _fmt_task(raw)
+            print(f"[update_task] Updated task id={result.get('id')} status={result.get('status')}", flush=True)
             return result
 
         return {"error": f"Unknown tool: {name}"}

@@ -107,6 +107,18 @@ class StrivenClient:
         response.raise_for_status()
         return response.json()
 
+    def _patch(self, path: str, body: dict | None = None) -> dict:
+        """Perform an authenticated PATCH request and return the JSON response."""
+        url = f"{STRIVEN_BASE_URL}{path}"
+        response = requests.patch(
+            url,
+            headers={**self._get_headers(), "Content-Type": "application/json"},
+            json=body or {},
+            timeout=15,
+        )
+        response.raise_for_status()
+        return response.json()
+
     # ------------------------------------------------------------------
     # Estimate endpoints
     #
@@ -190,6 +202,101 @@ class StrivenClient:
             "PageSize":  page_size,
             "Name":      name,
         })
+
+    # ------------------------------------------------------------------
+    # Task endpoints  (/v2/tasks)
+    #
+    # Note: tasks live under /v2, not /v1.  The base URL env var points
+    # to /v1, so these methods build the URL manually using the v2 path.
+    # ------------------------------------------------------------------
+
+    def _v2_url(self, path: str) -> str:
+        """Return a full URL under the v2 base (replaces trailing /v1 with /v2)."""
+        base = STRIVEN_BASE_URL.rstrip("/")
+        # Handle both ".../v1" and ".../v1/" endings
+        if base.endswith("/v1"):
+            base = base[:-3]
+        return f"{base}/v2{path}"
+
+    def search_tasks(self, filters: dict | None = None) -> dict:
+        """
+        Search tasks.
+
+        POST /v2/tasks/search
+
+        Useful filter keys (all optional):
+            PageIndex        int   — 0-based page, default 0
+            PageSize         int   — results per page, default 25
+            StatusId         int   — task status ID
+            AssignedToId     int   — user ID of assignee
+            DueDateRange     dict  — {DateFrom, DateTo}
+            RelatedEntityId  int   — linked estimate/project ID
+            TaskTypeId       int   — type of task
+        """
+        url = self._v2_url("/tasks/search")
+        response = requests.post(
+            url,
+            headers={**self._get_headers(), "Content-Type": "application/json"},
+            json=filters or {},
+            timeout=15,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def get_task(self, task_id: int) -> dict:
+        """
+        Fetch a single task by ID.
+
+        GET /v2/tasks/{id}
+        """
+        url = self._v2_url(f"/tasks/{task_id}")
+        response = requests.get(url, headers=self._get_headers(), timeout=15)
+        response.raise_for_status()
+        return response.json()
+
+    def create_task(self, body: dict) -> dict:
+        """
+        Create a new task.
+
+        POST /v2/tasks
+
+        Required body keys (minimum):
+            Name        str  — task title
+            TaskTypeId  int  — task type
+        Optional:
+            Description     str
+            DueDate         str  — ISO date
+            AssignedToId    int
+            RelatedEntityId int
+        """
+        url = self._v2_url("/tasks")
+        response = requests.post(
+            url,
+            headers={**self._get_headers(), "Content-Type": "application/json"},
+            json=body,
+            timeout=15,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def update_task(self, task_id: int, body: dict) -> dict:
+        """
+        Update an existing task.
+
+        PATCH /v2/tasks/{id}
+
+        Pass only the fields to change — partial update supported.
+        Common fields: Name, StatusId, DueDate, AssignedToId, Description
+        """
+        url = self._v2_url(f"/tasks/{task_id}")
+        response = requests.patch(
+            url,
+            headers={**self._get_headers(), "Content-Type": "application/json"},
+            json=body,
+            timeout=15,
+        )
+        response.raise_for_status()
+        return response.json()
 
     def get_all_estimates(self, page_size: int = 100) -> list[dict]:
         """
