@@ -336,3 +336,147 @@ class StrivenClient:
             page_index += 1
 
         return all_records
+
+    # ------------------------------------------------------------------
+    # Financial — Invoices, Bills, Bill Credits, Payments
+    # All are POST /search + GET /{id}. Read-only.
+    # ------------------------------------------------------------------
+
+    def search_invoices(self, filters: dict | None = None) -> dict:
+        """Search invoices. POST /v1/invoices/search
+        Filter keys (all optional): PageIndex, PageSize, CustomerId, StatusId,
+        DateCreatedRange {DateFrom, DateTo}, DueDateRange {DateFrom, DateTo}
+        """
+        return self._post("/invoices/search", body=filters or {})
+
+    def get_invoice(self, invoice_id: int) -> dict:
+        """Fetch a single invoice by ID. GET /v1/invoices/{id}"""
+        return self._get(f"/invoices/{invoice_id}")
+
+    def search_bills(self, filters: dict | None = None) -> dict:
+        """Search vendor bills. POST /v1/bills/search
+        Filter keys (all optional): PageIndex, PageSize, VendorId, StatusId,
+        DateCreatedRange {DateFrom, DateTo}
+        """
+        return self._post("/bills/search", body=filters or {})
+
+    def get_bill(self, bill_id: int) -> dict:
+        """Fetch a single vendor bill by ID. GET /v1/bills/{id}"""
+        return self._get(f"/bills/{bill_id}")
+
+    def search_bill_credits(self, filters: dict | None = None) -> dict:
+        """Search bill credits. POST /v1/bill-credits/search"""
+        return self._post("/bill-credits/search", body=filters or {})
+
+    def get_bill_credit(self, credit_id: int) -> dict:
+        """Fetch a single bill credit by ID. GET /v1/bill-credits/{id}"""
+        return self._get(f"/bill-credits/{credit_id}")
+
+    def search_payments(self, filters: dict | None = None) -> dict:
+        """Search customer payments received. POST /v1/payments/search
+        Filter keys (all optional): PageIndex, PageSize, CustomerId,
+        DateCreatedRange {DateFrom, DateTo}
+        """
+        return self._post("/payments/search", body=filters or {})
+
+    def get_payment(self, payment_id: int) -> dict:
+        """Fetch a single payment by ID. GET /v1/payments/{id}"""
+        return self._get(f"/payments/{payment_id}")
+
+    # ------------------------------------------------------------------
+    # Procurement — Purchase Orders
+    # ------------------------------------------------------------------
+
+    def search_purchase_orders(self, filters: dict | None = None) -> dict:
+        """Search purchase orders. POST /v1/purchase-orders/search
+        Filter keys (all optional): PageIndex, PageSize, VendorId, StatusId,
+        DateCreatedRange {DateFrom, DateTo}
+        """
+        return self._post("/purchase-orders/search", body=filters or {})
+
+    def get_purchase_order(self, po_id: int) -> dict:
+        """Fetch a single purchase order by ID. GET /v1/purchase-orders/{id}"""
+        return self._get(f"/purchase-orders/{po_id}")
+
+    # ------------------------------------------------------------------
+    # Catalog — Items / Products
+    # ------------------------------------------------------------------
+
+    def search_items(self, filters: dict | None = None) -> dict:
+        """Search items (products/services). POST /v1/items/search
+        Filter keys (all optional): PageIndex, PageSize, Name,
+        ItemTypeId, CategoryId, IsActive
+        """
+        return self._post("/items/search", body=filters or {})
+
+    def get_item_types(self) -> dict:
+        """Return all item types. GET /v1/item-types"""
+        return self._get("/item-types")
+
+    def get_inventory_locations(self) -> dict:
+        """Return all inventory locations. GET /v1/inventory-locations"""
+        return self._get("/inventory-locations")
+
+    # ------------------------------------------------------------------
+    # CRM — Customers (expand), Vendors, Contacts, Opportunities
+    # ------------------------------------------------------------------
+
+    def get_customer(self, customer_id: int) -> dict:
+        """Fetch a single customer by ID. GET /v1/customers/{id}"""
+        return self._get(f"/customers/{customer_id}")
+
+    def search_vendors(self, filters: dict | None = None) -> dict:
+        """Search vendors. POST /v1/vendors/search
+        Filter keys (all optional): PageIndex, PageSize, Name
+        """
+        return self._post("/vendors/search", body=filters or {})
+
+    def get_vendor(self, vendor_id: int) -> dict:
+        """Fetch a single vendor by ID. GET /v1/vendors/{id}"""
+        return self._get(f"/vendors/{vendor_id}")
+
+    def search_contacts(self, filters: dict | None = None) -> dict:
+        """Search contacts. POST /v1/contacts/search
+        Filter keys (all optional): PageIndex, PageSize, Name,
+        CustomerId, VendorId
+        """
+        return self._post("/contacts/search", body=filters or {})
+
+    def get_contact(self, contact_id: int) -> dict:
+        """Fetch a single contact by ID. GET /v1/contacts/{id}"""
+        return self._get(f"/contacts/{contact_id}")
+
+    def search_opportunities(self, filters: dict | None = None) -> dict:
+        """Search opportunities / sales pipeline. POST /v1/opportunities/search
+        Filter keys (all optional): PageIndex, PageSize, CustomerId,
+        StatusId, DateCreatedRange {DateFrom, DateTo}
+        """
+        return self._post("/opportunities/search", body=filters or {})
+
+    def get_opportunity(self, opportunity_id: int) -> dict:
+        """Fetch a single opportunity by ID. GET /v1/opportunities/{id}"""
+        return self._get(f"/opportunities/{opportunity_id}")
+
+    # ------------------------------------------------------------------
+    # Reference data — categories, payment terms/methods, task metadata
+    # These are small lookup lists; no pagination needed.
+    # ------------------------------------------------------------------
+
+    def get_categories(self) -> dict:
+        """Return all item/GL categories. GET /v1/categories"""
+        return self._get("/categories")
+
+    def get_payment_terms(self) -> dict:
+        """Return all payment terms (e.g. Net 30). GET /v1/payment-terms"""
+        return self._get("/payment-terms")
+
+    def get_payment_methods(self) -> dict:
+        """Return all payment methods (e.g. Check, ACH). GET /v1/payment-methods"""
+        return self._get("/payment-methods")
+
+    def get_task_types(self) -> dict:
+        """Return all task types. GET /v2/tasks/types"""
+        url = self._v2_url("/tasks/types")
+        response = requests.get(url, headers=self._get_headers(), timeout=15)
+        response.raise_for_status()
+        return response.json()

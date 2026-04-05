@@ -931,6 +931,7 @@ In our system "estimates" and "sales orders" are the same thing.
 Status codes: 18=Incomplete  19=Quoted  20=Pending Approval  22=Approved  25=In Progress  27=Completed
 
 TOOL ROUTING
+ESTIMATES & PIPELINE
 - Any count / total / "how many" question       → count_estimates (MANDATORY)
 - "Biggest / highest value jobs"                → high_value_estimates
 - "Estimates for [customer name]"               → search_estimates_by_customer
@@ -939,11 +940,29 @@ TOOL ROUTING
 - "Tell me about estimate #N"                   → get_estimate_by_id
 - "Missing portal flag / portal audit"          → portal_flag_audit (warn: ~60 s)
 - ANY gas log / removal fee / burner question   → gas_log_audit (MANDATORY — see below)
+- "Pipeline / deals / opportunities"            → search_opportunities
+
+CUSTOMERS, CONTACTS & VENDORS
 - "Find customer / look up [name]"              → search_customers
+- "Customer contacts / who do we talk to"       → search_contacts
+- "Find vendor / supplier"                      → search_vendors
+
+TASKS
 - "What tasks / show tasks / open tasks"        → search_tasks
 - "Tasks due this week / overdue tasks"         → search_tasks with due_from + due_to
 - "Tasks for estimate #N"                       → search_tasks with related_entity_id
 - "Tell me about task #N"                       → get_task_by_id
+
+FINANCIAL (invoices, bills, payments, POs)
+- "Unpaid invoices / outstanding balances"      → search_invoices
+- "Invoice for customer / invoice #N"           → search_invoices or get_invoice_by_id
+- "Vendor bills / what we owe"                  → search_bills
+- "Payments received / cash collected"          → search_payments
+- "Purchase orders / POs"                       → search_purchase_orders
+
+PRODUCTS & CATALOG
+- "What items/products/services do we have"     → search_items
+- "Find item / look up a product"               → search_items with keyword
 TASKS — HOW TO USE THEM
 Tasks track operational work: follow-ups, site visits, installs, callbacks.
 When a user asks about workload or delays, search_tasks is the right tool.
@@ -1186,6 +1205,174 @@ _CHAT_TOOLS = [
             "required": ["task_id"],
         },
     },
+    # ── Financial ─────────────────────────────────────────────────────────────
+    {
+        "name": "search_invoices",
+        "description": (
+            "Search customer invoices. Use for: unpaid invoices, overdue balances, "
+            "revenue by customer, or invoice history. "
+            "Returns id, invoice_number, customer_name, total, amount_due, status, date_created, date_due."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "integer", "description": "Filter by customer ID"},
+                "status_id":   {"type": "integer", "description": "Filter by status ID"},
+                "date_from":   {"type": "string",  "description": "Created on or after YYYY-MM-DD"},
+                "date_to":     {"type": "string",  "description": "Created on or before YYYY-MM-DD"},
+                "due_from":    {"type": "string",  "description": "Due date from YYYY-MM-DD"},
+                "due_to":      {"type": "string",  "description": "Due date to YYYY-MM-DD"},
+                "page_size":   {"type": "integer", "description": "Results per page (default 25)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_invoice_by_id",
+        "description": "Fetch full detail of a single invoice by its Striven ID.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "invoice_id": {"type": "integer", "description": "Striven invoice ID"},
+            },
+            "required": ["invoice_id"],
+        },
+    },
+    {
+        "name": "search_bills",
+        "description": (
+            "Search vendor bills (accounts payable). Use for: what we owe vendors, "
+            "unpaid bills, AP aging. "
+            "Returns id, bill_number, vendor_name, total, amount_due, status, date_due."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "vendor_id": {"type": "integer", "description": "Filter by vendor ID"},
+                "status_id": {"type": "integer", "description": "Filter by status ID"},
+                "date_from": {"type": "string",  "description": "Created on or after YYYY-MM-DD"},
+                "date_to":   {"type": "string",  "description": "Created on or before YYYY-MM-DD"},
+                "page_size": {"type": "integer", "description": "Results per page (default 25)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "search_payments",
+        "description": (
+            "Search payments received from customers. Use for: payment history, "
+            "cash received, which customers have paid. "
+            "Returns id, customer_name, amount, method, reference, date."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "integer", "description": "Filter by customer ID"},
+                "date_from":   {"type": "string",  "description": "Payment date from YYYY-MM-DD"},
+                "date_to":     {"type": "string",  "description": "Payment date to YYYY-MM-DD"},
+                "page_size":   {"type": "integer", "description": "Results per page (default 25)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "search_purchase_orders",
+        "description": (
+            "Search purchase orders sent to vendors. Use for: procurement activity, "
+            "vendor spending, open POs. "
+            "Returns id, po_number, vendor_name, total, status, date_created."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "vendor_id": {"type": "integer", "description": "Filter by vendor ID"},
+                "status_id": {"type": "integer", "description": "Filter by status ID"},
+                "date_from": {"type": "string",  "description": "Created on or after YYYY-MM-DD"},
+                "date_to":   {"type": "string",  "description": "Created on or before YYYY-MM-DD"},
+                "page_size": {"type": "integer", "description": "Results per page (default 25)"},
+            },
+            "required": [],
+        },
+    },
+    # ── Catalog ───────────────────────────────────────────────────────────────
+    {
+        "name": "search_items",
+        "description": (
+            "Search the product/service catalog. Use for: what items/services we sell, "
+            "pricing, finding a specific product. "
+            "Returns id, name, description, type, category, price, is_active."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "keyword":   {"type": "string",  "description": "Search by item name"},
+                "page_size": {"type": "integer", "description": "Results per page (default 25)"},
+            },
+            "required": [],
+        },
+    },
+    # ── CRM ───────────────────────────────────────────────────────────────────
+    {
+        "name": "search_vendors",
+        "description": (
+            "Search vendors. Use for: vendor lookup, who we buy from, vendor contact info. "
+            "Returns id, name, number, email, phone, contact_name."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name":      {"type": "string",  "description": "Vendor name or partial name"},
+                "page_size": {"type": "integer", "description": "Results per page (default 25)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "search_contacts",
+        "description": (
+            "Search contacts (people linked to customers or vendors). "
+            "Returns id, first_name, last_name, email, phone, customer_name."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name":        {"type": "string",  "description": "Contact name or partial name"},
+                "customer_id": {"type": "integer", "description": "Filter by customer ID"},
+                "page_size":   {"type": "integer", "description": "Results per page (default 25)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "search_opportunities",
+        "description": (
+            "Search opportunities / sales pipeline. Use for: deals in progress, "
+            "pipeline value, win/loss analysis. "
+            "Returns id, name, customer_name, status, value, date_created, expected_close_date."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "integer", "description": "Filter by customer ID"},
+                "status_id":   {"type": "integer", "description": "Filter by status ID"},
+                "date_from":   {"type": "string",  "description": "Created on or after YYYY-MM-DD"},
+                "date_to":     {"type": "string",  "description": "Created on or before YYYY-MM-DD"},
+                "page_size":   {"type": "integer", "description": "Results per page (default 25)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_opportunity_by_id",
+        "description": "Fetch full detail of a single opportunity by its Striven ID.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "opportunity_id": {"type": "integer", "description": "Striven opportunity ID"},
+            },
+            "required": ["opportunity_id"],
+        },
+    },
 ]
 # NOTE: create_task and update_task are intentionally excluded.
 # This is a read-only BI system. Write operations are not exposed as tools.
@@ -1243,6 +1430,140 @@ def _fmt_task(t: dict) -> dict:
         "date_created":      t.get("DateCreated") or t.get("dateCreated"),
         "related_entity":    related.get("Name")  or related.get("name"),
         "related_entity_id": related.get("Id")    or related.get("id"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Normalisers for new data domains
+# All follow the same pattern: TitleCase first, camelCase fallback, snake_case out.
+# ---------------------------------------------------------------------------
+
+def _n(r: dict, *keys):
+    """Return the first non-empty value from r for the given keys (case variants)."""
+    for k in keys:
+        v = r.get(k)
+        if v is not None and v != "":
+            return v
+    return None
+
+def _name_of(obj: dict) -> str | None:
+    return obj.get("Name") or obj.get("name") if obj else None
+
+def _id_of(obj: dict) -> int | None:
+    return obj.get("Id") or obj.get("id") if obj else None
+
+
+def _fmt_invoice(r: dict) -> dict:
+    customer = r.get("Customer") or r.get("customer") or {}
+    status   = r.get("Status")   or r.get("status")   or {}
+    return {
+        "id":             _n(r, "Id", "id"),
+        "invoice_number": _n(r, "Number", "number"),
+        "customer_name":  _name_of(customer),
+        "customer_id":    _id_of(customer),
+        "status":         _name_of(status),
+        "total":          _n(r, "Total", "total", "OrderTotal", "orderTotal"),
+        "amount_due":     _n(r, "AmountDue", "amountDue", "BalanceDue", "balanceDue"),
+        "date_created":   _n(r, "DateCreated", "dateCreated"),
+        "date_due":       _n(r, "DueDate", "dueDate"),
+    }
+
+
+def _fmt_bill(r: dict) -> dict:
+    vendor = r.get("Vendor") or r.get("vendor") or {}
+    status = r.get("Status") or r.get("status") or {}
+    return {
+        "id":           _n(r, "Id", "id"),
+        "bill_number":  _n(r, "Number", "number"),
+        "vendor_name":  _name_of(vendor),
+        "vendor_id":    _id_of(vendor),
+        "status":       _name_of(status),
+        "total":        _n(r, "Total", "total"),
+        "amount_due":   _n(r, "AmountDue", "amountDue", "BalanceDue", "balanceDue"),
+        "date_created": _n(r, "DateCreated", "dateCreated"),
+        "date_due":     _n(r, "DueDate", "dueDate"),
+    }
+
+
+def _fmt_payment(r: dict) -> dict:
+    customer = r.get("Customer") or r.get("customer") or {}
+    method   = r.get("PaymentMethod") or r.get("paymentMethod") or {}
+    return {
+        "id":            _n(r, "Id", "id"),
+        "customer_name": _name_of(customer),
+        "customer_id":   _id_of(customer),
+        "amount":        _n(r, "Amount", "amount", "Total", "total"),
+        "method":        _name_of(method) or _n(r, "PaymentMethod", "paymentMethod"),
+        "reference":     _n(r, "Reference", "reference", "CheckNumber", "checkNumber"),
+        "date":          _n(r, "DateCreated", "dateCreated", "PaymentDate", "paymentDate"),
+    }
+
+
+def _fmt_purchase_order(r: dict) -> dict:
+    vendor = r.get("Vendor") or r.get("vendor") or {}
+    status = r.get("Status") or r.get("status") or {}
+    return {
+        "id":           _n(r, "Id", "id"),
+        "po_number":    _n(r, "Number", "number"),
+        "vendor_name":  _name_of(vendor),
+        "vendor_id":    _id_of(vendor),
+        "status":       _name_of(status),
+        "total":        _n(r, "Total", "total", "OrderTotal", "orderTotal"),
+        "date_created": _n(r, "DateCreated", "dateCreated"),
+    }
+
+
+def _fmt_item(r: dict) -> dict:
+    item_type = r.get("ItemType") or r.get("itemType") or {}
+    category  = r.get("Category") or r.get("category") or {}
+    return {
+        "id":          _n(r, "Id", "id"),
+        "name":        _n(r, "Name", "name"),
+        "description": _n(r, "Description", "description"),
+        "type":        _name_of(item_type),
+        "category":    _name_of(category),
+        "price":       _n(r, "Price", "price", "UnitPrice", "unitPrice"),
+        "is_active":   _n(r, "IsActive", "isActive"),
+    }
+
+
+def _fmt_vendor(r: dict) -> dict:
+    return {
+        "id":           _n(r, "Id", "id"),
+        "name":         _n(r, "Name", "name"),
+        "number":       _n(r, "Number", "number"),
+        "email":        _n(r, "Email", "email"),
+        "phone":        _n(r, "Phone", "phone"),
+        "contact_name": _n(r, "ContactName", "contactName"),
+    }
+
+
+def _fmt_contact(r: dict) -> dict:
+    customer = r.get("Customer") or r.get("customer") or {}
+    return {
+        "id":            _n(r, "Id", "id"),
+        "first_name":    _n(r, "FirstName", "firstName"),
+        "last_name":     _n(r, "LastName", "lastName"),
+        "name":          _n(r, "Name", "name"),
+        "email":         _n(r, "Email", "email"),
+        "phone":         _n(r, "Phone", "phone"),
+        "customer_name": _name_of(customer),
+        "customer_id":   _id_of(customer),
+    }
+
+
+def _fmt_opportunity(r: dict) -> dict:
+    customer = r.get("Customer") or r.get("customer") or {}
+    status   = r.get("Status")   or r.get("status")   or {}
+    return {
+        "id":                  _n(r, "Id", "id"),
+        "name":                _n(r, "Name", "name"),
+        "customer_name":       _name_of(customer),
+        "customer_id":         _id_of(customer),
+        "status":              _name_of(status),
+        "value":               _n(r, "Value", "value", "Amount", "amount"),
+        "date_created":        _n(r, "DateCreated", "dateCreated"),
+        "expected_close_date": _n(r, "ExpectedCloseDate", "expectedCloseDate"),
     }
 
 
@@ -1563,10 +1884,149 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
             return _fmt_task(raw)
 
         # ── create_task / update_task ── NOT EXPOSED (read-only system) ────────
-        # These handlers are defined but unreachable — neither tool is listed
-        # in _CHAT_TOOLS, so Claude cannot call them.
         if name in ("create_task", "update_task"):
             return {"error": "This system is read-only and cannot make changes."}
+
+        # ── search_invoices ───────────────────────────────────────────────────
+        if name == "search_invoices":
+            page_size = min(tool_input.get("page_size", 25), 50)
+            body: dict = {"PageIndex": 0, "PageSize": page_size}
+            if "customer_id" in tool_input: body["CustomerId"] = tool_input["customer_id"]
+            if "status_id"   in tool_input: body["StatusId"]   = tool_input["status_id"]
+            if "date_from" in tool_input or "date_to" in tool_input:
+                body["DateCreatedRange"] = {k: v for k, v in {
+                    "DateFrom": tool_input.get("date_from"),
+                    "DateTo":   tool_input.get("date_to"),
+                }.items() if v}
+            if "due_from" in tool_input or "due_to" in tool_input:
+                body["DueDateRange"] = {k: v for k, v in {
+                    "DateFrom": tool_input.get("due_from"),
+                    "DateTo":   tool_input.get("due_to"),
+                }.items() if v}
+            raw     = striven.search_invoices(body)
+            data    = raw.get("data") or raw.get("Data") or []
+            total   = raw.get("totalCount") or raw.get("TotalCount") or 0
+            records = [_fmt_invoice(r) for r in data]
+            print(f"[search_invoices] total={total} returned={len(records)}", flush=True)
+            return {"total": total, "count": len(records), "invoices": records}
+
+        # ── get_invoice_by_id ─────────────────────────────────────────────────
+        if name == "get_invoice_by_id":
+            raw = striven.get_invoice(tool_input["invoice_id"])
+            return _fmt_invoice(raw)
+
+        # ── search_bills ──────────────────────────────────────────────────────
+        if name == "search_bills":
+            page_size = min(tool_input.get("page_size", 25), 50)
+            body = {"PageIndex": 0, "PageSize": page_size}
+            if "vendor_id" in tool_input: body["VendorId"]  = tool_input["vendor_id"]
+            if "status_id" in tool_input: body["StatusId"]  = tool_input["status_id"]
+            if "date_from" in tool_input or "date_to" in tool_input:
+                body["DateCreatedRange"] = {k: v for k, v in {
+                    "DateFrom": tool_input.get("date_from"),
+                    "DateTo":   tool_input.get("date_to"),
+                }.items() if v}
+            raw     = striven.search_bills(body)
+            data    = raw.get("data") or raw.get("Data") or []
+            total   = raw.get("totalCount") or raw.get("TotalCount") or 0
+            records = [_fmt_bill(r) for r in data]
+            print(f"[search_bills] total={total} returned={len(records)}", flush=True)
+            return {"total": total, "count": len(records), "bills": records}
+
+        # ── search_payments ───────────────────────────────────────────────────
+        if name == "search_payments":
+            page_size = min(tool_input.get("page_size", 25), 50)
+            body = {"PageIndex": 0, "PageSize": page_size}
+            if "customer_id" in tool_input: body["CustomerId"] = tool_input["customer_id"]
+            if "date_from" in tool_input or "date_to" in tool_input:
+                body["DateCreatedRange"] = {k: v for k, v in {
+                    "DateFrom": tool_input.get("date_from"),
+                    "DateTo":   tool_input.get("date_to"),
+                }.items() if v}
+            raw     = striven.search_payments(body)
+            data    = raw.get("data") or raw.get("Data") or []
+            total   = raw.get("totalCount") or raw.get("TotalCount") or 0
+            records = [_fmt_payment(r) for r in data]
+            print(f"[search_payments] total={total} returned={len(records)}", flush=True)
+            return {"total": total, "count": len(records), "payments": records}
+
+        # ── search_purchase_orders ────────────────────────────────────────────
+        if name == "search_purchase_orders":
+            page_size = min(tool_input.get("page_size", 25), 50)
+            body = {"PageIndex": 0, "PageSize": page_size}
+            if "vendor_id" in tool_input: body["VendorId"]  = tool_input["vendor_id"]
+            if "status_id" in tool_input: body["StatusId"]  = tool_input["status_id"]
+            if "date_from" in tool_input or "date_to" in tool_input:
+                body["DateCreatedRange"] = {k: v for k, v in {
+                    "DateFrom": tool_input.get("date_from"),
+                    "DateTo":   tool_input.get("date_to"),
+                }.items() if v}
+            raw     = striven.search_purchase_orders(body)
+            data    = raw.get("data") or raw.get("Data") or []
+            total   = raw.get("totalCount") or raw.get("TotalCount") or 0
+            records = [_fmt_purchase_order(r) for r in data]
+            print(f"[search_purchase_orders] total={total} returned={len(records)}", flush=True)
+            return {"total": total, "count": len(records), "purchase_orders": records}
+
+        # ── search_items ──────────────────────────────────────────────────────
+        if name == "search_items":
+            page_size = min(tool_input.get("page_size", 25), 50)
+            body = {"PageIndex": 0, "PageSize": page_size}
+            if "keyword" in tool_input: body["Name"] = tool_input["keyword"]
+            raw     = striven.search_items(body)
+            data    = raw.get("data") or raw.get("Data") or []
+            total   = raw.get("totalCount") or raw.get("TotalCount") or 0
+            records = [_fmt_item(r) for r in data]
+            print(f"[search_items] total={total} returned={len(records)}", flush=True)
+            return {"total": total, "count": len(records), "items": records}
+
+        # ── search_vendors ────────────────────────────────────────────────────
+        if name == "search_vendors":
+            page_size = min(tool_input.get("page_size", 25), 50)
+            body = {"PageIndex": 0, "PageSize": page_size}
+            if "name" in tool_input: body["Name"] = tool_input["name"]
+            raw     = striven.search_vendors(body)
+            data    = raw.get("data") or raw.get("Data") or []
+            total   = raw.get("totalCount") or raw.get("TotalCount") or 0
+            records = [_fmt_vendor(r) for r in data]
+            print(f"[search_vendors] total={total} returned={len(records)}", flush=True)
+            return {"total": total, "count": len(records), "vendors": records}
+
+        # ── search_contacts ───────────────────────────────────────────────────
+        if name == "search_contacts":
+            page_size = min(tool_input.get("page_size", 25), 50)
+            body = {"PageIndex": 0, "PageSize": page_size}
+            if "name"        in tool_input: body["Name"]       = tool_input["name"]
+            if "customer_id" in tool_input: body["CustomerId"] = tool_input["customer_id"]
+            raw     = striven.search_contacts(body)
+            data    = raw.get("data") or raw.get("Data") or []
+            total   = raw.get("totalCount") or raw.get("TotalCount") or 0
+            records = [_fmt_contact(r) for r in data]
+            print(f"[search_contacts] total={total} returned={len(records)}", flush=True)
+            return {"total": total, "count": len(records), "contacts": records}
+
+        # ── search_opportunities ──────────────────────────────────────────────
+        if name == "search_opportunities":
+            page_size = min(tool_input.get("page_size", 25), 50)
+            body = {"PageIndex": 0, "PageSize": page_size}
+            if "customer_id" in tool_input: body["CustomerId"] = tool_input["customer_id"]
+            if "status_id"   in tool_input: body["StatusId"]   = tool_input["status_id"]
+            if "date_from" in tool_input or "date_to" in tool_input:
+                body["DateCreatedRange"] = {k: v for k, v in {
+                    "DateFrom": tool_input.get("date_from"),
+                    "DateTo":   tool_input.get("date_to"),
+                }.items() if v}
+            raw     = striven.search_opportunities(body)
+            data    = raw.get("data") or raw.get("Data") or []
+            total   = raw.get("totalCount") or raw.get("TotalCount") or 0
+            records = [_fmt_opportunity(r) for r in data]
+            print(f"[search_opportunities] total={total} returned={len(records)}", flush=True)
+            return {"total": total, "count": len(records), "opportunities": records}
+
+        # ── get_opportunity_by_id ─────────────────────────────────────────────
+        if name == "get_opportunity_by_id":
+            raw = striven.get_opportunity(tool_input["opportunity_id"])
+            return _fmt_opportunity(raw)
 
         return {"error": f"Unknown tool: {name}"}
 
