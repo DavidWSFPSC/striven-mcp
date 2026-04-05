@@ -1,15 +1,36 @@
 """
-Flask API server — Striven → Supabase data pipeline
-Exposes: /health, /get-estimate/<id>, /search-estimates,
-         /missing-portal-flag, /sync-estimates,
-         /estimates/count, /estimates/high-value, /estimates/by-customer
+Flask API server — WilliamSmith chat + Striven live data
 
-Architecture:
-  Striven (READ-ONLY source) → sync layer → Supabase (data layer) → Flask → Claude
+# IMPORTANT: TERMINOLOGY MAPPING
+# ─────────────────────────────────────────────────────────────
+# "Estimates" in our business  =  "Sales Orders" in Striven API
+#
+# There is NO /estimates endpoint in Striven. Every call that
+# fetches or searches estimates internally uses:
+#
+#     POST /v1/sales-orders/search
+#
+# The external route names (/search-estimates, etc.) and the
+# Claude tool names (search_estimates_by_customer, etc.) keep
+# the word "estimates" for business clarity.  Only the internal
+# Striven API calls use "sales-orders".
+# ─────────────────────────────────────────────────────────────
+
+Exposes (external names — "estimates" language preserved):
+  /health
+  /search-estimates          → POST /v1/sales-orders/search
+  /get-estimate/<id>         → GET  /v1/sales-orders/{id}
+  /missing-portal-flag       → paginates /v1/sales-orders/search
+  /sync-estimates            → full paginated pull → Supabase
+  /estimates/count           → Supabase count
+  /estimates/high-value      → Supabase query
+  /estimates/by-customer     → Supabase query
+  /                          → WilliamSmith chat UI
+  /api/chat                  → agentic Claude loop
+  /logs                      → admin search history
 
 SAFETY POLICY:
-  - Striven is never written to. All Striven calls are GET / POST-for-search only.
-  - Supabase receives upserts from our own sync process only.
+  - Striven is NEVER written to. All Striven calls are read-only.
   - No endpoint in this file modifies Striven data.
 """
 
@@ -148,15 +169,91 @@ def search_estimates():
         body["DateCreatedRange"] = date_range
 
     try:
-        print(f"[search-estimates] REQUEST body sent to Striven: {json.dumps(body)}", flush=True)
-        raw = striven.search_estimates(body)
-        print(f"[search-estimates] totalCount={raw.get('totalCount')} returned={len(raw.get('data') or [])}", flush=True)
-        records = [_fmt(r) for r in (raw.get("data") or [])]
+        raw        = striven.search_estimates(body)
+        data       = raw.get("Data", [])
+        total      = raw.get("TotalCount", 0)
+        if not data:
+            print(f"[search-estimates] WARNING: 'Data' key missing — keys={list(raw.keys())}", flush=True)
+        print(f"[search-estimates] TotalCount={total} returned={len(data)}", flush=True)
+        records = [_fmt(r) for r in data]
         return jsonify({
-            "total_count": raw.get("totalCount"),
-            "count":       len(records),
-            "estimates":   records,
+            "total":     total,
+            "count":     len(records),
+            "estimates": records,
         })
+    except HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else 502
+        return jsonify({"error": str(exc)}), status
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Exploratory: Striven Reports endpoint
+# GET /report-preview?key=<accessKey>&page=0&size=50
+#
+# Purpose: evaluate whether /v2/reports/{accessKey} can provide revenue
+# totals and other calculated fields not available in /v1/sales-orders/search.
+# ---------------------------------------------------------------------------
+
+@app.get("/report-preview")
+def report_preview():
+    """
+    Fetch a Striven report by access key and return the raw structure.
+
+    Query params:
+        key  — report accessKey (required)
+        page — pageIndex, default 0
+        size — pageSize, default 50
+
+    This endpoint is exploratory — it logs top-level keys and a sample
+    record so we can evaluate the report's data shape.
+    """
+    access_key = request.args.get("key", "").strip()
+    if not access_key:
+        return jsonify({"error": "Query param 'key' is required."}), 400
+
+    page = int(request.args.get("page", 0))
+    size = int(request.args.get("size", 50))
+
+    import requests as _requests
+    try:
+        # /v2/reports is a separate version prefix — call directly with auth headers
+        url     = f"https://api.striven.com/v2/reports/{access_key}"
+        params  = {"pageIndex": page, "pageSize": size}
+        headers = striven._get_headers()          # reuse cached OAuth token
+        resp    = _requests.get(url, headers=headers, params=params, timeout=20)
+        resp.raise_for_status()
+
+        # Report endpoint may return JSON or binary (octet-stream)
+        content_type = resp.headers.get("Content-Type", "")
+        if "json" not in content_type:
+            print(f"[report-preview] Non-JSON content-type: {content_type}", flush=True)
+            return jsonify({"error": f"Report returned non-JSON ({content_type}). May be PDF/binary."}), 415
+
+        raw = resp.json()
+
+        print(f"[report-preview] accessKey={access_key}", flush=True)
+        print(f"[report-preview] Top-level keys: {list(raw.keys()) if isinstance(raw, dict) else type(raw).__name__}", flush=True)
+
+        data  = raw.get("Data", [])
+        total = raw.get("TotalCount", 0)
+
+        if not data:
+            print(f"[report-preview] WARNING: 'Data' key missing — keys={list(raw.keys())}", flush=True)
+
+        print(f"[report-preview] TotalCount={total}  records_returned={len(data)}", flush=True)
+        print(f"[report-preview] First record sample: {data[0] if data else 'EMPTY'}", flush=True)
+
+        return jsonify({
+            "total":          total,
+            "count":          len(data),
+            "top_level_keys": list(raw.keys()),
+            "first_record":   data[0] if data else None,
+            "data":           data,
+            "source":         "striven_live",
+        })
+
     except HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 502
         return jsonify({"error": str(exc)}), status
@@ -464,14 +561,25 @@ _CHAT_TOOLS = [
 
 
 def _fmt(r: dict) -> dict:
-    """Normalise a raw Striven sales-order record into a clean dict."""
+    """
+    Normalise a raw Striven sales-order record into a clean dict.
+
+    POST /v1/sales-orders/search returns TitleCase keys per the API schema:
+        Id, Number, Name, Customer{Id,Name}, Status{Id,Name}, DateCreated
+    We check TitleCase first, then fall back to camelCase for safety.
+
+    Note: the search endpoint does NOT return a total/price field.
+    OrderTotal is only available on the single-record GET endpoint.
+    """
+    customer = r.get("Customer") or r.get("customer") or {}
+    status   = r.get("Status")   or r.get("status")   or {}
     return {
-        "id":              r.get("id"),
-        "estimate_number": r.get("number"),
-        "customer_name":   (r.get("customer") or {}).get("name"),
-        "total":           r.get("total"),
-        "date":            r.get("dateCreated"),
-        "status":          (r.get("status") or {}).get("name"),
+        "id":              r.get("Id")          or r.get("id"),
+        "estimate_number": r.get("Number")      or r.get("number"),
+        "customer_name":   customer.get("Name") or customer.get("name"),
+        "total":           r.get("OrderTotal")  or r.get("total"),
+        "date":            r.get("DateCreated") or r.get("dateCreated"),
+        "status":          status.get("Name")   or status.get("name"),
     }
 
 
@@ -486,24 +594,27 @@ def _paginated_customer_search(search_name: str) -> dict:
     Called from both:
       - _execute_tool("search_estimates_by_customer")  [Claude chat]
       - GET /search-estimates?customer=<name>           [direct API]
+
+    Striven API key conventions (TitleCase envelope, TitleCase item fields):
+      Response:  TotalCount, Data[]{Id, Number, Name, Customer{Name}, Status{Name}, DateCreated}
     """
-    print("🔥 PAGINATION FUNCTION RUNNING 🔥", flush=True)
-    print(f"[Striven] search_customers → name='{search_name}'", flush=True)
+    import time as _time
+    t_start = _time.monotonic()
 
     # ── Step 1: resolve customer name → ID(s) ───────────────────────────────
-    cust_raw = striven.search_customers(search_name, page_size=10)
-    print(f"CUSTOMER RAW RESPONSE: {json.dumps(cust_raw)[:2000]}", flush=True)
-    print(f"CUSTOMER RAW KEYS: {list(cust_raw.keys())}", flush=True)
-
-    customers  = cust_raw.get("Data") or cust_raw.get("data") or []
-    total_cust = cust_raw.get("TotalCount") or cust_raw.get("totalCount") or 0
-    print(f"[Striven] customers found: {total_cust}, using first {len(customers)}", flush=True)
+    cust_raw  = striven.search_customers(search_name, page_size=10)
+    customers = cust_raw.get("Data", [])
+    if not customers:
+        print(f"[customer-search] WARNING: 'Data' key missing — keys={list(cust_raw.keys())}", flush=True)
+    print(
+        f"[customer-search] '{search_name}' → {cust_raw.get('TotalCount', 0)} customer(s) found",
+        flush=True,
+    )
 
     if not customers:
         return {
-            "count":       0,
             "estimates":   [],
-            "total_count": 0,
+            "total":       0,
             "message":     f"No customers found matching '{search_name}'. "
                            "Try a shorter or different spelling.",
             "source":      "striven_live",
@@ -512,85 +623,60 @@ def _paginated_customer_search(search_name: str) -> dict:
     # ── Step 2: paginate ALL estimates for each matched customer ─────────────
     PAGE_SIZE     = 25
     all_estimates: list[dict] = []
+    grand_total   = 0
 
-    for cust in customers[:5]:          # cap at 5 customers to avoid rate limits
+    for cust in customers[:5]:
         cust_id   = cust.get("Id") or cust.get("id")
         cust_name = cust.get("Name") or cust.get("name")
-        print(f"\n--- Customer: '{cust_name}' | ID: {cust_id} ---", flush=True)
 
-        # Read total_count ONCE on the first page — never overwrite it.
-        # Some APIs return per-page count on subsequent pages; capturing it
-        # once guarantees we loop against the true grand total.
-        total_count      = None
-        page_index       = 0            # 0-based per Striven docs
+        total_count      = None   # captured once from page 0, never overwritten
+        page_index       = 0
         customer_records: list[dict] = []
 
         while True:
-            est_raw = striven.search_estimates({
-                "pageIndex":  page_index,
-                "pageSize":   PAGE_SIZE,
+            est_raw = striven.search_sales_orders({
+                "PageIndex":  page_index,
+                "PageSize":   PAGE_SIZE,
                 "CustomerId": cust_id,
             })
 
-            # ── Full raw dump so we can see exactly what Striven returns ──
-            print(f"RAW RESPONSE (page {page_index}): {json.dumps(est_raw)[:1000]}", flush=True)
-            print(f"RAW RESPONSE KEYS: {list(est_raw.keys())}", flush=True)
+            data = est_raw.get("Data", [])
 
-            # ── Extract records — try every known key variant ─────────────
-            data = (
-                est_raw.get("data")
-                or est_raw.get("Data")
-                or est_raw.get("results")
-                or est_raw.get("Results")
-                or []
-            )
-            print(f"RECORDS EXTRACTED: {len(data)} (key='data'/'Data'/'results')", flush=True)
-
-            # ── Extract total — captured ONCE on page 0 only ──────────────
             if total_count is None:
-                total_count = (
-                    est_raw.get("totalCount")
-                    or est_raw.get("TotalCount")
-                    or est_raw.get("total_count")
-                    or est_raw.get("total")
-                    or 0
-                )
-                print(f"TOTAL COUNT CAPTURED (page 0): {total_count}", flush=True)
+                total_count  = est_raw.get("TotalCount", 0)
+                grand_total += total_count
+                if not data:
+                    print(f"[customer-search] WARNING: 'Data' key missing — keys={list(est_raw.keys())}", flush=True)
+                print(f"[customer-search] '{cust_name}' (ID={cust_id}) → TotalCount={total_count}", flush=True)
+                print(f"[customer-search] First record sample: {data[0] if data else 'EMPTY'}", flush=True)
 
-            # ── Guard: no records returned → stop ─────────────────────────
             if not data:
-                print("⚠️ No data returned — breaking loop", flush=True)
                 break
 
             customer_records.extend([_fmt(r) for r in data])
 
-            print(
-                f"LOOP HIT: page_index={page_index} | "
-                f"this_page={len(data)} | "
-                f"collected={len(customer_records)} | "
-                f"total={total_count}",
-                flush=True,
-            )
-
-            # ── Stop when we have everything ───────────────────────────────
-            if len(customer_records) >= (total_count or 0):
-                print(f"✅ All {total_count} records collected — stopping", flush=True)
+            if total_count and len(customer_records) >= total_count:
                 break
 
             page_index += 1
 
         print(
-            f"[Striven] '{cust_name}' — done: {len(customer_records)} / {total_count} fetched",
+            f"[customer-search] '{cust_name}' done — fetched {len(customer_records)}/{total_count}",
             flush=True,
         )
         all_estimates.extend(customer_records)
 
+    elapsed = round(_time.monotonic() - t_start, 2)
+    print(
+        f"[customer-search] complete — {len(all_estimates)} estimates "
+        f"across {len(customers)} customer(s) in {elapsed}s",
+        flush=True,
+    )
+
     return {
-        "count":             len(all_estimates),
-        "estimates":         all_estimates,
-        "total_count":       total_count or 0,
-        "customers_matched": len(customers),
-        "source":            "striven_live",
+        "estimates": all_estimates,
+        "total":     grand_total,
+        "source":    "striven_live",
     }
 
 
@@ -602,12 +688,11 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
         # We only need totalCount — no records are read.
         # NO fallback, NO Supabase, NO cache. Live Striven only.
         if name == "count_estimates":
-            print("[Striven] Calling Striven for estimate count...", flush=True)
-            payload = {"pageIndex": 1, "pageSize": 1}
-            raw   = striven.search_estimates(payload)
-            print(f"[Striven] Full response JSON: {json.dumps(raw)}", flush=True)
-            total = raw.get("totalCount", 0)
-            print(f"[Striven] Extracted TotalCount: {total}", flush=True)
+            raw   = striven.search_sales_orders({"PageIndex": 0, "PageSize": 1})
+            total = raw.get("TotalCount", 0)
+            if not total:
+                print(f"[count_estimates] WARNING: 'TotalCount' missing — keys={list(raw.keys())}", flush=True)
+            print(f"[count_estimates] TotalCount={total}", flush=True)
             return {
                 "total":  total,
                 "source": "striven_live",
@@ -618,11 +703,15 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
         # Fetch 100 recent records, filter client-side for total > $10,000,
         # sort highest-first, return top 25.
         if name == "high_value_estimates":
-            raw     = striven.search_estimates({"pageIndex": 1, "pageSize": 100})
-            records = raw.get("data") or []
-            print(f"[Striven] high_value_estimates → fetched {len(records)} records", flush=True)
+            raw     = striven.search_sales_orders({"PageIndex": 0, "PageSize": 100})
+            data    = raw.get("Data", [])
+            total   = raw.get("TotalCount", 0)
+            if not data:
+                print(f"[high_value_estimates] WARNING: 'Data' key missing — keys={list(raw.keys())}", flush=True)
+            print(f"[high_value_estimates] TotalCount={total} fetched={len(data)}", flush=True)
+            print(f"[high_value_estimates] First record sample: {data[0] if data else 'EMPTY'}", flush=True)
             high = sorted(
-                [_fmt(r) for r in records if (r.get("total") or 0) >= 10000],
+                [_fmt(r) for r in data if (r.get("total") or r.get("OrderTotal") or 0) >= 10000],
                 key=lambda x: x["total"] or 0,
                 reverse=True,
             )[:25]
@@ -636,8 +725,8 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
         # ── search_estimates ─────────────────────────────────────────────────
         if name == "search_estimates":
             body: dict = {
-                "pageIndex": 1,
-                "pageSize":  tool_input.get("page_size", 25),
+                "PageIndex": 0,
+                "PageSize":  tool_input.get("page_size", 25),
             }
             if "status"    in tool_input: body["StatusChangedTo"] = tool_input["status"]
             if "keyword"   in tool_input: body["Name"]            = tool_input["keyword"]
@@ -646,10 +735,14 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                 if "date_from" in tool_input: date_range["DateFrom"] = tool_input["date_from"]
                 if "date_to"   in tool_input: date_range["DateTo"]   = tool_input["date_to"]
                 body["DateCreatedRange"] = date_range
-            raw     = striven.search_estimates(body)
-            records = [_fmt(r) for r in (raw.get("data") or [])]
-            print(f"[Striven] search_estimates → totalCount={raw.get('totalCount')} returned={len(records)}", flush=True)
-            return {"total_count": raw.get("totalCount"), "count": len(records), "estimates": records}
+            raw     = striven.search_sales_orders(body)
+            data    = raw.get("Data", [])
+            total   = raw.get("TotalCount", 0)
+            if not data:
+                print(f"[search_estimates] WARNING: 'Data' key missing — keys={list(raw.keys())}", flush=True)
+            print(f"[search_estimates] TotalCount={total} returned={len(data)}", flush=True)
+            records = [_fmt(r) for r in data]
+            return {"total": total, "count": len(records), "estimates": records}
 
         if name == "get_estimate_by_id":
             return striven.get_estimate(tool_input["estimate_id"])

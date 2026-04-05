@@ -122,6 +122,18 @@ class StrivenClient:
         """
         return self._get(f"/sales-orders/{estimate_id}")
 
+    def search_sales_orders(self, filters: dict | None = None) -> dict:
+        """
+        Alias of search_estimates — makes the internal Striven call explicit.
+
+        POST /v1/sales-orders/search
+
+        "Estimates" in our business = "Sales Orders" in Striven.
+        External routes keep the word "estimates"; internally we call
+        this method so the code is honest about what endpoint it hits.
+        """
+        return self.search_estimates(filters)
+
     def search_estimates(self, filters: dict | None = None) -> dict:
         """
         Search sales orders (estimates) via the POST search endpoint.
@@ -191,13 +203,17 @@ class StrivenClient:
                 "PageSize": page_size,
             })
 
-            batch = response.get("data", [])
-            total_count = response.get("totalCount", 0)
+            batch       = response.get("Data", [])
+            total_count = response.get("TotalCount", 0)
+
+            if not batch:
+                print(f"[get_all_estimates] WARNING: 'Data' key missing — keys={list(response.keys())}", flush=True)
+                break
 
             all_records.extend(batch)
 
             # Stop when we've received every record or the batch is empty
-            if not batch or len(all_records) >= total_count:
+            if len(all_records) >= total_count:
                 break
 
             page_index += 1
