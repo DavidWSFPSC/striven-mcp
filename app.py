@@ -609,7 +609,7 @@ def _paginated_customer_search(search_name: str) -> dict:
         print(f"[customer-search] WARNING: 'data' missing — response keys={list(cust_raw.keys())}", flush=True)
     print(
         f"[customer-search] RESPONSE → totalCount={cust_raw.get('totalCount', 0)} "
-        f"customers=[{', '.join(str(c.get('Id','?')) + ':' + str(c.get('Name','?')) for c in customers[:3])}]",
+        f"customers=[{', '.join('{id: ' + str(c.get('id') or c.get('Id')) + ', name: \"' + str(c.get('name') or c.get('Name')) + '\"}' for c in customers[:3])}]",
         flush=True,
     )
 
@@ -628,8 +628,13 @@ def _paginated_customer_search(search_name: str) -> dict:
     grand_total   = 0
 
     for cust in customers[:5]:
-        cust_id   = cust.get("Id") or cust.get("id")
-        cust_name = cust.get("Name") or cust.get("name")
+        # Customer items use camelCase keys: id, name (not Id, Name)
+        cust_id   = cust.get("id") or cust.get("Id")
+        cust_name = cust.get("name") or cust.get("Name") or "(unknown)"
+
+        if not cust_id:
+            print(f"[customer-search] SKIP — no valid id in customer object: {cust}", flush=True)
+            continue
 
         total_count      = None   # captured once from page 0, never overwritten
         page_index       = 0
