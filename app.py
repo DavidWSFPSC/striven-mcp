@@ -356,6 +356,225 @@ def missing_portal_flag():
 
 
 # ---------------------------------------------------------------------------
+# Audit: Gas Log installs missing a Removal Fee line item
+# ---------------------------------------------------------------------------
+
+GAS_LOG_KEYWORDS = ("burner", "gas log", "log")
+
+
+@app.get("/gas-log-audit")
+def gas_log_audit():
+    """
+    Find 2025 estimates that include a gas log line item
+    but are missing a removal fee line item.
+
+    Gas log detection  — any line item whose type/category/name/description
+                         contains "burner", "gas log", or "log".
+    Removal fee check  — any line item whose name/description contains
+                         BOTH "removal" AND "log".
+
+    Two-pass approach:
+      Pass 1: Paginate POST /v1/sales-orders/search with DateCreatedRange=2025
+              to collect every 2025 estimate ID. (Fast — summary records only.)
+      Pass 2: GET /v1/sales-orders/{id} per estimate to read line items.
+              (One request per estimate — use ?limit=10 to test first.)
+
+    Query params (optional):
+        limit — cap how many estimates are inspected in Pass 2.
+                Use ?limit=10 to verify line item field names before a full run.
+
+    Response shape:
+        {
+            "total_checked":       <int>,
+            "gas_log_installs":    <int>,
+            "missing_removal_fee": <int>,
+            "matches": [
+                {
+                    "estimate_id":     <int>,
+                    "estimate_number": <str>,
+                    "customer_name":   <str>,
+                    "url":             "https://app.striven.com/next/crm#/sales-orders/{id}"
+                }
+            ]
+        }
+    """
+    import time as _time
+    t_start   = _time.monotonic()
+    PAGE_SIZE = 100
+
+    # Optional cap for test runs — ?limit=10 only inspects 10 estimates
+    raw_limit     = request.args.get("limit", "").strip()
+    inspect_limit = int(raw_limit) if raw_limit.isdigit() else None
+
+    try:
+        # ── Pass 1: collect all 2025 estimate stubs ──────────────────────────
+        print("[gas-log-audit] Pass 1 — paginating 2025 estimates...", flush=True)
+
+        stubs: list[dict] = []   # [{id, estimate_number, customer_name}, ...]
+        page_index  = 0
+        total_count = None
+
+        while True:
+            body = {
+                "PageIndex": page_index,
+                "PageSize":  PAGE_SIZE,
+                "DateCreatedRange": {
+                    "DateFrom": "2025-01-01",
+                    "DateTo":   "2025-12-31",
+                },
+            }
+            raw  = striven.search_sales_orders(body)
+            data = raw.get("data") or []
+
+            if total_count is None:
+                total_count = raw.get("totalCount", 0)
+                print(f"[gas-log-audit] 2025 total: {total_count}", flush=True)
+                if data:
+                    print(f"[gas-log-audit] Search record keys: {list(data[0].keys())}", flush=True)
+
+            if not data:
+                break
+
+            for r in data:
+                customer = r.get("Customer") or r.get("customer") or {}
+                stubs.append({
+                    "id":              r.get("Id")     or r.get("id"),
+                    "estimate_number": r.get("Number") or r.get("number"),
+                    "customer_name":   customer.get("Name") or customer.get("name"),
+                })
+
+            print(
+                f"[gas-log-audit] Page {page_index}: {len(data)} records "
+                f"(collected {len(stubs)}/{total_count})",
+                flush=True,
+            )
+
+            if total_count and len(stubs) >= total_count:
+                break
+
+            page_index += 1
+
+        # Apply optional test limit AFTER pagination so logs show true scope
+        to_inspect = stubs[:inspect_limit] if inspect_limit else stubs
+        print(
+            f"[gas-log-audit] Pass 1 complete — {len(stubs)} stubs found, "
+            f"inspecting {len(to_inspect)}",
+            flush=True,
+        )
+
+        # ── Pass 2: fetch full detail for each and inspect line items ────────
+        print("[gas-log-audit] Pass 2 — fetching full detail per estimate...", flush=True)
+
+        gas_log_installs = 0
+        matches: list[dict] = []
+
+        for i, stub in enumerate(to_inspect):
+            est_id = stub.get("id")
+            if not est_id:
+                continue
+
+            detail     = striven.get_estimate(est_id)
+            line_items = (
+                detail.get("lineItems")
+                or detail.get("items")
+                or detail.get("LineItems")
+                or []
+            )
+
+            # Log keys and a sample line item on the very first record so we
+            # can confirm the exact field names Striven uses
+            if i == 0:
+                print(f"[gas-log-audit] Detail record keys: {list(detail.keys())}", flush=True)
+                if line_items:
+                    print(f"[gas-log-audit] Line item sample keys: {list(line_items[0].keys())}", flush=True)
+                    print(f"[gas-log-audit] Line item sample: {line_items[0]}", flush=True)
+                else:
+                    print("[gas-log-audit] No line items on first record", flush=True)
+
+            # Helper — extract a single lowercased text value from an item,
+            # trying multiple key names to handle Striven's mixed casing.
+            # Nested object values (e.g. {"Name": "Burner"}) are unwrapped.
+            def _item_text(item: dict, *keys) -> str:
+                for k in keys:
+                    v = item.get(k)
+                    if isinstance(v, str) and v.strip():
+                        return v.strip().lower()
+                    if isinstance(v, dict):
+                        name = v.get("Name") or v.get("name") or ""
+                        if name:
+                            return name.strip().lower()
+                return ""
+
+            # Gas log detection — any keyword in any descriptive field
+            has_gas_log = any(
+                any(
+                    kw in _item_text(
+                        item,
+                        "productType", "ProductType",
+                        "itemType",    "ItemType",
+                        "type",        "Type",
+                        "category",    "Category",
+                        "name",        "Name",
+                        "description", "Description",
+                    )
+                    for kw in GAS_LOG_KEYWORDS
+                )
+                for item in line_items
+            )
+
+            if not has_gas_log:
+                continue
+
+            gas_log_installs += 1
+
+            # Removal fee detection — cache _item_text result once per item
+            # so "removal" and "log" checks don't duplicate the work
+            has_removal_fee = any(
+                (lambda t: "removal" in t and "log" in t)(
+                    _item_text(item, "name", "Name", "description", "Description")
+                )
+                for item in line_items
+            )
+
+            if not has_removal_fee:
+                matches.append({
+                    "estimate_id":     est_id,
+                    "estimate_number": stub["estimate_number"],
+                    "customer_name":   stub["customer_name"],
+                    "url":             f"https://app.striven.com/next/crm#/sales-orders/{est_id}",
+                })
+
+            # Progress log every 25 estimates
+            if (i + 1) % 25 == 0:
+                print(
+                    f"[gas-log-audit] Progress: {i + 1}/{len(to_inspect)} inspected — "
+                    f"gas log installs: {gas_log_installs}, missing fee: {len(matches)}",
+                    flush=True,
+                )
+
+        elapsed = round(_time.monotonic() - t_start, 2)
+        print(
+            f"[gas-log-audit] Complete — checked={len(to_inspect)} "
+            f"gas_log_installs={gas_log_installs} "
+            f"missing_removal_fee={len(matches)} elapsed={elapsed}s",
+            flush=True,
+        )
+
+        return jsonify({
+            "total_checked":       len(to_inspect),
+            "gas_log_installs":    gas_log_installs,
+            "missing_removal_fee": len(matches),
+            "matches":             matches,
+        })
+
+    except HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else 502
+        return jsonify({"error": str(exc)}), status
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
 # Data pipeline: Striven → Supabase
 # ---------------------------------------------------------------------------
 
