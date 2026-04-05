@@ -203,8 +203,8 @@ class StrivenClient:
                 "PageSize": page_size,
             })
 
-            batch       = response.get("Data", [])
-            total_count = response.get("TotalCount", 0)
+            batch       = response.get("data", [])
+            total_count = response.get("totalCount", 0)
 
             if not batch:
                 print(f"[get_all_estimates] WARNING: 'Data' key missing — keys={list(response.keys())}", flush=True)
