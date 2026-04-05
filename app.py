@@ -431,131 +431,146 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
     t_start   = _time.monotonic()
     PAGE_SIZE = 100
 
-    print("[gas-log-audit] Starting streaming audit of 2025 estimates...", flush=True)
+    # Only audit active estimates — Quoted(19), Pending Approval(20),
+    # Approved(22), In Progress(25).  Completed(27) and Incomplete(18)
+    # don't need the audit and dramatically shrink the pool size.
+    ACTIVE_STATUSES = (19, 20, 22, 25)
 
-    total_count      = None   # set from first page response
+    print(
+        f"[gas-log-audit] Starting — 2025 estimates with statuses {ACTIVE_STATUSES}",
+        flush=True,
+    )
+
     total_inspected  = 0
     gas_log_installs = 0
     matches: list[dict] = []
-    page_index       = 0
-    first_record_logged = False
+    first_record_logged  = False
 
-    while True:
-        # ── Fetch one page of search stubs ───────────────────────────────────
-        body = {
-            "PageIndex": page_index,
-            "PageSize":  PAGE_SIZE,
-            "DateCreatedRange": {
-                "DateFrom": "2025-01-01",
-                "DateTo":   "2025-12-31",
-            },
-        }
-        raw  = striven.search_sales_orders(body)
-        data = raw.get("data") or []
+    # Outer loop: iterate over each active status separately.
+    # This avoids accumulating all statuses at once and makes progress clear.
+    for status_id in ACTIVE_STATUSES:
+        print(f"[gas-log-audit] ── Status {status_id} ──", flush=True)
+        page_index   = 0
+        status_total = None
 
-        if total_count is None:
-            total_count = raw.get("totalCount", 0)
-            print(f"[gas-log-audit] 2025 total: {total_count}", flush=True)
+        while True:
+            body = {
+                "PageIndex":       page_index,
+                "PageSize":        PAGE_SIZE,
+                "StatusChangedTo": status_id,
+                "DateCreatedRange": {
+                    "DateFrom": "2025-01-01",
+                    "DateTo":   "2025-12-31",
+                },
+            }
+            raw  = striven.search_sales_orders(body)
+            data = raw.get("data") or []
 
-        if not data:
-            break
-
-        print(
-            f"[gas-log-audit] Page {page_index}: {len(data)} stubs "
-            f"(inspected so far: {total_inspected}/{total_count})",
-            flush=True,
-        )
-
-        # ── Process each stub immediately — no accumulation ──────────────────
-        for r in data:
-            if limit and total_inspected >= limit:
-                break
-
-            customer = r.get("Customer") or r.get("customer") or {}
-            est_id   = r.get("Id")     or r.get("id")
-            est_num  = r.get("Number") or r.get("number")
-            cust_name = customer.get("Name") or customer.get("name")
-
-            if not est_id:
-                continue
-
-            # Fetch full detail and immediately discard after inspection
-            detail     = striven.get_estimate(est_id)
-            line_items = (
-                detail.get("lineItems")
-                or detail.get("items")
-                or detail.get("LineItems")
-                or []
-            )
-
-            # Log structure of very first record for field-name confirmation
-            if not first_record_logged:
-                first_record_logged = True
-                print(f"[gas-log-audit] Detail keys: {list(detail.keys())}", flush=True)
-                if line_items:
-                    print(f"[gas-log-audit] Line item keys: {list(line_items[0].keys())}", flush=True)
-                    print(f"[gas-log-audit] Line item sample: {line_items[0]}", flush=True)
-                else:
-                    print("[gas-log-audit] No line items on first record", flush=True)
-
-            total_inspected += 1
-
-            # Gas log detection — exact category match via cached item lookup.
-            # Each unique item_id is fetched from GET /v1/items/{id} only once;
-            # subsequent estimates reuse the cached category string.
-            import time as _time_mod
-            has_gas_log = False
-            for li in line_items:
-                li_item    = li.get("item") or {}
-                li_item_id = li_item.get("id") or li_item.get("Id")
-                if not li_item_id:
-                    continue
-                _time_mod.sleep(0.05)   # gentle rate-limit on items API calls
-                if _get_item_category(li_item_id) == GAS_LOG_CATEGORY:
-                    has_gas_log = True
-                    break
-
-            if not has_gas_log:
-                continue
-
-            gas_log_installs += 1
-
-            # Removal fee — keyword match on item name + description.
-            # "Gas Log Removal Fee" is the expected product name.
-            # compute text once per line item to avoid duplicate _item_text calls
-            has_removal_fee = any(
-                (lambda t: "removal" in t and "log" in t)(
-                    _item_text(li, "item", "description", "Description")
-                )
-                for li in line_items
-            )
-
-            if not has_removal_fee:
-                matches.append({
-                    "estimate_id":     est_id,
-                    "estimate_number": est_num,
-                    "customer_name":   cust_name,
-                    "url":             f"https://app.striven.com/next/crm#/sales-orders/{est_id}",
-                })
-
-            # Progress log every 25 estimates inspected
-            if total_inspected % 25 == 0:
+            if status_total is None:
+                status_total = raw.get("totalCount", 0)
                 print(
-                    f"[gas-log-audit] Progress: {total_inspected}/{total_count} inspected — "
-                    f"gas log installs: {gas_log_installs}, missing fee: {len(matches)}",
+                    f"[gas-log-audit] Status {status_id} total: {status_total}",
                     flush=True,
                 )
 
-        # Stop if we hit the optional limit
+            if not data:
+                break
+
+            print(
+                f"[gas-log-audit] Status {status_id} page {page_index}: "
+                f"{len(data)} stubs",
+                flush=True,
+            )
+
+            # ── Process each stub immediately — no accumulation ──────────────
+            for r in data:
+                if limit and total_inspected >= limit:
+                    break
+
+                customer  = r.get("Customer") or r.get("customer") or {}
+                est_id    = r.get("Id")     or r.get("id")
+                est_num   = r.get("Number") or r.get("number")
+                cust_name = customer.get("Name") or customer.get("name")
+
+                if not est_id:
+                    continue
+
+                # GET full detail — discarded immediately after inspection
+                detail     = striven.get_estimate(est_id)
+                line_items = (
+                    detail.get("lineItems")
+                    or detail.get("items")
+                    or detail.get("LineItems")
+                    or []
+                )
+
+                # Log field structure on the very first record only
+                if not first_record_logged:
+                    first_record_logged = True
+                    print(f"[gas-log-audit] Detail keys: {list(detail.keys())}", flush=True)
+                    if line_items:
+                        print(f"[gas-log-audit] Line item keys: {list(line_items[0].keys())}", flush=True)
+                        print(f"[gas-log-audit] Line item sample: {line_items[0]}", flush=True)
+                    else:
+                        print("[gas-log-audit] No line items on first record", flush=True)
+
+                total_inspected += 1
+
+                # Gas log detection — exact category match via item cache.
+                # Each unique item_id calls GET /v1/items/{id} only once;
+                # all subsequent estimates reuse the cached category string.
+                has_gas_log = False
+                for li in line_items:
+                    li_item    = li.get("item") or {}
+                    li_item_id = li_item.get("id") or li_item.get("Id")
+                    if not li_item_id:
+                        continue
+                    if _get_item_category(li_item_id) == GAS_LOG_CATEGORY:
+                        has_gas_log = True
+                        break
+
+                if not has_gas_log:
+                    continue
+
+                gas_log_installs += 1
+
+                # Removal fee — keyword match on item name + description.
+                # "Gas Log Removal Fee" is the expected product name.
+                has_removal_fee = any(
+                    (lambda t: "removal" in t and "log" in t)(
+                        _item_text(li, "item", "description", "Description")
+                    )
+                    for li in line_items
+                )
+
+                if not has_removal_fee:
+                    matches.append({
+                        "estimate_id":     est_id,
+                        "estimate_number": est_num,
+                        "customer_name":   cust_name,
+                        "url":             f"https://app.striven.com/next/crm#/sales-orders/{est_id}",
+                    })
+
+                if total_inspected % 25 == 0:
+                    print(
+                        f"[gas-log-audit] Progress: {total_inspected} inspected — "
+                        f"gas log installs: {gas_log_installs}, missing fee: {len(matches)}",
+                        flush=True,
+                    )
+
+            # Honour optional test limit
+            if limit and total_inspected >= limit:
+                print(f"[gas-log-audit] Limit {limit} reached — stopping.", flush=True)
+                break
+
+            # All pages for this status exhausted
+            if status_total is not None and (page_index + 1) * PAGE_SIZE >= status_total:
+                break
+
+            page_index += 1
+
         if limit and total_inspected >= limit:
-            print(f"[gas-log-audit] Limit of {limit} reached — stopping early.", flush=True)
             break
-
-        # Stop when all pages are exhausted
-        if total_count and total_inspected >= total_count:
-            break
-
-        page_index += 1
 
     elapsed = round(_time.monotonic() - t_start, 2)
     print(
