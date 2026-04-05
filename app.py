@@ -21,6 +21,8 @@ Exposes (external names — "estimates" language preserved):
   /search-estimates          → POST /v1/sales-orders/search
   /get-estimate/<id>         → GET  /v1/sales-orders/{id}
   /missing-portal-flag       → paginates /v1/sales-orders/search
+  /gas-log-audit-export      → CSV download (Excel-compatible)
+  /gas-log-audit-pdf         → PDF download (reportlab)
   /sync-estimates            → full paginated pull → Supabase
   /estimates/count           → Supabase count
   /estimates/high-value      → Supabase query
@@ -35,9 +37,11 @@ SAFETY POLICY:
 """
 
 import os
+import io
+import csv
 import json
 import anthropic
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, Response
 from dotenv import load_dotenv
 from requests import HTTPError
 
@@ -614,6 +618,146 @@ def gas_log_audit():
     inspect_limit = int(raw_limit) if raw_limit.isdigit() else None
     try:
         return jsonify(_run_gas_log_audit(limit=inspect_limit))
+    except HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else 502
+        return jsonify({"error": str(exc)}), status
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Gas Log Audit — export endpoints (CSV + PDF)
+# Both reuse _run_gas_log_audit() — no logic is duplicated.
+# ---------------------------------------------------------------------------
+
+@app.get("/gas-log-audit-export")
+def gas_log_audit_export():
+    """
+    Run the gas log audit (limit=200) and return results as a
+    downloadable CSV file compatible with Excel.
+
+    Columns: Estimate # | Customer | URL | Issue
+    """
+    try:
+        results = _run_gas_log_audit(limit=200)
+        matches = results.get("matches") or []
+
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["Estimate #", "Customer", "URL", "Issue"])
+        for m in matches:
+            writer.writerow([
+                m.get("estimate_number", ""),
+                m.get("customer_name", ""),
+                m.get("url", ""),
+                "Missing Gas Log Removal Fee",
+            ])
+
+        csv_bytes = buf.getvalue().encode("utf-8-sig")  # BOM for Excel
+        return Response(
+            csv_bytes,
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment; filename=gas_log_audit.csv"},
+        )
+
+    except HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else 502
+        return jsonify({"error": str(exc)}), status
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.get("/gas-log-audit-pdf")
+def gas_log_audit_pdf():
+    """
+    Run the gas log audit (limit=200) and return results as a
+    downloadable PDF report with a formatted table.
+
+    Columns: Estimate # | Customer | Issue
+    """
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.units import inch
+
+        results = _run_gas_log_audit(limit=200)
+        matches = results.get("matches") or []
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buf,
+            pagesize=letter,
+            leftMargin=0.75 * inch,
+            rightMargin=0.75 * inch,
+            topMargin=0.75 * inch,
+            bottomMargin=0.75 * inch,
+        )
+
+        styles = getSampleStyleSheet()
+        elements = []
+
+        # Title
+        elements.append(Paragraph("Gas Log Audit — Missing Removal Fee", styles["Title"]))
+        elements.append(Spacer(1, 0.15 * inch))
+
+        # Summary line
+        total   = results.get("total_checked", 0)
+        installs = results.get("gas_log_installs", 0)
+        missing  = results.get("missing_removal_fee", len(matches))
+        summary_text = (
+            f"Estimates checked: {total} &nbsp;|&nbsp; "
+            f"Gas log installs found: {installs} &nbsp;|&nbsp; "
+            f"Missing removal fee: {missing}"
+        )
+        elements.append(Paragraph(summary_text, styles["Normal"]))
+        elements.append(Spacer(1, 0.2 * inch))
+
+        # Table
+        header = [["Estimate #", "Customer", "Issue"]]
+        rows = [
+            [
+                m.get("estimate_number", ""),
+                m.get("customer_name", ""),
+                "Missing Gas Log Removal Fee",
+            ]
+            for m in matches
+        ]
+        table_data = header + rows
+
+        col_widths = [1.2 * inch, 3.2 * inch, 2.6 * inch]
+        table = Table(table_data, colWidths=col_widths, repeatRows=1)
+        table.setStyle(TableStyle([
+            # Header row
+            ("BACKGROUND",   (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+            ("TEXTCOLOR",    (0, 0), (-1, 0), colors.white),
+            ("FONTNAME",     (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE",     (0, 0), (-1, 0), 10),
+            ("BOTTOMPADDING",(0, 0), (-1, 0), 8),
+            ("TOPPADDING",   (0, 0), (-1, 0), 8),
+            # Data rows
+            ("FONTNAME",     (0, 1), (-1, -1), "Helvetica"),
+            ("FONTSIZE",     (0, 1), (-1, -1), 9),
+            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, colors.HexColor("#f2f2f2")]),
+            ("TOPPADDING",   (0, 1), (-1, -1), 5),
+            ("BOTTOMPADDING",(0, 1), (-1, -1), 5),
+            # Grid
+            ("GRID",         (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
+            ("ALIGN",        (0, 0), (-1, -1), "LEFT"),
+            ("VALIGN",       (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        elements.append(table)
+
+        doc.build(elements)
+        pdf_bytes = buf.getvalue()
+
+        return Response(
+            pdf_bytes,
+            mimetype="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=gas_log_audit.pdf"},
+        )
+
     except HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 502
         return jsonify({"error": str(exc)}), status
