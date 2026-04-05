@@ -516,6 +516,18 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
 
                 total_inspected += 1
 
+                # ── Diagnostic: log line-item count and item IDs on first 3 ──
+                if total_inspected <= 3:
+                    item_ids = [
+                        (li.get("item") or {}).get("id") or (li.get("item") or {}).get("Id")
+                        for li in line_items
+                    ]
+                    print(
+                        f"[gas-log-audit] est#{est_num} — "
+                        f"{len(line_items)} line items, item_ids={item_ids}",
+                        flush=True,
+                    )
+
                 # Gas log detection — exact category match via item cache.
                 # Each unique item_id calls GET /v1/items/{id} only once;
                 # all subsequent estimates reuse the cached category string.
@@ -525,7 +537,8 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
                     li_item_id = li_item.get("id") or li_item.get("Id")
                     if not li_item_id:
                         continue
-                    if _get_item_category(li_item_id) == GAS_LOG_CATEGORY:
+                    cat = _get_item_category(li_item_id)
+                    if cat == GAS_LOG_CATEGORY:
                         has_gas_log = True
                         break
 
@@ -565,6 +578,11 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
 
             # All pages for this status exhausted
             if status_total is not None and (page_index + 1) * PAGE_SIZE >= status_total:
+                print(
+                    f"[gas-log-audit] Status {status_id} exhausted — "
+                    f"cache size so far: {len(item_category_cache)}",
+                    flush=True,
+                )
                 break
 
             page_index += 1
