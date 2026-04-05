@@ -935,20 +935,42 @@ TOOL ROUTING
 - "Biggest / highest value jobs"                → high_value_estimates
 - "Estimates for [customer name]"               → search_estimates_by_customer
 - "Approved / quoted / in-progress estimates"   → search_estimates with status filter
-- "Show me recent / current estimates"          → search_estimates with active_only=true
 - "Estimates from [date] to [date]"             → search_estimates with date range
 - "Tell me about estimate #N"                   → get_estimate_by_id
 - "Missing portal flag / portal audit"          → portal_flag_audit (warn: ~60 s)
 - ANY gas log / removal fee / burner question   → gas_log_audit (MANDATORY — see below)
 
-SPEED & DATA RULES — FOLLOW THESE ON EVERY CALL
-- Default page_size=25 unless user asks for more. Never fetch more than 50.
-- For general "show me estimates" queries with no status specified: use active_only=true.
-  This filters to statuses 19,20,22,25 (Quoted/Pending/Approved/In Progress) — the
-  records that are actually actionable. Skip Incomplete(18) and Completed(27) unless
-  the user explicitly asks for them.
-- Never return more rows than fit in a clean summary. If there are >10 results,
-  show the top 10 in the table and state "and N more" below it.
+════════════════════════════════════════════════════════
+FAST MODE vs DEEP MODE
+════════════════════════════════════════════════════════
+You operate in FAST MODE by default. Switch to DEEP MODE only when the
+user explicitly requests it.
+
+FAST MODE — default for every query
+  • One API call only. One page. PageSize=25.
+  • Do NOT use active_only=true (that makes 4 serial calls — too slow).
+  • Do NOT paginate across multiple pages.
+  • Prefer most recent data (PageIndex=0).
+  • Return results immediately. Do not wait for more data.
+  • If user asks for a status filter, pass it as a single status integer.
+  • Omit status filter entirely if user asks generally — let Striven
+    return its default sort (most recent first).
+
+DEEP MODE — only when user explicitly asks
+  Trigger phrases that unlock deep mode:
+    "full analysis"      "scan everything"     "check all"
+    "comprehensive"      "all estimates"        "full report"
+    "deep dive"          "every estimate"       "all pages"
+    "full dataset"       "run a full scan"      "show me everything"
+  In deep mode you MAY:
+    • Use active_only=true to fan out across all active statuses
+    • Request page_size=50
+    • Make follow-up calls for more pages if needed
+  Even in deep mode: cap total records returned to 100.
+
+NEVER return more rows than fit in a clean summary:
+  Show max 10 rows in the table, then state "and N more" below.
+════════════════════════════════════════════════════════
 
 RESPONSE FORMAT — CONCISE SUMMARIES ONLY
 Do NOT dump raw API data. Always format as a clean business summary.
@@ -1044,8 +1066,8 @@ _CHAT_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "status":      {"type": "integer", "description": "Filter by a single status ID. Omit if using active_only."},
-                "active_only": {"type": "boolean", "description": "If true, restrict to active statuses 19,20,22,25 (Quoted/Pending/Approved/In Progress). Use this by default for general queries."},
+                "status":      {"type": "integer", "description": "Filter by a single status ID (fast mode). Omit for unrestricted search."},
+                "active_only": {"type": "boolean", "description": "DEEP MODE only — fans out across statuses 19,20,22,25 with 4 API calls. Only use when user explicitly asks for full/comprehensive results."},
                 "date_from":   {"type": "string",  "description": "Start date YYYY-MM-DD"},
                 "date_to":     {"type": "string",  "description": "End date YYYY-MM-DD"},
                 "keyword":     {"type": "string",  "description": "Filter by estimate name"},
@@ -1267,13 +1289,13 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
 
         # ── search_estimates ─────────────────────────────────────────────────
         if name == "search_estimates":
-            page_size   = min(tool_input.get("page_size", 25), 50)  # hard cap at 50
-            active_only = tool_input.get("active_only", False)
+            page_size       = min(tool_input.get("page_size", 25), 50)  # hard cap at 50
+            active_only     = tool_input.get("active_only", False)
             explicit_status = tool_input.get("status")
 
-            # Shared filter fragments
+            # Shared filter fragments (PageIndex always 0 — fast mode default)
             base_body: dict = {"PageIndex": 0, "PageSize": page_size}
-            if "keyword"  in tool_input: base_body["Name"] = tool_input["keyword"]
+            if "keyword"   in tool_input: base_body["Name"] = tool_input["keyword"]
             if "date_from" in tool_input or "date_to" in tool_input:
                 date_range: dict = {}
                 if "date_from" in tool_input: date_range["DateFrom"] = tool_input["date_from"]
@@ -1281,7 +1303,10 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                 base_body["DateCreatedRange"] = date_range
 
             if active_only and explicit_status is None:
-                # Run one search per active status, merge up to page_size total
+                # ── DEEP MODE: fan out across all active statuses ─────────────
+                # 4 serial API calls — only used when user explicitly requests
+                # a full/comprehensive view (active_only=true signals deep mode).
+                print(f"[search_estimates] DEEP MODE — active_only, page_size={page_size}", flush=True)
                 ACTIVE = (19, 20, 22, 25)
                 all_records: list = []
                 grand_total = 0
@@ -1294,24 +1319,30 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                     data = raw.get("data") or []
                     grand_total += raw.get("totalCount", 0)
                     all_records.extend([_fmt(r) for r in data])
-                    print(f"[search_estimates] active_only status={sid} → {len(data)} records", flush=True)
+                    print(f"[search_estimates] deep status={sid} → {len(data)} records", flush=True)
                 records = all_records[:page_size]
-                print(f"[search_estimates] active_only total_pool={grand_total} returned={len(records)}", flush=True)
+                print(f"[search_estimates] deep total_pool={grand_total} returned={len(records)}", flush=True)
                 return {"total": grand_total, "count": len(records), "estimates": records,
-                        "note": "Active statuses only (19=Quoted,20=Pending,22=Approved,25=In Progress)"}
+                        "note": "Deep mode — active statuses 19,20,22,25"}
             else:
-                # Single-status or unrestricted search
+                # ── FAST MODE: single API call, one page, most recent first ───
                 body = {**base_body}
                 if explicit_status is not None:
                     body["StatusChangedTo"] = explicit_status
+                print(
+                    f"[search_estimates] FAST MODE — "
+                    f"status={explicit_status or 'any'} page_size={page_size}",
+                    flush=True,
+                )
                 raw     = striven.search_sales_orders(body)
                 data    = raw.get("data") or []
                 total   = raw.get("totalCount", 0)
                 if not data:
-                    print(f"[search_estimates] WARNING: 'Data' key missing or null — keys={list(raw.keys())}", flush=True)
+                    print(f"[search_estimates] WARNING: empty response — keys={list(raw.keys())}", flush=True)
                 print(f"[search_estimates] TotalCount={total} returned={len(data)}", flush=True)
                 records = [_fmt(r) for r in data]
-                return {"total": total, "count": len(records), "estimates": records}
+                return {"total": total, "count": len(records), "estimates": records,
+                        "note": "Fast mode — 1 page, most recent first"}
 
         if name == "get_estimate_by_id":
             return striven.get_estimate(tool_input["estimate_id"])
