@@ -170,10 +170,10 @@ def search_estimates():
 
     try:
         raw        = striven.search_estimates(body)
-        data       = raw.get("data", [])
+        data       = raw.get("data") or []
         total      = raw.get("totalCount", 0)
         if not data:
-            print(f"[search-estimates] WARNING: 'Data' key missing — keys={list(raw.keys())}", flush=True)
+            print(f"[search-estimates] WARNING: 'Data' key missing or null — keys={list(raw.keys())}", flush=True)
         print(f"[search-estimates] TotalCount={total} returned={len(data)}", flush=True)
         records = [_fmt(r) for r in data]
         return jsonify({
@@ -236,11 +236,11 @@ def report_preview():
         print(f"[report-preview] accessKey={access_key}", flush=True)
         print(f"[report-preview] Top-level keys: {list(raw.keys()) if isinstance(raw, dict) else type(raw).__name__}", flush=True)
 
-        data  = raw.get("data", [])
+        data  = raw.get("data") or []
         total = raw.get("totalCount", 0)
 
         if not data:
-            print(f"[report-preview] WARNING: 'Data' key missing — keys={list(raw.keys())}", flush=True)
+            print(f"[report-preview] WARNING: 'Data' key missing or null — keys={list(raw.keys())}", flush=True)
 
         print(f"[report-preview] TotalCount={total}  records_returned={len(data)}", flush=True)
         print(f"[report-preview] First record sample: {data[0] if data else 'EMPTY'}", flush=True)
@@ -604,9 +604,9 @@ def _paginated_customer_search(search_name: str) -> dict:
     # ── Step 1: resolve customer name → ID(s) ───────────────────────────────
     print(f"[customer-search] REQUEST → POST /v1/customers/search {{\"Name\": \"{search_name}\", \"PageSize\": 10}}", flush=True)
     cust_raw  = striven.search_customers(search_name, page_size=10)
-    customers = cust_raw.get("data", [])
+    customers = cust_raw.get("data") or []
     if not customers:
-        print(f"[customer-search] WARNING: 'data' missing — response keys={list(cust_raw.keys())}", flush=True)
+        print(f"[customer-search] WARNING: 'data' missing or null — response keys={list(cust_raw.keys())}", flush=True)
     print(
         f"[customer-search] RESPONSE → totalCount={cust_raw.get('totalCount', 0)} "
         f"customers=[{', '.join('{id: ' + str(c.get('id') or c.get('Id')) + ', name: \"' + str(c.get('name') or c.get('Name')) + '\"}' for c in customers[:3])}]",
@@ -650,13 +650,13 @@ def _paginated_customer_search(search_name: str) -> dict:
 
             est_raw = striven.search_sales_orders(request_body)
 
-            data = est_raw.get("data", [])
+            data = est_raw.get("data") or []
 
             if total_count is None:
                 total_count  = est_raw.get("totalCount", 0)
                 grand_total += total_count
                 if not data:
-                    print(f"[customer-search] WARNING: 'data' missing — response keys={list(est_raw.keys())}", flush=True)
+                    print(f"[customer-search] WARNING: 'data' missing or null — response keys={list(est_raw.keys())}", flush=True)
                 print(f"[customer-search] '{cust_name}' (ID={cust_id}) → TotalCount={total_count}", flush=True)
                 print(f"[customer-search] First record sample: {data[0] if data else 'EMPTY'}", flush=True)
 
@@ -716,10 +716,10 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
         # sort highest-first, return top 25.
         if name == "high_value_estimates":
             raw     = striven.search_sales_orders({"PageIndex": 0, "PageSize": 100})
-            data    = raw.get("data", [])
+            data    = raw.get("data") or []
             total   = raw.get("totalCount", 0)
             if not data:
-                print(f"[high_value_estimates] WARNING: 'Data' key missing — keys={list(raw.keys())}", flush=True)
+                print(f"[high_value_estimates] WARNING: 'Data' key missing or null — keys={list(raw.keys())}", flush=True)
             print(f"[high_value_estimates] TotalCount={total} fetched={len(data)}", flush=True)
             print(f"[high_value_estimates] First record sample: {data[0] if data else 'EMPTY'}", flush=True)
             high = sorted(
@@ -748,10 +748,10 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                 if "date_to"   in tool_input: date_range["DateTo"]   = tool_input["date_to"]
                 body["DateCreatedRange"] = date_range
             raw     = striven.search_sales_orders(body)
-            data    = raw.get("data", [])
+            data    = raw.get("data") or []
             total   = raw.get("totalCount", 0)
             if not data:
-                print(f"[search_estimates] WARNING: 'Data' key missing — keys={list(raw.keys())}", flush=True)
+                print(f"[search_estimates] WARNING: 'Data' key missing or null — keys={list(raw.keys())}", flush=True)
             print(f"[search_estimates] TotalCount={total} returned={len(data)}", flush=True)
             records = [_fmt(r) for r in data]
             return {"total": total, "count": len(records), "estimates": records}

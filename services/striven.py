@@ -203,7 +203,7 @@ class StrivenClient:
                 "PageSize": page_size,
             })
 
-            batch       = response.get("data", [])
+            batch       = response.get("data") or []
             total_count = response.get("totalCount", 0)
 
             if not batch:
