@@ -122,6 +122,16 @@ class StrivenClient:
         """
         return self._get(f"/sales-orders/{estimate_id}")
 
+    def get_item(self, item_id: int) -> dict:
+        """Fetch a single item (product) by its ID.
+
+        GET /v1/items/{id}
+
+        Response includes Category: {Id, Name} which is used for
+        exact gas-log category matching in the audit.
+        """
+        return self._get(f"/items/{item_id}")
+
     def search_sales_orders(self, filters: dict | None = None) -> dict:
         """
         Alias of search_estimates — makes the internal Striven call explicit.

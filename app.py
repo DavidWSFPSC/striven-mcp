@@ -359,7 +359,38 @@ def missing_portal_flag():
 # Audit: Gas Log installs missing a Removal Fee line item
 # ---------------------------------------------------------------------------
 
-GAS_LOG_KEYWORDS = ("burner", "gas log", "log")
+GAS_LOG_CATEGORY = "burner & gas logs"   # exact Striven category name (lowercase)
+
+# Module-level cache: item_id (int) → category name (str, lowercased).
+# Populated on first lookup per unique item; reused for all subsequent
+# estimates that reference the same product.  Survives for the lifetime
+# of the worker process — warm after the first few hundred estimates.
+item_category_cache: dict[int, str] = {}
+
+
+def _get_item_category(item_id: int) -> str:
+    """
+    Return the lowercased Category.Name for a Striven item, using a
+    module-level cache so each unique item is only fetched once.
+
+    GET /v1/items/{id}  →  response["Category"]["Name"]
+
+    Returns "" if the item has no category or the API call fails.
+    """
+    if item_id in item_category_cache:
+        return item_category_cache[item_id]
+
+    try:
+        data     = striven.get_item(item_id)
+        category = (data.get("Category") or {}).get("Name") or ""
+        category = category.strip().lower()
+    except Exception as exc:
+        print(f"[CACHE] WARNING: failed to fetch item {item_id} — {exc}", flush=True)
+        category = ""
+
+    item_category_cache[item_id] = category
+    print(f"[CACHE] item_id={item_id}  category={category!r}", flush=True)
+    return category
 
 
 def _item_text(item: dict, *keys) -> str:
@@ -469,22 +500,28 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
 
             total_inspected += 1
 
-            # Gas log detection — product name is in item.name (nested dict);
-            # description is a plain string. Both confirmed from live logs.
-            has_gas_log = any(
-                any(
-                    kw in _item_text(li, "item", "description", "Description")
-                    for kw in GAS_LOG_KEYWORDS
-                )
-                for li in line_items
-            )
+            # Gas log detection — exact category match via cached item lookup.
+            # Each unique item_id is fetched from GET /v1/items/{id} only once;
+            # subsequent estimates reuse the cached category string.
+            import time as _time_mod
+            has_gas_log = False
+            for li in line_items:
+                li_item    = li.get("item") or {}
+                li_item_id = li_item.get("id") or li_item.get("Id")
+                if not li_item_id:
+                    continue
+                _time_mod.sleep(0.05)   # gentle rate-limit on items API calls
+                if _get_item_category(li_item_id) == GAS_LOG_CATEGORY:
+                    has_gas_log = True
+                    break
 
             if not has_gas_log:
                 continue
 
             gas_log_installs += 1
 
-            # Removal fee — "Gas Log Removal Fee" is the product name (item.name)
+            # Removal fee — keyword match on item name + description.
+            # "Gas Log Removal Fee" is the expected product name.
             # compute text once per line item to avoid duplicate _item_text calls
             has_removal_fee = any(
                 (lambda t: "removal" in t and "log" in t)(
