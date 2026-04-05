@@ -109,7 +109,20 @@ def search_estimates():
     """
     args = request.args
 
-    # Always send explicit pagination — never send an empty body to Striven
+    # If ?customer=<name> is provided, delegate to the fully-paginated helper
+    # so this endpoint returns ALL estimates for that customer, not just one page.
+    customer_name = args.get("customer", "").strip()
+    if customer_name:
+        try:
+            result = _paginated_customer_search(customer_name)
+            return jsonify(result)
+        except HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else 502
+            return jsonify({"error": str(exc)}), status
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    # No customer name — standard single-page pass-through for other filters
     body: dict = {
         "pageIndex": int(args.get("pageIndex", 1)),
         "pageSize":  int(args.get("pageSize", 25)),
@@ -135,25 +148,10 @@ def search_estimates():
         body["DateCreatedRange"] = date_range
 
     try:
-        import json as _json
-        print(f"[search-estimates] REQUEST body sent to Striven: {_json.dumps(body)}", flush=True)
-
+        print(f"[search-estimates] REQUEST body sent to Striven: {json.dumps(body)}", flush=True)
         raw = striven.search_estimates(body)
-
-        print(f"[search-estimates] RESPONSE from Striven (full): {_json.dumps(raw)}", flush=True)
-
-        records = [
-            {
-                "id":              r.get("id"),
-                "estimate_number": r.get("number"),
-                "customer_name":   (r.get("customer") or {}).get("name"),
-                "total":           r.get("total"),
-                "date":            r.get("dateCreated"),
-                "status":          (r.get("status") or {}).get("name"),
-            }
-            for r in (raw.get("data") or [])
-        ]
-
+        print(f"[search-estimates] totalCount={raw.get('totalCount')} returned={len(raw.get('data') or [])}", flush=True)
+        records = [_fmt(r) for r in (raw.get("data") or [])]
         return jsonify({
             "total_count": raw.get("totalCount"),
             "count":       len(records),
@@ -477,6 +475,94 @@ def _fmt(r: dict) -> dict:
     }
 
 
+def _paginated_customer_search(search_name: str) -> dict:
+    """
+    Single source of truth for customer-name → estimates lookup.
+
+    Step 1: POST /v1/customers/search  — resolve name to customer ID(s)
+    Step 2: POST /v1/sales-orders/search with CustomerId, paginating ALL pages
+            until every estimate is collected.
+
+    Called from both:
+      - _execute_tool("search_estimates_by_customer")  [Claude chat]
+      - GET /search-estimates?customer=<name>           [direct API]
+    """
+    print("🔥 PAGINATION FUNCTION RUNNING 🔥", flush=True)
+    print(f"[Striven] search_customers → name='{search_name}'", flush=True)
+
+    # ── Step 1: resolve customer name → ID(s) ───────────────────────────────
+    cust_raw   = striven.search_customers(search_name, page_size=10)
+    customers  = cust_raw.get("Data") or cust_raw.get("data") or []
+    total_cust = cust_raw.get("TotalCount") or cust_raw.get("totalCount") or 0
+    print(f"[Striven] customers found: {total_cust}, using first {len(customers)}", flush=True)
+
+    if not customers:
+        return {
+            "count":   0,
+            "estimates": [],
+            "total_count": 0,
+            "message": f"No customers found matching '{search_name}'. "
+                       "Try a shorter or different spelling.",
+            "source":  "striven_live",
+        }
+
+    # ── Step 2: paginate ALL estimates for each matched customer ─────────────
+    PAGE_SIZE     = 25
+    all_estimates: list[dict] = []
+
+    for cust in customers[:5]:          # cap at 5 customers to avoid rate limits
+        cust_id   = cust.get("Id") or cust.get("id")
+        cust_name = cust.get("Name") or cust.get("name")
+
+        total_count      = 1            # guarantees loop entry; updated after first call
+        page_index       = 0            # 0-based per Striven docs
+        customer_records: list[dict] = []
+
+        while len(customer_records) < total_count:
+            est_raw = striven.search_estimates({
+                "pageIndex":  page_index,
+                "pageSize":   PAGE_SIZE,
+                "CustomerId": cust_id,
+            })
+
+            print(f"RAW RESPONSE KEYS: {list(est_raw.keys())}", flush=True)
+
+            data        = est_raw.get("Data") or est_raw.get("data") or []
+            total_count = (
+                est_raw.get("TotalCount")
+                or est_raw.get("totalCount")
+                or len(data)
+            )
+
+            if not data:
+                print("⚠️ No data returned, breaking loop", flush=True)
+                break
+
+            customer_records.extend([_fmt(r) for r in data])
+
+            print(
+                f"LOOP HIT: page_index={page_index}, "
+                f"collected={len(customer_records)}, total={total_count}",
+                flush=True,
+            )
+
+            page_index += 1
+
+        print(
+            f"[Striven] '{cust_name}' — done: {len(customer_records)} / {total_count} fetched",
+            flush=True,
+        )
+        all_estimates.extend(customer_records)
+
+    return {
+        "count":             len(all_estimates),
+        "estimates":         all_estimates,
+        "total_count":       total_count,
+        "customers_matched": len(customers),
+        "source":            "striven_live",
+    }
+
+
 def _execute_tool(name: str, tool_input: dict) -> dict:
     """Map a Claude tool call directly to the live Striven API. No local cache."""
     try:
@@ -512,85 +598,9 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
             return {"count": len(high), "records": high, "source": "striven_live"}
 
         # ── search_estimates_by_customer ─────────────────────────────────────
-        # Two-step: (1) POST /v1/customers/search → get customer IDs,
-        # then (2) paginate through ALL pages of POST /v1/sales-orders/search
-        # with CustomerId so we never miss a single estimate.
+        # Delegates entirely to _paginated_customer_search — single source of truth.
         if name == "search_estimates_by_customer":
-            print("🔥 PAGINATION FUNCTION RUNNING 🔥", flush=True)
-            search_name = tool_input.get("name", "").strip()
-            print(f"[Striven] search_customers → name='{search_name}'", flush=True)
-
-            # Step 1 — find matching customers by name
-            cust_raw   = striven.search_customers(search_name, page_size=10)
-            # Striven returns TitleCase keys for the customers endpoint
-            customers  = cust_raw.get("Data") or cust_raw.get("data") or []
-            total_cust = cust_raw.get("TotalCount") or cust_raw.get("totalCount") or 0
-            print(f"[Striven] customers found: {total_cust}, using first {len(customers)}", flush=True)
-
-            if not customers:
-                return {
-                    "count":   0,
-                    "records": [],
-                    "message": f"No customers found matching '{search_name}'. "
-                               "Try a shorter or different spelling.",
-                    "source":  "striven_live",
-                }
-
-            # Step 2 — for each matched customer, paginate ALL estimates by customer ID
-            PAGE_SIZE     = 25
-            all_estimates: list[dict] = []
-
-            for cust in customers[:5]:   # cap at 5 customers to avoid hammering the API
-                cust_id   = cust.get("Id") or cust.get("id")
-                cust_name = cust.get("Name") or cust.get("name")
-
-                total_count      = 1   # guarantees loop entry; updated from first API response
-                page_index       = 0   # 0-based per Striven docs
-                customer_records: list[dict] = []
-
-                while len(customer_records) < total_count:
-                    est_raw = striven.search_estimates({
-                        "pageIndex":  page_index,
-                        "pageSize":   PAGE_SIZE,
-                        "CustomerId": cust_id,
-                    })
-
-                    print(f"RAW RESPONSE KEYS: {list(est_raw.keys())}", flush=True)
-
-                    # Handle both TitleCase (customers) and lowercase (sales-orders) key variants
-                    data        = est_raw.get("Data") or est_raw.get("data") or []
-                    total_count = (
-                        est_raw.get("TotalCount")
-                        or est_raw.get("totalCount")
-                        or len(data)
-                    )
-
-                    if not data:
-                        print("⚠️ No data returned, breaking loop", flush=True)
-                        break
-
-                    customer_records.extend([_fmt(r) for r in data])
-
-                    print(
-                        f"LOOP HIT: page_index={page_index}, "
-                        f"collected={len(customer_records)}, total={total_count}",
-                        flush=True,
-                    )
-
-                    page_index += 1
-
-                print(
-                    f"[Striven] '{cust_name}' — done: {len(customer_records)} / {total_count} estimates fetched",
-                    flush=True,
-                )
-                all_estimates.extend(customer_records)
-
-            return {
-                "count":             len(all_estimates),
-                "records":           all_estimates,
-                "customers_matched": len(customers),
-                "source":            "striven_live",
-            }
+            return _paginated_customer_search(tool_input.get("name", "").strip())
 
         # ── search_estimates ─────────────────────────────────────────────────
         if name == "search_estimates":
