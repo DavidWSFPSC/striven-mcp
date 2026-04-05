@@ -386,10 +386,13 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
     """
     Core gas-log audit logic — callable from the Flask route OR /chat.
 
-    Pass 1: Paginate POST /v1/sales-orders/search (DateCreatedRange=2025)
-            to collect every 2025 estimate stub. Fast — summary only.
-    Pass 2: GET /v1/sales-orders/{id} per estimate to read line items.
-            One Striven request per estimate; use limit= to cap during testing.
+    Streaming single-pass design (fixes OOM on Render free tier):
+      - Fetches one page of estimates at a time (100 records)
+      - Immediately GETs full detail for each record in the page
+      - Discards detail after inspection — never accumulates in RAM
+      - Peak memory: ~100 search stubs + 1 detail record at any moment
+
+    limit: cap total estimates inspected (for test runs — default: all 2025)
 
     Returns a plain dict (not a Flask response) so /chat can reuse it.
     """
@@ -397,14 +400,17 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
     t_start   = _time.monotonic()
     PAGE_SIZE = 100
 
-    # ── Pass 1: collect all 2025 estimate stubs ──────────────────────────────
-    print("[gas-log-audit] Pass 1 — paginating 2025 estimates...", flush=True)
+    print("[gas-log-audit] Starting streaming audit of 2025 estimates...", flush=True)
 
-    stubs: list[dict] = []
-    page_index  = 0
-    total_count = None
+    total_count      = None   # set from first page response
+    total_inspected  = 0
+    gas_log_installs = 0
+    matches: list[dict] = []
+    page_index       = 0
+    first_record_logged = False
 
     while True:
+        # ── Fetch one page of search stubs ───────────────────────────────────
         body = {
             "PageIndex": page_index,
             "PageSize":  PAGE_SIZE,
@@ -419,123 +425,111 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
         if total_count is None:
             total_count = raw.get("totalCount", 0)
             print(f"[gas-log-audit] 2025 total: {total_count}", flush=True)
-            if data:
-                print(f"[gas-log-audit] Search record keys: {list(data[0].keys())}", flush=True)
 
         if not data:
             break
 
-        for r in data:
-            customer = r.get("Customer") or r.get("customer") or {}
-            stubs.append({
-                "id":              r.get("Id")     or r.get("id"),
-                "estimate_number": r.get("Number") or r.get("number"),
-                "customer_name":   customer.get("Name") or customer.get("name"),
-            })
-
         print(
-            f"[gas-log-audit] Page {page_index}: {len(data)} records "
-            f"(collected {len(stubs)}/{total_count})",
+            f"[gas-log-audit] Page {page_index}: {len(data)} stubs "
+            f"(inspected so far: {total_inspected}/{total_count})",
             flush=True,
         )
 
-        if total_count and len(stubs) >= total_count:
+        # ── Process each stub immediately — no accumulation ──────────────────
+        for r in data:
+            if limit and total_inspected >= limit:
+                break
+
+            customer = r.get("Customer") or r.get("customer") or {}
+            est_id   = r.get("Id")     or r.get("id")
+            est_num  = r.get("Number") or r.get("number")
+            cust_name = customer.get("Name") or customer.get("name")
+
+            if not est_id:
+                continue
+
+            # Fetch full detail and immediately discard after inspection
+            detail     = striven.get_estimate(est_id)
+            line_items = (
+                detail.get("lineItems")
+                or detail.get("items")
+                or detail.get("LineItems")
+                or []
+            )
+
+            # Log structure of very first record for field-name confirmation
+            if not first_record_logged:
+                first_record_logged = True
+                print(f"[gas-log-audit] Detail keys: {list(detail.keys())}", flush=True)
+                if line_items:
+                    print(f"[gas-log-audit] Line item keys: {list(line_items[0].keys())}", flush=True)
+                    print(f"[gas-log-audit] Line item sample: {line_items[0]}", flush=True)
+                else:
+                    print("[gas-log-audit] No line items on first record", flush=True)
+
+            total_inspected += 1
+
+            # Gas log detection — product name is in item.name (nested dict);
+            # description is a plain string. Both confirmed from live logs.
+            has_gas_log = any(
+                any(
+                    kw in _item_text(li, "item", "description", "Description")
+                    for kw in GAS_LOG_KEYWORDS
+                )
+                for li in line_items
+            )
+
+            if not has_gas_log:
+                continue
+
+            gas_log_installs += 1
+
+            # Removal fee — "Gas Log Removal Fee" is the product name (item.name)
+            # compute text once per line item to avoid duplicate _item_text calls
+            has_removal_fee = any(
+                (lambda t: "removal" in t and "log" in t)(
+                    _item_text(li, "item", "description", "Description")
+                )
+                for li in line_items
+            )
+
+            if not has_removal_fee:
+                matches.append({
+                    "estimate_id":     est_id,
+                    "estimate_number": est_num,
+                    "customer_name":   cust_name,
+                    "url":             f"https://app.striven.com/next/crm#/sales-orders/{est_id}",
+                })
+
+            # Progress log every 25 estimates inspected
+            if total_inspected % 25 == 0:
+                print(
+                    f"[gas-log-audit] Progress: {total_inspected}/{total_count} inspected — "
+                    f"gas log installs: {gas_log_installs}, missing fee: {len(matches)}",
+                    flush=True,
+                )
+
+        # Stop if we hit the optional limit
+        if limit and total_inspected >= limit:
+            print(f"[gas-log-audit] Limit of {limit} reached — stopping early.", flush=True)
+            break
+
+        # Stop when all pages are exhausted
+        if total_count and total_inspected >= total_count:
             break
 
         page_index += 1
 
-    # Apply optional test limit AFTER pagination so logs show true scope
-    to_inspect = stubs[:limit] if limit else stubs
-    print(
-        f"[gas-log-audit] Pass 1 complete — {len(stubs)} stubs found, "
-        f"inspecting {len(to_inspect)}",
-        flush=True,
-    )
-
-    # ── Pass 2: fetch full detail for each and inspect line items ────────────
-    print("[gas-log-audit] Pass 2 — fetching full detail per estimate...", flush=True)
-
-    gas_log_installs = 0
-    matches: list[dict] = []
-
-    for i, stub in enumerate(to_inspect):
-        est_id = stub.get("id")
-        if not est_id:
-            continue
-
-        detail     = striven.get_estimate(est_id)
-        line_items = (
-            detail.get("lineItems")
-            or detail.get("items")
-            or detail.get("LineItems")
-            or []
-        )
-
-        # Log detail keys + sample line item on the first record only
-        if i == 0:
-            print(f"[gas-log-audit] Detail record keys: {list(detail.keys())}", flush=True)
-            if line_items:
-                print(f"[gas-log-audit] Line item sample keys: {list(line_items[0].keys())}", flush=True)
-                print(f"[gas-log-audit] Line item sample: {line_items[0]}", flush=True)
-            else:
-                print("[gas-log-audit] No line items on first record", flush=True)
-
-        # Gas log detection — any keyword in any descriptive field
-        has_gas_log = any(
-            any(
-                kw in _item_text(
-                    item,
-                    "productType", "ProductType",
-                    "itemType",    "ItemType",
-                    "type",        "Type",
-                    "category",    "Category",
-                    "name",        "Name",
-                    "description", "Description",
-                )
-                for kw in GAS_LOG_KEYWORDS
-            )
-            for item in line_items
-        )
-
-        if not has_gas_log:
-            continue
-
-        gas_log_installs += 1
-
-        # Removal fee — compute text once per item, check both keywords
-        has_removal_fee = any(
-            (lambda t: "removal" in t and "log" in t)(
-                _item_text(item, "name", "Name", "description", "Description")
-            )
-            for item in line_items
-        )
-
-        if not has_removal_fee:
-            matches.append({
-                "estimate_id":     est_id,
-                "estimate_number": stub["estimate_number"],
-                "customer_name":   stub["customer_name"],
-                "url":             f"https://app.striven.com/next/crm#/sales-orders/{est_id}",
-            })
-
-        # Progress log every 25 estimates
-        if (i + 1) % 25 == 0:
-            print(
-                f"[gas-log-audit] Progress: {i + 1}/{len(to_inspect)} inspected — "
-                f"gas log installs: {gas_log_installs}, missing fee: {len(matches)}",
-                flush=True,
-            )
-
     elapsed = round(_time.monotonic() - t_start, 2)
     print(
-        f"[gas-log-audit] Complete — checked={len(to_inspect)} "
+        f"[gas-log-audit] Complete — checked={total_inspected} "
         f"gas_log_installs={gas_log_installs} "
         f"missing_removal_fee={len(matches)} elapsed={elapsed}s",
         flush=True,
     )
 
     return {
-        "total_checked":       len(to_inspect),
+        "total_checked":       total_inspected,
         "gas_log_installs":    gas_log_installs,
         "missing_removal_fee": len(matches),
         "matches":             matches,
