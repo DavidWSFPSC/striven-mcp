@@ -696,10 +696,19 @@ TOOL ROUTING
 - "Estimates from [date] to [date]"             → search_estimates with date range
 - "Tell me about estimate #N"                   → get_estimate_by_id
 - "Missing portal flag / portal audit"          → portal_flag_audit (warn: ~60 s)
+- ANY mention of "gas log", "removal fee", or "burner" → gas_log_audit (MANDATORY)
+
+GAS LOG AUDIT — MANDATORY TOOL CALL
+ANY question mentioning gas logs, gas log removal, removal fees, or burner installs
+MUST call gas_log_audit immediately. Do NOT explain what you would do. Do NOT answer
+from general knowledge. Call the tool and report the real numbers it returns.
+The tool scans all 2025 estimates and returns exact counts and matching records.
 
 FORMAT
 Lead with the direct answer and the live number. Use a markdown table for lists
 (columns: #, Customer, Total, Status). Round dollar amounts to nearest dollar.
+For gas log audit results: show total checked, installs found, missing fees,
+estimated revenue impact ($200 per missing fee), and list the top matches.
 End with a short follow-up offer."""
 
 _CHAT_TOOLS = [
@@ -758,6 +767,17 @@ _CHAT_TOOLS = [
         "description": (
             "Audit ALL estimates and return those missing the Customer Portal display flag. "
             "Takes 30–60 seconds."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "gas_log_audit",
+        "description": (
+            "Scan all 2025 estimates and find those that have a gas log or burner install "
+            "but are missing a Gas Log Removal Fee line item. "
+            "Returns total estimates checked, gas log installs found, number missing the "
+            "removal fee, estimated revenue impact, and a list of affected estimates with "
+            "direct links. Use this for ANY question about gas logs, removal fees, or burner installs."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -962,6 +982,18 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
 
         if name == "get_estimate_by_id":
             return striven.get_estimate(tool_input["estimate_id"])
+
+        if name == "gas_log_audit":
+            print("[TOOL] gas_log_audit called — running _run_gas_log_audit()", flush=True)
+            result = _run_gas_log_audit()
+            print(
+                f"[TOOL] gas_log_audit complete — "
+                f"total_checked={result.get('total_checked')} "
+                f"gas_log_installs={result.get('gas_log_installs')} "
+                f"missing_removal_fee={result.get('missing_removal_fee')}",
+                flush=True,
+            )
+            return result
 
         if name == "portal_flag_audit":
             all_estimates = striven.get_all_estimates()
