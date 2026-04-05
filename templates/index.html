@@ -172,6 +172,25 @@
     .send-btn svg { width: 16px; height: 16px; fill: #fff; }
 
     .hint { text-align: center; font-size: 11.5px; color: #9ca3af; margin-top: 6px; }
+
+    /* ── Export buttons ── */
+    .export-bar {
+      display: flex; gap: 10px; justify-content: center;
+      margin-top: 10px;
+    }
+    .export-btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 8px 16px;
+      border: none; border-radius: 10px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      text-decoration: none;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .export-btn:hover  { opacity: 0.85; transform: translateY(-1px); }
+    .export-btn:active { transform: translateY(0); }
+    .export-btn.csv { background: #1a1a2e; color: #fff; }
+    .export-btn.pdf { background: linear-gradient(135deg, #e85d04, #f48c06); color: #fff; }
+    .export-btn svg { width: 14px; height: 14px; fill: currentColor; flex-shrink: 0; }
   </style>
 </head>
 <body>
@@ -215,6 +234,24 @@
       </button>
     </div>
     <div class="hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</div>
+
+    <!-- Report export buttons -->
+    <div class="export-bar">
+      <a class="export-btn csv"
+         href="https://striven-mcp-v2.onrender.com/gas-log-audit-export"
+         target="_blank" rel="noopener">
+        <!-- spreadsheet icon -->
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM8 11h8v1.5H8V11zm0 3h8v1.5H8V14zm0 3h5v1.5H8V17z"/></svg>
+        Download Excel Report
+      </a>
+      <a class="export-btn pdf"
+         href="https://striven-mcp-v2.onrender.com/gas-log-audit-pdf"
+         target="_blank" rel="noopener">
+        <!-- PDF icon -->
+        <svg viewBox="0 0 24 24"><path d="M20 2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-8.5 7.5c0 .83-.67 1.5-1.5 1.5H9v2H7.5V7H10c.83 0 1.5.67 1.5 1.5v1zm5 2c0 .83-.67 1.5-1.5 1.5h-2.5V7H15c.83 0 1.5.67 1.5 1.5v3zm4-3H19v1h1.5V11H19v2h-1.5V7h3v1.5zM9 9.5h1v-1H9v1zM4 6H2v14a2 2 0 0 0 2 2h14v-2H4V6zm10 5.5h1v-3h-1v3z"/></svg>
+        Download PDF Report
+      </a>
+    </div>
   </div>
 </div>
 

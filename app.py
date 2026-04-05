@@ -902,13 +902,41 @@ TOOL ROUTING
 - "Estimates from [date] to [date]"             → search_estimates with date range
 - "Tell me about estimate #N"                   → get_estimate_by_id
 - "Missing portal flag / portal audit"          → portal_flag_audit (warn: ~60 s)
-- ANY mention of "gas log", "removal fee", or "burner" → gas_log_audit (MANDATORY)
+- ANY gas log / removal fee / burner question   → gas_log_audit (MANDATORY — see below)
 
-GAS LOG AUDIT — MANDATORY TOOL CALL
-ANY question mentioning gas logs, gas log removal, removal fees, or burner installs
-MUST call gas_log_audit immediately. Do NOT explain what you would do. Do NOT answer
-from general knowledge. Call the tool and report the real numbers it returns.
-The tool scans all 2025 estimates and returns exact counts and matching records.
+════════════════════════════════════════════════════════
+GAS LOG AUDIT — NON-NEGOTIABLE RULE
+════════════════════════════════════════════════════════
+The following trigger phrases ALWAYS require gas_log_audit. No exceptions.
+
+  "gas log"
+  "gas log install"
+  "gas log removal"
+  "removal fee"
+  "missing removal"
+  "burner install"
+  "burner log"
+  "estimates missing"  (when combined with gas log context)
+  "show me gas log"
+  "find gas log"
+
+WHEN YOU SEE ANY OF THESE — the ONLY correct action is:
+  1. Call gas_log_audit immediately
+  2. Report the exact numbers it returns
+  3. List the matches it returns
+
+HARD PROHIBITIONS for gas log questions:
+  ✗ Do NOT call search_estimates
+  ✗ Do NOT call get_estimate_by_id in a loop
+  ✗ Do NOT sample a subset and extrapolate
+  ✗ Do NOT explain what you "would do" before calling the tool
+  ✗ Do NOT say the task requires "extensive checking"
+  ✗ Do NOT suggest the user run the audit themselves
+
+The gas_log_audit tool already performs a full scan of all 2025 estimates
+with active statuses. It returns exact, complete results instantly.
+One tool call gives you everything — use it.
+════════════════════════════════════════════════════════
 
 FORMAT
 Lead with the direct answer and the live number. Use a markdown table for lists
@@ -942,8 +970,9 @@ _CHAT_TOOLS = [
     {
         "name": "search_estimates",
         "description": (
-            "Flexible estimate search. "
-            "Status codes: 18=Incomplete 19=Quoted 20=Pending 22=Approved 25=In Progress 27=Completed"
+            "Flexible estimate search by status, date range, or keyword. "
+            "Status codes: 18=Incomplete 19=Quoted 20=Pending 22=Approved 25=In Progress 27=Completed. "
+            "NOT for gas log / removal fee questions — use gas_log_audit for those."
         ),
         "input_schema": {
             "type": "object",
@@ -959,7 +988,11 @@ _CHAT_TOOLS = [
     },
     {
         "name": "get_estimate_by_id",
-        "description": "Fetch the full detail of a single estimate by its Striven ID.",
+        "description": (
+            "Fetch the full detail of a single estimate by its Striven ID. "
+            "For ONE specific estimate only — never call this in a loop to audit gas logs; "
+            "use gas_log_audit instead."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
