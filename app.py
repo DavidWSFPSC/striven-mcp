@@ -1123,28 +1123,50 @@ def _detect_intent(message: str) -> tuple[str, dict]:
 
 # ── Response formatters ───────────────────────────────────────────────────────
 
+REMOVAL_FEE_VALUE = 200   # $ per missing removal fee — used for revenue estimate
+
+
 def _format_gas_log_audit(result: dict) -> str:
+    """
+    Format the gas-log audit result as a concise data report.
+    Reports only what the system actually found — no explanations.
+    """
     total    = result.get("total_checked", 0)
     installs = result.get("gas_log_installs", 0)
     missing  = result.get("missing_removal_fee", 0)
     matches  = result.get("matches") or []
 
+    revenue_impact = missing * REMOVAL_FEE_VALUE
+
     lines = [
-        f"Out of {total:,} 2025 estimates checked:",
-        f"  • {installs:,} gas log installs found",
-        f"  • {missing:,} missing a Gas Log Removal Fee",
-        "",
+        f"Gas Log Removal Fee Audit — 2025 Estimates",
+        f"",
+        f"  Estimates checked:       {total:,}",
+        f"  Gas log installs found:  {installs:,}",
+        f"  Missing removal fee:     {missing:,}",
+        f"  Estimated missed revenue: ~${revenue_impact:,}",
+        f"",
     ]
+
     if matches:
-        lines.append("Estimates missing the removal fee:")
+        lines.append(f"Estimates missing the Gas Log Removal Fee ({len(matches):,} total):")
         for m in matches[:15]:
             num  = m.get("estimate_number") or "—"
             name = m.get("customer_name")   or "Unknown"
-            lines.append(f"  • Estimate #{num} — {name}")
+            url  = m.get("url", "")
+            lines.append(f"  • #{num} — {name}")
+            if url:
+                lines.append(f"      {url}")
         if len(matches) > 15:
-            lines.append(f"  … and {len(matches) - 15} more.")
+            lines.append(f"  … and {len(matches) - 15:,} more.")
     else:
-        lines.append("✓ All gas log installs have a removal fee — nothing missing.")
+        lines.append(f"Gas log installs detected: {installs:,}")
+        lines.append(f"Removal fees missing:      {missing:,}")
+        lines.append("")
+        lines.append("Note: If gas log installs were expected but not detected,")
+        lines.append("check Render logs for 'Line item sample keys' to confirm")
+        lines.append("the exact field names Striven returned.")
+
     return "\n".join(lines)
 
 
