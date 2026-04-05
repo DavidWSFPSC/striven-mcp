@@ -421,6 +421,15 @@ def _item_text(item: dict, *keys) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# 5-minute in-memory cache for the full gas log audit (limit=None only).
+# Keyed on None (full scan). Test runs with a limit bypass the cache.
+# Thread-safety: single Gunicorn worker, so no lock needed.
+# ---------------------------------------------------------------------------
+_GAS_LOG_CACHE: dict = {"result": None, "ts": 0.0}
+_GAS_LOG_CACHE_TTL = 300  # seconds
+
+
 def _run_gas_log_audit(limit: int | None = None) -> dict:
     """
     Core gas-log audit logic — callable from the Flask route OR /chat.
@@ -438,6 +447,24 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
     import time as _time
     t_start   = _time.monotonic()
     PAGE_SIZE = 100
+
+    # ── Cache check (full-scan calls only) ───────────────────────────────────
+    # Test runs with an explicit limit always bypass the cache so developers
+    # get fresh data.  Production calls (limit=None) reuse a recent result
+    # for up to 5 minutes, making the /api/chat response feel instant.
+    if limit is None:
+        age = _time.monotonic() - _GAS_LOG_CACHE["ts"]
+        if _GAS_LOG_CACHE["result"] is not None and age < _GAS_LOG_CACHE_TTL:
+            print(
+                f"[gas-log-audit] CACHE HIT — age={age:.0f}s, "
+                f"returning cached result immediately.",
+                flush=True,
+            )
+            return _GAS_LOG_CACHE["result"]
+        print(
+            f"[gas-log-audit] Cache miss (age={age:.0f}s) — running full scan.",
+            flush=True,
+        )
 
     # Only audit active estimates — Quoted(19), Pending Approval(20),
     # Approved(22), In Progress(25).  Completed(27) and Incomplete(18)
@@ -600,12 +627,21 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
         flush=True,
     )
 
-    return {
+    result = {
         "total_checked":       total_inspected,
         "gas_log_installs":    gas_log_installs,
         "missing_removal_fee": len(matches),
         "matches":             matches,
     }
+
+    # ── Cache write (full-scan calls only) ───────────────────────────────────
+    import time as _time2
+    if limit is None:
+        _GAS_LOG_CACHE["result"] = result
+        _GAS_LOG_CACHE["ts"]     = _time2.monotonic()
+        print(f"[gas-log-audit] Result cached — TTL={_GAS_LOG_CACHE_TTL}s", flush=True)
+
+    return result
 
 
 @app.get("/gas-log-audit")
@@ -899,10 +935,40 @@ TOOL ROUTING
 - "Biggest / highest value jobs"                → high_value_estimates
 - "Estimates for [customer name]"               → search_estimates_by_customer
 - "Approved / quoted / in-progress estimates"   → search_estimates with status filter
+- "Show me recent / current estimates"          → search_estimates with active_only=true
 - "Estimates from [date] to [date]"             → search_estimates with date range
 - "Tell me about estimate #N"                   → get_estimate_by_id
 - "Missing portal flag / portal audit"          → portal_flag_audit (warn: ~60 s)
 - ANY gas log / removal fee / burner question   → gas_log_audit (MANDATORY — see below)
+
+SPEED & DATA RULES — FOLLOW THESE ON EVERY CALL
+- Default page_size=25 unless user asks for more. Never fetch more than 50.
+- For general "show me estimates" queries with no status specified: use active_only=true.
+  This filters to statuses 19,20,22,25 (Quoted/Pending/Approved/In Progress) — the
+  records that are actually actionable. Skip Incomplete(18) and Completed(27) unless
+  the user explicitly asks for them.
+- Never return more rows than fit in a clean summary. If there are >10 results,
+  show the top 10 in the table and state "and N more" below it.
+
+RESPONSE FORMAT — CONCISE SUMMARIES ONLY
+Do NOT dump raw API data. Always format as a clean business summary.
+Standard table columns (use only what's relevant):
+  # | Customer | Status | Date
+Add "Total" column only when amounts are available and relevant.
+
+For every list response:
+  1. Lead with ONE bold sentence: the direct answer + key number
+  2. Show the table (max 10 rows displayed)
+  3. Note anomalies if present (see below)
+  4. End with a single follow-up offer (one sentence, max)
+
+ANOMALY DETECTION — FLAG THESE AUTOMATICALLY
+After every search result, scan for and call out:
+  ⚠ Null / blank totals         — "X estimates have no total recorded"
+  ⚠ Missing customer name       — "Y records have no customer attached"
+  ⚠ Status=Incomplete (18)      — flag as potentially stale/abandoned
+  ⚠ Very old open estimates     — created >180 days ago, still Quoted/Pending
+Only mention anomalies that are actually present in the returned data.
 
 ════════════════════════════════════════════════════════
 GAS LOG AUDIT — NON-NEGOTIABLE RULE
@@ -938,12 +1004,12 @@ with active statuses. It returns exact, complete results instantly.
 One tool call gives you everything — use it.
 ════════════════════════════════════════════════════════
 
-FORMAT
-Lead with the direct answer and the live number. Use a markdown table for lists
-(columns: #, Customer, Total, Status). Round dollar amounts to nearest dollar.
-For gas log audit results: show total checked, installs found, missing fees,
-estimated revenue impact ($200 per missing fee), and list the top matches.
-End with a short follow-up offer."""
+GAS LOG AUDIT FORMAT
+When gas_log_audit returns:
+  Line 1 (bold): "X gas log installs checked — Y are missing a removal fee."
+  Line 2: "Estimated revenue at risk: $Z (at $200/job)"
+  Table: Estimate # | Customer | Link  (max 20 rows)
+  End: one-sentence follow-up offer."""
 
 _CHAT_TOOLS = [
     {
@@ -972,16 +1038,18 @@ _CHAT_TOOLS = [
         "description": (
             "Flexible estimate search by status, date range, or keyword. "
             "Status codes: 18=Incomplete 19=Quoted 20=Pending 22=Approved 25=In Progress 27=Completed. "
+            "Set active_only=true to restrict to statuses 19,20,22,25 in one call (recommended default). "
             "NOT for gas log / removal fee questions — use gas_log_audit for those."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "status":      {"type": "integer", "description": "Filter by status ID"},
+                "status":      {"type": "integer", "description": "Filter by a single status ID. Omit if using active_only."},
+                "active_only": {"type": "boolean", "description": "If true, restrict to active statuses 19,20,22,25 (Quoted/Pending/Approved/In Progress). Use this by default for general queries."},
                 "date_from":   {"type": "string",  "description": "Start date YYYY-MM-DD"},
                 "date_to":     {"type": "string",  "description": "End date YYYY-MM-DD"},
                 "keyword":     {"type": "string",  "description": "Filter by estimate name"},
-                "page_size":   {"type": "integer", "description": "Results per page (default 25)"},
+                "page_size":   {"type": "integer", "description": "Results per page (default 25, max 50)"},
             },
             "required": [],
         },
@@ -1199,25 +1267,51 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
 
         # ── search_estimates ─────────────────────────────────────────────────
         if name == "search_estimates":
-            body: dict = {
-                "PageIndex": 0,
-                "PageSize":  tool_input.get("page_size", 25),
-            }
-            if "status"    in tool_input: body["StatusChangedTo"] = tool_input["status"]
-            if "keyword"   in tool_input: body["Name"]            = tool_input["keyword"]
+            page_size   = min(tool_input.get("page_size", 25), 50)  # hard cap at 50
+            active_only = tool_input.get("active_only", False)
+            explicit_status = tool_input.get("status")
+
+            # Shared filter fragments
+            base_body: dict = {"PageIndex": 0, "PageSize": page_size}
+            if "keyword"  in tool_input: base_body["Name"] = tool_input["keyword"]
             if "date_from" in tool_input or "date_to" in tool_input:
                 date_range: dict = {}
                 if "date_from" in tool_input: date_range["DateFrom"] = tool_input["date_from"]
                 if "date_to"   in tool_input: date_range["DateTo"]   = tool_input["date_to"]
-                body["DateCreatedRange"] = date_range
-            raw     = striven.search_sales_orders(body)
-            data    = raw.get("data") or []
-            total   = raw.get("totalCount", 0)
-            if not data:
-                print(f"[search_estimates] WARNING: 'Data' key missing or null — keys={list(raw.keys())}", flush=True)
-            print(f"[search_estimates] TotalCount={total} returned={len(data)}", flush=True)
-            records = [_fmt(r) for r in data]
-            return {"total": total, "count": len(records), "estimates": records}
+                base_body["DateCreatedRange"] = date_range
+
+            if active_only and explicit_status is None:
+                # Run one search per active status, merge up to page_size total
+                ACTIVE = (19, 20, 22, 25)
+                all_records: list = []
+                grand_total = 0
+                for sid in ACTIVE:
+                    if len(all_records) >= page_size:
+                        break
+                    body = {**base_body, "StatusChangedTo": sid,
+                            "PageSize": page_size - len(all_records)}
+                    raw  = striven.search_sales_orders(body)
+                    data = raw.get("data") or []
+                    grand_total += raw.get("totalCount", 0)
+                    all_records.extend([_fmt(r) for r in data])
+                    print(f"[search_estimates] active_only status={sid} → {len(data)} records", flush=True)
+                records = all_records[:page_size]
+                print(f"[search_estimates] active_only total_pool={grand_total} returned={len(records)}", flush=True)
+                return {"total": grand_total, "count": len(records), "estimates": records,
+                        "note": "Active statuses only (19=Quoted,20=Pending,22=Approved,25=In Progress)"}
+            else:
+                # Single-status or unrestricted search
+                body = {**base_body}
+                if explicit_status is not None:
+                    body["StatusChangedTo"] = explicit_status
+                raw     = striven.search_sales_orders(body)
+                data    = raw.get("data") or []
+                total   = raw.get("totalCount", 0)
+                if not data:
+                    print(f"[search_estimates] WARNING: 'Data' key missing or null — keys={list(raw.keys())}", flush=True)
+                print(f"[search_estimates] TotalCount={total} returned={len(data)}", flush=True)
+                records = [_fmt(r) for r in data]
+                return {"total": total, "count": len(records), "estimates": records}
 
         if name == "get_estimate_by_id":
             return striven.get_estimate(tool_input["estimate_id"])
