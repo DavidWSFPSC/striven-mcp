@@ -362,211 +362,196 @@ def missing_portal_flag():
 GAS_LOG_KEYWORDS = ("burner", "gas log", "log")
 
 
-@app.get("/gas-log-audit")
-def gas_log_audit():
+def _item_text(item: dict, *keys) -> str:
     """
-    Find 2025 estimates that include a gas log line item
-    but are missing a removal fee line item.
+    Extract a single lowercased text value from a line-item dict.
 
-    Gas log detection  — any line item whose type/category/name/description
-                         contains "burner", "gas log", or "log".
-    Removal fee check  — any line item whose name/description contains
-                         BOTH "removal" AND "log".
+    Tries each key in order; handles both plain strings and nested objects
+    like {"Name": "Burner & Gas Logs"}.  Returns "" if nothing is found.
 
-    Two-pass approach:
-      Pass 1: Paginate POST /v1/sales-orders/search with DateCreatedRange=2025
-              to collect every 2025 estimate ID. (Fast — summary records only.)
-      Pass 2: GET /v1/sales-orders/{id} per estimate to read line items.
-              (One request per estimate — use ?limit=10 to test first.)
+    Defined at module level (not inside the loop) so it is created once.
+    """
+    for k in keys:
+        v = item.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip().lower()
+        if isinstance(v, dict):
+            name = v.get("Name") or v.get("name") or ""
+            if name:
+                return name.strip().lower()
+    return ""
 
-    Query params (optional):
-        limit — cap how many estimates are inspected in Pass 2.
-                Use ?limit=10 to verify line item field names before a full run.
 
-    Response shape:
-        {
-            "total_checked":       <int>,
-            "gas_log_installs":    <int>,
-            "missing_removal_fee": <int>,
-            "matches": [
-                {
-                    "estimate_id":     <int>,
-                    "estimate_number": <str>,
-                    "customer_name":   <str>,
-                    "url":             "https://app.striven.com/next/crm#/sales-orders/{id}"
-                }
-            ]
-        }
+def _run_gas_log_audit(limit: int | None = None) -> dict:
+    """
+    Core gas-log audit logic — callable from the Flask route OR /chat.
+
+    Pass 1: Paginate POST /v1/sales-orders/search (DateCreatedRange=2025)
+            to collect every 2025 estimate stub. Fast — summary only.
+    Pass 2: GET /v1/sales-orders/{id} per estimate to read line items.
+            One Striven request per estimate; use limit= to cap during testing.
+
+    Returns a plain dict (not a Flask response) so /chat can reuse it.
     """
     import time as _time
     t_start   = _time.monotonic()
     PAGE_SIZE = 100
 
-    # Optional cap for test runs — ?limit=10 only inspects 10 estimates
-    raw_limit     = request.args.get("limit", "").strip()
-    inspect_limit = int(raw_limit) if raw_limit.isdigit() else None
+    # ── Pass 1: collect all 2025 estimate stubs ──────────────────────────────
+    print("[gas-log-audit] Pass 1 — paginating 2025 estimates...", flush=True)
 
-    try:
-        # ── Pass 1: collect all 2025 estimate stubs ──────────────────────────
-        print("[gas-log-audit] Pass 1 — paginating 2025 estimates...", flush=True)
+    stubs: list[dict] = []
+    page_index  = 0
+    total_count = None
 
-        stubs: list[dict] = []   # [{id, estimate_number, customer_name}, ...]
-        page_index  = 0
-        total_count = None
+    while True:
+        body = {
+            "PageIndex": page_index,
+            "PageSize":  PAGE_SIZE,
+            "DateCreatedRange": {
+                "DateFrom": "2025-01-01",
+                "DateTo":   "2025-12-31",
+            },
+        }
+        raw  = striven.search_sales_orders(body)
+        data = raw.get("data") or []
 
-        while True:
-            body = {
-                "PageIndex": page_index,
-                "PageSize":  PAGE_SIZE,
-                "DateCreatedRange": {
-                    "DateFrom": "2025-01-01",
-                    "DateTo":   "2025-12-31",
-                },
-            }
-            raw  = striven.search_sales_orders(body)
-            data = raw.get("data") or []
+        if total_count is None:
+            total_count = raw.get("totalCount", 0)
+            print(f"[gas-log-audit] 2025 total: {total_count}", flush=True)
+            if data:
+                print(f"[gas-log-audit] Search record keys: {list(data[0].keys())}", flush=True)
 
-            if total_count is None:
-                total_count = raw.get("totalCount", 0)
-                print(f"[gas-log-audit] 2025 total: {total_count}", flush=True)
-                if data:
-                    print(f"[gas-log-audit] Search record keys: {list(data[0].keys())}", flush=True)
+        if not data:
+            break
 
-            if not data:
-                break
+        for r in data:
+            customer = r.get("Customer") or r.get("customer") or {}
+            stubs.append({
+                "id":              r.get("Id")     or r.get("id"),
+                "estimate_number": r.get("Number") or r.get("number"),
+                "customer_name":   customer.get("Name") or customer.get("name"),
+            })
 
-            for r in data:
-                customer = r.get("Customer") or r.get("customer") or {}
-                stubs.append({
-                    "id":              r.get("Id")     or r.get("id"),
-                    "estimate_number": r.get("Number") or r.get("number"),
-                    "customer_name":   customer.get("Name") or customer.get("name"),
-                })
+        print(
+            f"[gas-log-audit] Page {page_index}: {len(data)} records "
+            f"(collected {len(stubs)}/{total_count})",
+            flush=True,
+        )
 
+        if total_count and len(stubs) >= total_count:
+            break
+
+        page_index += 1
+
+    # Apply optional test limit AFTER pagination so logs show true scope
+    to_inspect = stubs[:limit] if limit else stubs
+    print(
+        f"[gas-log-audit] Pass 1 complete — {len(stubs)} stubs found, "
+        f"inspecting {len(to_inspect)}",
+        flush=True,
+    )
+
+    # ── Pass 2: fetch full detail for each and inspect line items ────────────
+    print("[gas-log-audit] Pass 2 — fetching full detail per estimate...", flush=True)
+
+    gas_log_installs = 0
+    matches: list[dict] = []
+
+    for i, stub in enumerate(to_inspect):
+        est_id = stub.get("id")
+        if not est_id:
+            continue
+
+        detail     = striven.get_estimate(est_id)
+        line_items = (
+            detail.get("lineItems")
+            or detail.get("items")
+            or detail.get("LineItems")
+            or []
+        )
+
+        # Log detail keys + sample line item on the first record only
+        if i == 0:
+            print(f"[gas-log-audit] Detail record keys: {list(detail.keys())}", flush=True)
+            if line_items:
+                print(f"[gas-log-audit] Line item sample keys: {list(line_items[0].keys())}", flush=True)
+                print(f"[gas-log-audit] Line item sample: {line_items[0]}", flush=True)
+            else:
+                print("[gas-log-audit] No line items on first record", flush=True)
+
+        # Gas log detection — any keyword in any descriptive field
+        has_gas_log = any(
+            any(
+                kw in _item_text(
+                    item,
+                    "productType", "ProductType",
+                    "itemType",    "ItemType",
+                    "type",        "Type",
+                    "category",    "Category",
+                    "name",        "Name",
+                    "description", "Description",
+                )
+                for kw in GAS_LOG_KEYWORDS
+            )
+            for item in line_items
+        )
+
+        if not has_gas_log:
+            continue
+
+        gas_log_installs += 1
+
+        # Removal fee — compute text once per item, check both keywords
+        has_removal_fee = any(
+            (lambda t: "removal" in t and "log" in t)(
+                _item_text(item, "name", "Name", "description", "Description")
+            )
+            for item in line_items
+        )
+
+        if not has_removal_fee:
+            matches.append({
+                "estimate_id":     est_id,
+                "estimate_number": stub["estimate_number"],
+                "customer_name":   stub["customer_name"],
+                "url":             f"https://app.striven.com/next/crm#/sales-orders/{est_id}",
+            })
+
+        # Progress log every 25 estimates
+        if (i + 1) % 25 == 0:
             print(
-                f"[gas-log-audit] Page {page_index}: {len(data)} records "
-                f"(collected {len(stubs)}/{total_count})",
+                f"[gas-log-audit] Progress: {i + 1}/{len(to_inspect)} inspected — "
+                f"gas log installs: {gas_log_installs}, missing fee: {len(matches)}",
                 flush=True,
             )
 
-            if total_count and len(stubs) >= total_count:
-                break
+    elapsed = round(_time.monotonic() - t_start, 2)
+    print(
+        f"[gas-log-audit] Complete — checked={len(to_inspect)} "
+        f"gas_log_installs={gas_log_installs} "
+        f"missing_removal_fee={len(matches)} elapsed={elapsed}s",
+        flush=True,
+    )
 
-            page_index += 1
+    return {
+        "total_checked":       len(to_inspect),
+        "gas_log_installs":    gas_log_installs,
+        "missing_removal_fee": len(matches),
+        "matches":             matches,
+    }
 
-        # Apply optional test limit AFTER pagination so logs show true scope
-        to_inspect = stubs[:inspect_limit] if inspect_limit else stubs
-        print(
-            f"[gas-log-audit] Pass 1 complete — {len(stubs)} stubs found, "
-            f"inspecting {len(to_inspect)}",
-            flush=True,
-        )
 
-        # ── Pass 2: fetch full detail for each and inspect line items ────────
-        print("[gas-log-audit] Pass 2 — fetching full detail per estimate...", flush=True)
-
-        gas_log_installs = 0
-        matches: list[dict] = []
-
-        for i, stub in enumerate(to_inspect):
-            est_id = stub.get("id")
-            if not est_id:
-                continue
-
-            detail     = striven.get_estimate(est_id)
-            line_items = (
-                detail.get("lineItems")
-                or detail.get("items")
-                or detail.get("LineItems")
-                or []
-            )
-
-            # Log keys and a sample line item on the very first record so we
-            # can confirm the exact field names Striven uses
-            if i == 0:
-                print(f"[gas-log-audit] Detail record keys: {list(detail.keys())}", flush=True)
-                if line_items:
-                    print(f"[gas-log-audit] Line item sample keys: {list(line_items[0].keys())}", flush=True)
-                    print(f"[gas-log-audit] Line item sample: {line_items[0]}", flush=True)
-                else:
-                    print("[gas-log-audit] No line items on first record", flush=True)
-
-            # Helper — extract a single lowercased text value from an item,
-            # trying multiple key names to handle Striven's mixed casing.
-            # Nested object values (e.g. {"Name": "Burner"}) are unwrapped.
-            def _item_text(item: dict, *keys) -> str:
-                for k in keys:
-                    v = item.get(k)
-                    if isinstance(v, str) and v.strip():
-                        return v.strip().lower()
-                    if isinstance(v, dict):
-                        name = v.get("Name") or v.get("name") or ""
-                        if name:
-                            return name.strip().lower()
-                return ""
-
-            # Gas log detection — any keyword in any descriptive field
-            has_gas_log = any(
-                any(
-                    kw in _item_text(
-                        item,
-                        "productType", "ProductType",
-                        "itemType",    "ItemType",
-                        "type",        "Type",
-                        "category",    "Category",
-                        "name",        "Name",
-                        "description", "Description",
-                    )
-                    for kw in GAS_LOG_KEYWORDS
-                )
-                for item in line_items
-            )
-
-            if not has_gas_log:
-                continue
-
-            gas_log_installs += 1
-
-            # Removal fee detection — cache _item_text result once per item
-            # so "removal" and "log" checks don't duplicate the work
-            has_removal_fee = any(
-                (lambda t: "removal" in t and "log" in t)(
-                    _item_text(item, "name", "Name", "description", "Description")
-                )
-                for item in line_items
-            )
-
-            if not has_removal_fee:
-                matches.append({
-                    "estimate_id":     est_id,
-                    "estimate_number": stub["estimate_number"],
-                    "customer_name":   stub["customer_name"],
-                    "url":             f"https://app.striven.com/next/crm#/sales-orders/{est_id}",
-                })
-
-            # Progress log every 25 estimates
-            if (i + 1) % 25 == 0:
-                print(
-                    f"[gas-log-audit] Progress: {i + 1}/{len(to_inspect)} inspected — "
-                    f"gas log installs: {gas_log_installs}, missing fee: {len(matches)}",
-                    flush=True,
-                )
-
-        elapsed = round(_time.monotonic() - t_start, 2)
-        print(
-            f"[gas-log-audit] Complete — checked={len(to_inspect)} "
-            f"gas_log_installs={gas_log_installs} "
-            f"missing_removal_fee={len(matches)} elapsed={elapsed}s",
-            flush=True,
-        )
-
-        return jsonify({
-            "total_checked":       len(to_inspect),
-            "gas_log_installs":    gas_log_installs,
-            "missing_removal_fee": len(matches),
-            "matches":             matches,
-        })
-
+@app.get("/gas-log-audit")
+def gas_log_audit():
+    """
+    Thin route wrapper around _run_gas_log_audit().
+    Accepts optional ?limit=N query param for test runs.
+    """
+    raw_limit     = request.args.get("limit", "").strip()
+    inspect_limit = int(raw_limit) if raw_limit.isdigit() else None
+    try:
+        return jsonify(_run_gas_log_audit(limit=inspect_limit))
     except HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 502
         return jsonify({"error": str(exc)}), status
@@ -1096,6 +1081,172 @@ def chat_api():
                 print(f"[log_chat] WARNING: failed to log — {log_exc}", flush=True)
 
             return jsonify({"response": text})
+
+
+# ---------------------------------------------------------------------------
+# Rule-based /chat endpoint
+# ---------------------------------------------------------------------------
+
+def _detect_intent(message: str) -> tuple[str, dict]:
+    """
+    Keyword-based intent detection. Returns (intent_name, params_dict).
+
+    Intents:
+        gas_log_audit      — "gas log", "removal fee", "removal"
+        high_value         — "biggest", "high value", "top job", "highest"
+        count              — "how many", "count", "total estimate"
+        search_by_customer — "customer", "estimates for <name>", "for <name>"
+        unknown            — no keywords matched
+    """
+    msg = message.lower().strip()
+
+    if any(kw in msg for kw in ("gas log", "removal fee", "removal")):
+        return "gas_log_audit", {}
+
+    if any(kw in msg for kw in ("biggest", "high value", "top job", "highest value", "largest")):
+        return "high_value", {}
+
+    if any(kw in msg for kw in ("how many", "count", "total estimate", "total number")):
+        return "count", {}
+
+    # Customer search — try to extract name after common marker phrases
+    if "customer" in msg or " for " in msg or "estimates for" in msg:
+        name = ""
+        for marker in ("estimates for ", "for customer ", "customer named ", "customer ", " for "):
+            if marker in msg:
+                name = msg.split(marker, 1)[1].strip().rstrip("?.,!")
+                break
+        return "search_by_customer", {"name": name}
+
+    return "unknown", {}
+
+
+# ── Response formatters ───────────────────────────────────────────────────────
+
+def _format_gas_log_audit(result: dict) -> str:
+    total    = result.get("total_checked", 0)
+    installs = result.get("gas_log_installs", 0)
+    missing  = result.get("missing_removal_fee", 0)
+    matches  = result.get("matches") or []
+
+    lines = [
+        f"Out of {total:,} 2025 estimates checked:",
+        f"  • {installs:,} gas log installs found",
+        f"  • {missing:,} missing a Gas Log Removal Fee",
+        "",
+    ]
+    if matches:
+        lines.append("Estimates missing the removal fee:")
+        for m in matches[:15]:
+            num  = m.get("estimate_number") or "—"
+            name = m.get("customer_name")   or "Unknown"
+            lines.append(f"  • Estimate #{num} — {name}")
+        if len(matches) > 15:
+            lines.append(f"  … and {len(matches) - 15} more.")
+    else:
+        lines.append("✓ All gas log installs have a removal fee — nothing missing.")
+    return "\n".join(lines)
+
+
+def _format_high_value(result: dict) -> str:
+    records = result.get("records") or []
+    count   = result.get("count", len(records))
+    lines   = [f"Top {count} estimates over $10,000:\n"]
+    for i, r in enumerate(records[:20], 1):
+        num   = r.get("estimate_number") or "—"
+        name  = r.get("customer_name")   or "Unknown"
+        total = r.get("total") or 0
+        lines.append(f"  {i:>2}. #{num} — {name}  (${total:,.0f})")
+    return "\n".join(lines)
+
+
+def _format_customer_search(result: dict, name: str) -> str:
+    estimates = result.get("estimates") or []
+    total     = result.get("total", len(estimates))
+    if not estimates:
+        return f"No estimates found for customer matching '{name}'."
+    lines = [f"{total:,} estimate(s) found for '{name}':\n"]
+    for r in estimates[:20]:
+        num    = r.get("estimate_number") or "—"
+        status = r.get("status")          or "—"
+        date   = (r.get("date") or "")[:10]
+        lines.append(f"  • #{num}  {status}  {date}")
+    if total > 20:
+        lines.append(f"  … and {total - 20:,} more.")
+    return "\n".join(lines)
+
+
+def _format_count(result: dict) -> str:
+    total = result.get("total", 0)
+    return f"There are {total:,} estimates in the system."
+
+
+# ── Route ─────────────────────────────────────────────────────────────────────
+
+@app.post("/chat")
+def simple_chat():
+    """
+    Rule-based natural language chat endpoint.
+
+    Input:  { "message": "Show me missing gas log removal fees" }
+    Output: { "response": "<formatted text>", "intent": "<detected intent>" }
+
+    Intent routing (keyword matching — no AI required):
+        gas_log_audit      → _run_gas_log_audit()
+        high_value         → _execute_tool("high_value_estimates", {})
+        count              → _execute_tool("count_estimates", {})
+        search_by_customer → _paginated_customer_search(name)
+    """
+    body    = request.get_json(force=True) or {}
+    message = (body.get("message") or "").strip()
+
+    if not message:
+        return jsonify({"error": "Field 'message' is required."}), 400
+
+    intent, params = _detect_intent(message)
+    print(f"[/chat] message={message!r}  intent={intent}  params={params}", flush=True)
+
+    try:
+        if intent == "gas_log_audit":
+            result   = _run_gas_log_audit()
+            response = _format_gas_log_audit(result)
+
+        elif intent == "high_value":
+            result   = _execute_tool("high_value_estimates", {})
+            response = _format_high_value(result)
+
+        elif intent == "count":
+            result   = _execute_tool("count_estimates", {})
+            response = _format_count(result)
+
+        elif intent == "search_by_customer":
+            name = params.get("name", "").strip()
+            if not name:
+                return jsonify({
+                    "response": (
+                        "I can search estimates by customer name.\n"
+                        "Please include the name — for example:\n"
+                        "  'Show estimates for Acme Corp'"
+                    ),
+                    "intent": intent,
+                })
+            result   = _paginated_customer_search(name)
+            response = _format_customer_search(result, name)
+
+        else:
+            response = (
+                "I'm not sure what you're looking for. Try asking:\n"
+                "  • 'Show me missing gas log removal fees'\n"
+                "  • 'Show biggest jobs'\n"
+                "  • 'How many estimates do we have?'\n"
+                "  • 'Show estimates for Acme Corp'"
+            )
+
+        return jsonify({"response": response, "intent": intent})
+
+    except Exception as exc:
+        print(f"[/chat] ERROR: {exc}", flush=True)
+        return jsonify({"error": str(exc)}), 500
 
 
 # ---------------------------------------------------------------------------
