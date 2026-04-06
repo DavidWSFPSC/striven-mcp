@@ -1128,29 +1128,36 @@ ALWAYS present results in this exact order:
 1. HEADLINE — total analysed and the single most critical finding.
    "**Of 20 approved jobs, 13 (65%) are missing at least one required step.**"
 
-2. BREAKDOWN — one line per issue type, with count and percentage:
-   • No preview task: X (Y%)
-   • Preview admin task only (no site preview confirmed): X (Y%) — only show if > 0
-   • Preview created late (>3 days after approval): X (Y%)
-   • No install scheduled: X (Y%)
-   • Avg days from approval to preview: N days
+2. JOB TYPE BREAKDOWN — show the split first so context is clear:
+   • Jobs requiring a preview task (remodel / new construction): X
+   • Jobs exempt from preview requirement (enhancement / repair / service): X
+   • Jobs not yet classifiable: X — note these are excluded from preview failure %
+
+3. PREVIEW ISSUES — percentages are ALWAYS out of the required set, not total:
+   • No preview task: X of Y required jobs (Z%)
+   • Preview admin task only — no site preview confirmed: X (Z%) — only if > 0
+   • Preview created late (>3 days after approval): X (Z%)
+   • Avg days from approval to preview: N days (or "not enough data")
+
+4. INSTALL ISSUES — applies to all jobs:
+   • No install scheduled: X of Y total jobs (Z%)
    • Avg days from approval to install: N days
 
-3. BY SALES REP — short table, reps sorted by number of issues:
-   | Rep | Jobs | No Preview | No Install |
-   Only show reps with at least one issue. Max 6 rows.
+5. BY SALES REP — table sorted by issue count, max 6 rows, only reps with issues:
+   | Rep | Jobs | Preview Required | No Preview | No Install |
 
-4. EXAMPLE PROBLEM JOBS — up to 10 rows:
-   | Estimate # | Customer | Approved | Issue |
+6. EXAMPLE PROBLEM JOBS — up to 10 rows:
+   | Estimate # | Customer | Job Type | Approved | Issue |
    Use plain language for Issue: "No preview task", "Preview 8 days late", "No install scheduled"
 
-5. ONE sentence offering to drill into a specific rep, date range, or job.
+7. ONE sentence offering to drill into a specific rep, date range, or job.
 
 RULES:
-  ✗ Never expose raw field names (no "no_preview_task", "preview_late_8d")
-  ✓ Translate issue codes to plain English
+  ✗ Never expose raw field names (no "no_preview_task", "preview_late_8d", "exempt:chimney")
+  ✓ Translate issue codes and reason codes to plain English
   ✓ Always show percentages alongside counts
-  ✓ If avg_days_to_preview or avg_days_to_install is null, say "not enough data"
+  ✓ Make the required vs exempt split visible — it is the most important context
+  ✓ If total_unclassified > 0, note it clearly: "N jobs could not be classified and are excluded"
 ════════════════════════════════════════════════════════
 
 ════════════════════════════════════════════════════════
@@ -1531,6 +1538,27 @@ def _fmt(r: dict) -> dict:
     customer  = r.get("Customer")  or r.get("customer")  or {}
     status    = r.get("Status")    or r.get("status")    or {}
     sales_rep = r.get("SalesRep")  or r.get("salesRep")  or {}
+
+    # Job type — Striven may return this as a dict {"Id":…,"Name":…} or a plain string.
+    # We capture both forms and normalise to a plain string.
+    raw_type = (
+        r.get("Type") or r.get("type")
+        or r.get("SalesOrderType") or r.get("salesOrderType")
+        or r.get("JobType") or r.get("jobType")
+        or {}
+    )
+    if isinstance(raw_type, dict):
+        job_type = raw_type.get("Name") or raw_type.get("name")
+    else:
+        job_type = raw_type or None
+
+    # Category — similarly may be a dict or a string.
+    raw_cat = r.get("Category") or r.get("category") or {}
+    if isinstance(raw_cat, dict):
+        category = raw_cat.get("Name") or raw_cat.get("name")
+    else:
+        category = raw_cat or None
+
     return {
         "id":              r.get("Id")           or r.get("id"),
         "estimate_number": r.get("Number")       or r.get("number"),
@@ -1542,6 +1570,8 @@ def _fmt(r: dict) -> dict:
         "total":           r.get("OrderTotal")   or r.get("orderTotal")  or r.get("total"),
         "date_created":    r.get("DateCreated")  or r.get("dateCreated"),
         "date_approved":   r.get("DateApproved") or r.get("dateApproved"),
+        "job_type":        job_type,
+        "category":        category,
     }
 
 
@@ -1958,6 +1988,71 @@ def _run_pipeline_analysis(
             return None
         return (db - da).days
 
+    # ── Job type → preview expectation ────────────────────────────────────────
+    #
+    # Preview tasks are ONLY required for remodel and new construction jobs.
+    # Enhancement, repair, service, warranty, and callback jobs do NOT need one.
+    #
+    # Matching priority:
+    #   1. Structured job_type field (most reliable — direct Striven lookup field)
+    #   2. Structured category field
+    #   3. Keywords in estimate name (fallback when type fields are absent/null)
+    #
+    # Exempt keywords take priority over required keywords: a job whose signal
+    # text contains both "remodel" and "service" is conservatively marked exempt.
+    #
+    # Unknown / unclassifiable jobs default to NOT required — we must never
+    # inflate the failure rate by flagging jobs whose type we cannot determine.
+
+    PREVIEW_REQUIRED_KW = {
+        "residential remodel",
+        "residential new construction",
+        "commercial remodel",
+        "commercial new construction",
+        "remodel",
+        "new construction",
+        "new const",
+    }
+    PREVIEW_EXEMPT_KW = {
+        "fireplace enhancement",
+        "enhancement",
+        "chimney repair",
+        "chimney",
+        "service",
+        "warranty",
+        "callback",
+        "call back",
+    }
+
+    def _requires_preview(est: dict) -> tuple[bool, str]:
+        """
+        Return (preview_required: bool, reason: str).
+
+        Inspects job_type → category → estimate name (in that order).
+        Exempt keywords take priority over required keywords.
+        Returns (False, "unknown:no_match") when the job type cannot be
+        determined — so unclassifiable jobs are never counted as failures.
+        """
+        type_text = (est.get("job_type") or "").strip().lower()
+        cat_text  = (est.get("category") or "").strip().lower()
+        name_text = (est.get("name")     or "").strip().lower()
+
+        # Use structured fields when available; fall back to estimate name
+        signal = " | ".join(filter(None, [type_text, cat_text])) or name_text
+
+        # Exempt check runs first — conservative, prevents over-flagging
+        for kw in PREVIEW_EXEMPT_KW:
+            if kw in signal:
+                return False, f"exempt:{kw}"
+
+        # Required check
+        for kw in PREVIEW_REQUIRED_KW:
+            if kw in signal:
+                return True, f"required:{kw}"
+
+        # Cannot classify — do NOT count as missing preview
+        return False, "unknown:no_match"
+
     # ── Step 1: Fetch estimates ───────────────────────────────────────────────
     all_estimates: list[dict] = []
 
@@ -1971,6 +2066,23 @@ def _run_pipeline_analysis(
         print(f"[pipeline_analysis] Fetching estimates status={sid} limit={limit}", flush=True)
         raw  = striven.search_sales_orders(body)
         data = raw.get("data") or []
+        # On the first batch of the first status, dump all raw field keys so
+        # we can verify which type/category field name Striven is using.
+        if data and not all_estimates:
+            sample = data[0]
+            print(
+                f"[pipeline_analysis] RAW ESTIMATE FIELD KEYS: {sorted(sample.keys())}",
+                flush=True,
+            )
+            print(
+                f"[pipeline_analysis] SAMPLE type/category fields: "
+                f"Type={sample.get('Type')!r} type={sample.get('type')!r} "
+                f"SalesOrderType={sample.get('SalesOrderType')!r} "
+                f"JobType={sample.get('JobType')!r} "
+                f"Category={sample.get('Category')!r} category={sample.get('category')!r} "
+                f"Name={str(sample.get('Name') or '')[:60]!r}",
+                flush=True,
+            )
         all_estimates.extend([_fmt(r) for r in data])
         print(f"[pipeline_analysis] status={sid} → {len(data)} estimates returned", flush=True)
 
@@ -2013,17 +2125,21 @@ def _run_pipeline_analysis(
         install_tasks = [t for t in tasks if _classify_install(t)]
         install_task  = install_tasks[0] if install_tasks else None
 
-        # Log classification for every estimate so we can verify in server logs
+        # Determine whether this job type requires a preview task at all
+        preview_required, preview_reason = _requires_preview(est)
+
+        # Log full classification for every estimate — visible in Render logs
         print(
-            f"[pipeline_analysis] est={est_id} tasks={len(tasks)} "
-            f"preview_tier={preview_tier} "
-            f"preview_name={preview_task.get('name') if preview_task else 'none'!r} "
-            f"preview_type={preview_task.get('task_type') if preview_task else 'none'!r} "
+            f"[pipeline_analysis] est={est_id} "
+            f"job_type={est.get('job_type')!r} category={est.get('category')!r} "
+            f"name={str(est.get('name') or '')[:50]!r} "
+            f"preview_required={preview_required} reason={preview_reason} "
+            f"tasks={len(tasks)} preview_tier={preview_tier} "
             f"install={'yes' if install_task else 'no'}",
             flush=True,
         )
 
-        # Compute timeline gaps
+        # Compute timeline gaps (regardless of requirement — useful data even for exempt jobs)
         days_to_preview = (
             days_between(date_approved, preview_task.get("date_created"))
             if preview_task else None
@@ -2034,46 +2150,60 @@ def _run_pipeline_analysis(
         )
         days_to_install = days_between(date_approved, install_ref) if install_ref else None
 
-        # Flag issues
-        # A job with only an admin preview task (no strong signal) is still
-        # flagged as "preview_admin_only" so leadership can review.
+        # Flag issues — preview issues ONLY raised when preview is required for this job type
         issues: list[str] = []
-        if preview_tier == "none":
-            issues.append("no_preview_task")
-        elif preview_tier == "admin":
-            issues.append("preview_admin_only")
-        elif days_to_preview is not None and days_to_preview > 3:
-            issues.append(f"preview_late_{days_to_preview}d")
+        if preview_required:
+            if preview_tier == "none":
+                issues.append("no_preview_task")
+            elif preview_tier == "admin":
+                # Has only an admin/status-update task — not a real site preview
+                issues.append("preview_admin_only")
+            elif days_to_preview is not None and days_to_preview > 3:
+                issues.append(f"preview_late_{days_to_preview}d")
         if not install_task:
             issues.append("no_install_task")
 
         job_results.append({
-            "estimate_id":     est_id,
-            "estimate_number": est.get("estimate_number"),
-            "customer_name":   est.get("customer_name"),
-            "sales_rep":       est.get("sales_rep") or "Unassigned",
-            "status":          est.get("status"),
-            "total":           est.get("total"),
-            "date_approved":   date_approved,
-            "preview_task":    preview_task,
-            "preview_tier":    preview_tier,
-            "install_task":    install_task,
-            "days_to_preview": days_to_preview,
-            "days_to_install": days_to_install,
-            "all_task_count":  len(tasks),
-            "issues":          issues,
-            "has_issues":      bool(issues),
+            "estimate_id":       est_id,
+            "estimate_number":   est.get("estimate_number"),
+            "customer_name":     est.get("customer_name"),
+            "sales_rep":         est.get("sales_rep") or "Unassigned",
+            "status":            est.get("status"),
+            "job_type":          est.get("job_type"),
+            "category":          est.get("category"),
+            "total":             est.get("total"),
+            "date_approved":     date_approved,
+            "preview_required":  preview_required,
+            "preview_reason":    preview_reason,
+            "preview_task":      preview_task,
+            "preview_tier":      preview_tier,
+            "install_task":      install_task,
+            "days_to_preview":   days_to_preview,
+            "days_to_install":   days_to_install,
+            "all_task_count":    len(tasks),
+            "issues":            issues,
+            "has_issues":        bool(issues),
         })
 
     # ── Step 3: Summary stats ─────────────────────────────────────────────────
-    no_preview        = [j for j in job_results if "no_preview_task"    in j["issues"]]
-    preview_admin     = [j for j in job_results if "preview_admin_only" in j["issues"]]
-    preview_late      = [j for j in job_results if any("preview_late"   in i for i in j["issues"])]
-    no_install        = [j for j in job_results if "no_install_task"    in j["issues"]]
-    has_issues        = [j for j in job_results if j["has_issues"]]
+    # Split the job list into preview-required vs exempt FIRST.
+    # All preview issue counts are computed ONLY within the required set.
+    preview_required_jobs = [j for j in job_results if     j["preview_required"]]
+    preview_exempt_jobs   = [j for j in job_results if not j["preview_required"]]
+    unclassified_jobs     = [j for j in job_results if j["preview_reason"].startswith("unknown")]
 
-    dtp = [j["days_to_preview"] for j in job_results if j["days_to_preview"] is not None]
-    dti = [j["days_to_install"] for j in job_results if j["days_to_install"] is not None]
+    total_req  = len(preview_required_jobs)
+    total_ex   = len(preview_exempt_jobs)
+
+    no_preview    = [j for j in preview_required_jobs if "no_preview_task"    in j["issues"]]
+    preview_admin = [j for j in preview_required_jobs if "preview_admin_only" in j["issues"]]
+    preview_late  = [j for j in preview_required_jobs if any("preview_late"   in i for i in j["issues"])]
+    no_install    = [j for j in job_results           if "no_install_task"    in j["issues"]]
+    has_issues    = [j for j in job_results           if j["has_issues"]]
+
+    # Average timings — only from preview-required jobs where the task exists
+    dtp = [j["days_to_preview"] for j in preview_required_jobs if j["days_to_preview"] is not None]
+    dti = [j["days_to_install"] for j in job_results           if j["days_to_install"] is not None]
     avg_days_to_preview = round(sum(dtp) / len(dtp), 1) if dtp else None
     avg_days_to_install = round(sum(dti) / len(dti), 1) if dti else None
 
@@ -2084,12 +2214,14 @@ def _run_pipeline_analysis(
         if rep not in rep_stats:
             rep_stats[rep] = {
                 "rep": rep, "count": 0,
+                "preview_required": 0,
                 "no_preview": 0, "no_install": 0, "has_issues": 0,
             }
         rep_stats[rep]["count"] += 1
-        if "no_preview_task" in j["issues"]: rep_stats[rep]["no_preview"] += 1
-        if "no_install_task" in j["issues"]: rep_stats[rep]["no_install"] += 1
-        if j["has_issues"]:                  rep_stats[rep]["has_issues"] += 1
+        if j["preview_required"]:                rep_stats[rep]["preview_required"] += 1
+        if "no_preview_task"  in j["issues"]:    rep_stats[rep]["no_preview"]  += 1
+        if "no_install_task"  in j["issues"]:    rep_stats[rep]["no_install"]  += 1
+        if j["has_issues"]:                      rep_stats[rep]["has_issues"]  += 1
 
     by_rep = sorted(rep_stats.values(), key=lambda x: x["has_issues"], reverse=True)
 
@@ -2107,17 +2239,24 @@ def _run_pipeline_analysis(
     )
 
     return {
-        "total_analyzed":    total_analyzed,
-        "total_with_issues": len(has_issues),
+        "total_analyzed":         total_analyzed,
+        "total_with_issues":      len(has_issues),
+        "total_requiring_preview": total_req,
+        "total_exempt_preview":    total_ex,
+        "total_unclassified":      len(unclassified_jobs),
         "summary": {
+            # Preview stats — percentages are out of the REQUIRED set only
+            "requiring_preview":     total_req,
             "no_preview_task":       len(no_preview),
-            "pct_no_preview":        round(len(no_preview)      / total_analyzed * 100) if total_analyzed else 0,
+            "pct_no_preview":        round(len(no_preview)    / total_req  * 100) if total_req  else 0,
             "preview_admin_only":    len(preview_admin),
-            "pct_preview_admin":     round(len(preview_admin)   / total_analyzed * 100) if total_analyzed else 0,
+            "pct_preview_admin":     round(len(preview_admin) / total_req  * 100) if total_req  else 0,
             "preview_task_late":     len(preview_late),
-            "pct_preview_late":      round(len(preview_late)    / total_analyzed * 100) if total_analyzed else 0,
+            "pct_preview_late":      round(len(preview_late)  / total_req  * 100) if total_req  else 0,
+            # Install stats — all jobs are expected to have an install task
             "no_install_task":       len(no_install),
-            "pct_no_install":        round(len(no_install)      / total_analyzed * 100) if total_analyzed else 0,
+            "pct_no_install":        round(len(no_install)    / total_analyzed * 100) if total_analyzed else 0,
+            # Timing
             "avg_days_to_preview":   avg_days_to_preview,
             "avg_days_to_install":   avg_days_to_install,
         },
@@ -2125,10 +2264,12 @@ def _run_pipeline_analysis(
         "problem_jobs": problem_jobs,
         "note": (
             f"Analysed {total_analyzed} estimates in {elapsed}s. "
-            "Preview detection: STRONG = task_type contains 'preview', or name starts with "
-            "'preview', contains '[preview]', 'preview-', or 'site preview'. "
-            "ADMIN = name contains 'update preview status' (counted separately). "
-            "Valid preview statuses: Open, On Hold. "
+            f"{total_req} require a preview task (remodel/new construction); "
+            f"{total_ex} are exempt (enhancement/repair/service/warranty). "
+            f"{len(unclassified_jobs)} could not be classified — not counted as failures. "
+            "Check Render logs for 'RAW ESTIMATE FIELD KEYS' to verify type field availability. "
+            "Preview detection: task_type contains 'preview', or name starts with 'preview', "
+            "contains '[preview]', 'preview-', or 'site preview'. "
             "Install detection: name or type contains 'install'."
         ),
     }
