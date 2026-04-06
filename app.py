@@ -959,6 +959,15 @@ ESTIMATES & PIPELINE
   ANY gas log / removal / burner          → gas_log_audit (mandatory — see below)
   deals / opportunities / pipeline        → search_opportunities
 
+OPERATIONS ANALYSIS
+  where are jobs breaking                 → analyze_job_pipeline
+  pipeline delays / ops report            → analyze_job_pipeline
+  which jobs have no preview task         → analyze_job_pipeline
+  which jobs have no install scheduled    → analyze_job_pipeline
+  how long from approval to install       → analyze_job_pipeline
+  delayed jobs / approval to install      → analyze_job_pipeline
+  process breakdown / pipeline report     → analyze_job_pipeline
+
 FINANCIAL
   unpaid invoices / AR / who owes us      → search_invoices
   specific invoice detail                 → get_invoice_by_id
@@ -1033,12 +1042,11 @@ TASKS / WORKLOAD & SCHEDULING
 
 OPERATIONS PIPELINE (process delay analysis)
   The expected sequence for every job is:
-    Estimate created → Approved → Preview task created → Install scheduled → Completed
-  When asked about delays or where the process is breaking:
-  • Compare date_approved to task creation dates
-  • Flag approved estimates that have no associated tasks
-  • Flag estimates where the target install date has passed and status is still In Progress
-  • Identify which reps or job types have the highest rate of delays
+    Estimate created → Approved → Preview task created (within 3 days) → Install scheduled → Completed
+  Use analyze_job_pipeline — it does this automatically.
+  When presenting results, always lead with the percentages:
+    "X of Y approved jobs (Z%) have no preview task scheduled."
+  Then break down by sales rep. Then show example problem jobs.
 
 LEADERSHIP / MARGIN & PRODUCT ANALYSIS
   • Rank products (items) by frequency in estimates — what sells most?
@@ -1110,6 +1118,38 @@ HARD FORMAT RULES
   ✓ Dollar amounts rounded to nearest dollar with $ sign
   ✓ Dates as Mon D, YYYY (e.g. Apr 5, 2026)
   ✓ Percentages where useful (e.g. "60% unpaid")
+════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════
+PIPELINE ANALYSIS — FORMAT WHEN analyze_job_pipeline RETURNS
+════════════════════════════════════════════════════════
+ALWAYS present results in this exact order:
+
+1. HEADLINE — total analysed and the single most critical finding.
+   "**Of 20 approved jobs, 13 (65%) are missing at least one required step.**"
+
+2. BREAKDOWN — one line per issue type, with count and percentage:
+   • No preview task: X (Y%)
+   • Preview created late (>3 days after approval): X (Y%)
+   • No install scheduled: X (Y%)
+   • Avg days from approval to preview: N days
+   • Avg days from approval to install: N days
+
+3. BY SALES REP — short table, reps sorted by number of issues:
+   | Rep | Jobs | No Preview | No Install |
+   Only show reps with at least one issue. Max 6 rows.
+
+4. EXAMPLE PROBLEM JOBS — up to 10 rows:
+   | Estimate # | Customer | Approved | Issue |
+   Use plain language for Issue: "No preview task", "Preview 8 days late", "No install scheduled"
+
+5. ONE sentence offering to drill into a specific rep, date range, or job.
+
+RULES:
+  ✗ Never expose raw field names (no "no_preview_task", "preview_late_8d")
+  ✓ Translate issue codes to plain English
+  ✓ Always show percentages alongside counts
+  ✓ If avg_days_to_preview or avg_days_to_install is null, say "not enough data"
 ════════════════════════════════════════════════════════
 
 ════════════════════════════════════════════════════════
@@ -1422,6 +1462,54 @@ _CHAT_TOOLS = [
             "required": ["opportunity_id"],
         },
     },
+    # ── Operations Analysis ────────────────────────────────────────────────────
+    {
+        "name": "analyze_job_pipeline",
+        "description": (
+            "Operations pipeline analysis — WHERE JOBS BREAK. "
+            "For each approved or in-progress estimate, checks: "
+            "(1) does a preview task exist, and was it created within 3 days of approval? "
+            "(2) does an install task exist with a scheduled date? "
+            "(3) how long are the gaps between each stage? "
+            "Returns: overall summary with percentages, by-rep breakdown, "
+            "and up to 10 example problem jobs with key dates and issue types. "
+            "Use this tool for ANY question about: "
+            "'where are jobs breaking', 'pipeline delays', 'ops analysis', "
+            "'which jobs have no preview', 'which jobs have no install scheduled', "
+            "'show me delayed jobs', 'process breakdown', 'approval to install timeline', "
+            "'how long between approval and install', 'pipeline report'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        "Number of estimates to analyse (default 20, max 50). "
+                        "Higher values give a fuller picture but take longer — "
+                        "each estimate requires one additional task API call."
+                    ),
+                },
+                "status_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": (
+                        "Status IDs to include. Default [22] (Approved). "
+                        "Use [22, 25] to include both Approved and In Progress."
+                    ),
+                },
+                "date_from": {
+                    "type": "string",
+                    "description": "Only include estimates created on or after this date (YYYY-MM-DD).",
+                },
+                "date_to": {
+                    "type": "string",
+                    "description": "Only include estimates created on or before this date (YYYY-MM-DD).",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 # NOTE: create_task and update_task are intentionally excluded.
 # This is a read-only BI system. Write operations are not exposed as tools.
@@ -1722,6 +1810,235 @@ def _paginated_customer_search(search_name: str) -> dict:
         "estimates": all_estimates,
         "total":     grand_total,
         "source":    "striven_live",
+    }
+
+
+def _run_pipeline_analysis(
+    limit: int = 20,
+    status_ids: list[int] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict:
+    """
+    Operations pipeline analysis — "Where Jobs Break".
+
+    For each approved (or in-progress) estimate:
+      1. Fetch estimate list from Striven (live, read-only)
+      2. For each estimate, fetch its linked tasks via RelatedEntityId
+      3. Classify tasks as 'preview' or 'install' using name/type keywords
+      4. Compute timeline gaps (days: approval → preview created, approval → install due)
+      5. Flag jobs with missing or late steps
+
+    Returns a structured analysis dict with summary stats, by-rep breakdown,
+    and up to 10 problem job examples ready for Claude to present.
+    """
+    import time as _time
+    from datetime import datetime
+
+    t_start = _time.monotonic()
+
+    if status_ids is None:
+        status_ids = [22]   # Approved by default
+
+    limit = min(limit, 50)  # hard cap — prevents runaway API calls
+
+    # ── Task classification keywords ──────────────────────────────────────────
+    PREVIEW_KW = {
+        "preview", "pre-install", "pre install", "site visit", "measure",
+        "measurement", "assessment", "consult", "survey", "walkthrough",
+        "walk-through", "walk through", "site check", "site review",
+    }
+    INSTALL_KW = {"install", "installation", "set up", "setup"}
+
+    def classify_task(task: dict) -> str:
+        """Return 'preview', 'install', or 'other' based on name and type keywords."""
+        text = " ".join([
+            (task.get("name")      or "").lower(),
+            (task.get("task_type") or "").lower(),
+        ])
+        for kw in PREVIEW_KW:
+            if kw in text:
+                return "preview"
+        for kw in INSTALL_KW:
+            if kw in text:
+                return "install"
+        return "other"
+
+    def parse_date(s: str | None) -> datetime | None:
+        """Parse an ISO date string robustly. Returns None if unparseable."""
+        if not s:
+            return None
+        s = s[:19]  # strip microseconds / timezone suffix
+        if "T" in s:
+            try:
+                return datetime.strptime(s, "%Y-%m-%dT%H:%M:%S")
+            except ValueError:
+                pass
+        try:
+            return datetime.strptime(s[:10], "%Y-%m-%d")
+        except ValueError:
+            return None
+
+    def days_between(a: str | None, b: str | None) -> int | None:
+        da, db = parse_date(a), parse_date(b)
+        if da is None or db is None:
+            return None
+        return (db - da).days
+
+    # ── Step 1: Fetch estimates ───────────────────────────────────────────────
+    all_estimates: list[dict] = []
+
+    for sid in status_ids:
+        body: dict = {"PageIndex": 0, "PageSize": limit, "StatusChangedTo": sid}
+        if date_from or date_to:
+            dr: dict = {}
+            if date_from: dr["DateFrom"] = date_from
+            if date_to:   dr["DateTo"]   = date_to
+            body["DateCreatedRange"] = dr
+        print(f"[pipeline_analysis] Fetching estimates status={sid} limit={limit}", flush=True)
+        raw  = striven.search_sales_orders(body)
+        data = raw.get("data") or []
+        all_estimates.extend([_fmt(r) for r in data])
+        print(f"[pipeline_analysis] status={sid} → {len(data)} estimates returned", flush=True)
+
+    # Deduplicate in case status lists overlap, then cap at limit
+    seen: set = set()
+    estimates: list[dict] = []
+    for e in all_estimates:
+        eid = e.get("id")
+        if eid not in seen:
+            seen.add(eid)
+            estimates.append(e)
+    estimates = estimates[:limit]
+    total_analyzed = len(estimates)
+
+    if total_analyzed == 0:
+        return {
+            "total_analyzed": 0,
+            "summary": {"error": "No estimates found matching the given criteria."},
+            "problem_jobs": [],
+            "by_sales_rep": [],
+        }
+
+    # ── Step 2: Fetch tasks for each estimate ─────────────────────────────────
+    job_results: list[dict] = []
+
+    for est in estimates:
+        est_id        = est.get("id")
+        date_approved = est.get("date_approved")
+
+        try:
+            task_raw  = striven.search_tasks({"RelatedEntityId": est_id, "PageSize": 25})
+            task_data = task_raw.get("data") or []
+            tasks     = [_fmt_task(t) for t in task_data]
+        except Exception as exc:
+            print(f"[pipeline_analysis] WARNING: task fetch failed for est {est_id}: {exc}", flush=True)
+            tasks = []
+
+        # Classify and pick earliest of each type
+        preview_tasks = [t for t in tasks if classify_task(t) == "preview"]
+        install_tasks = [t for t in tasks if classify_task(t) == "install"]
+        preview_task  = preview_tasks[0] if preview_tasks else None
+        install_task  = install_tasks[0] if install_tasks else None
+
+        # Compute timeline gaps
+        days_to_preview = (
+            days_between(date_approved, preview_task.get("date_created"))
+            if preview_task else None
+        )
+        install_ref = (
+            install_task.get("due_date") or install_task.get("date_created")
+            if install_task else None
+        )
+        days_to_install = days_between(date_approved, install_ref) if install_ref else None
+
+        # Flag issues
+        issues: list[str] = []
+        if not preview_task:
+            issues.append("no_preview_task")
+        elif days_to_preview is not None and days_to_preview > 3:
+            issues.append(f"preview_late_{days_to_preview}d")
+        if not install_task:
+            issues.append("no_install_task")
+
+        job_results.append({
+            "estimate_id":     est_id,
+            "estimate_number": est.get("estimate_number"),
+            "customer_name":   est.get("customer_name"),
+            "sales_rep":       est.get("sales_rep") or "Unassigned",
+            "status":          est.get("status"),
+            "total":           est.get("total"),
+            "date_approved":   date_approved,
+            "preview_task":    preview_task,
+            "install_task":    install_task,
+            "days_to_preview": days_to_preview,
+            "days_to_install": days_to_install,
+            "all_task_count":  len(tasks),
+            "issues":          issues,
+            "has_issues":      bool(issues),
+        })
+
+    # ── Step 3: Summary stats ─────────────────────────────────────────────────
+    no_preview   = [j for j in job_results if "no_preview_task"  in j["issues"]]
+    preview_late = [j for j in job_results if any("preview_late" in i for i in j["issues"])]
+    no_install   = [j for j in job_results if "no_install_task"  in j["issues"]]
+    has_issues   = [j for j in job_results if j["has_issues"]]
+
+    dtp = [j["days_to_preview"] for j in job_results if j["days_to_preview"] is not None]
+    dti = [j["days_to_install"] for j in job_results if j["days_to_install"] is not None]
+    avg_days_to_preview = round(sum(dtp) / len(dtp), 1) if dtp else None
+    avg_days_to_install = round(sum(dti) / len(dti), 1) if dti else None
+
+    # ── Step 4: By-rep breakdown ──────────────────────────────────────────────
+    rep_stats: dict[str, dict] = {}
+    for j in job_results:
+        rep = j.get("sales_rep") or "Unassigned"
+        if rep not in rep_stats:
+            rep_stats[rep] = {
+                "rep": rep, "count": 0,
+                "no_preview": 0, "no_install": 0, "has_issues": 0,
+            }
+        rep_stats[rep]["count"] += 1
+        if "no_preview_task" in j["issues"]: rep_stats[rep]["no_preview"] += 1
+        if "no_install_task" in j["issues"]: rep_stats[rep]["no_install"] += 1
+        if j["has_issues"]:                  rep_stats[rep]["has_issues"] += 1
+
+    by_rep = sorted(rep_stats.values(), key=lambda x: x["has_issues"], reverse=True)
+
+    # ── Step 5: Problem examples — most issues first, then oldest approval ────
+    problem_jobs = sorted(
+        has_issues,
+        key=lambda j: (-len(j["issues"]), j.get("date_approved") or ""),
+    )[:10]
+
+    elapsed = round(_time.monotonic() - t_start, 2)
+    print(
+        f"[pipeline_analysis] Complete — {total_analyzed} estimates analysed, "
+        f"{len(has_issues)} with issues, {elapsed}s elapsed",
+        flush=True,
+    )
+
+    return {
+        "total_analyzed":    total_analyzed,
+        "total_with_issues": len(has_issues),
+        "summary": {
+            "no_preview_task":     len(no_preview),
+            "pct_no_preview":      round(len(no_preview)   / total_analyzed * 100) if total_analyzed else 0,
+            "preview_task_late":   len(preview_late),
+            "pct_preview_late":    round(len(preview_late) / total_analyzed * 100) if total_analyzed else 0,
+            "no_install_task":     len(no_install),
+            "pct_no_install":      round(len(no_install)   / total_analyzed * 100) if total_analyzed else 0,
+            "avg_days_to_preview": avg_days_to_preview,
+            "avg_days_to_install": avg_days_to_install,
+        },
+        "by_sales_rep": by_rep,
+        "problem_jobs": problem_jobs,
+        "note": (
+            f"Analysed {total_analyzed} estimates in {elapsed}s. "
+            "Task classification uses name/type keyword matching. "
+            "Preview keywords: preview, site visit, measure, consult, survey. "
+            "Install keywords: install, installation."
+        ),
     }
 
 
@@ -2076,6 +2393,29 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
         if name == "get_opportunity_by_id":
             raw = striven.get_opportunity(tool_input["opportunity_id"])
             return _fmt_opportunity(raw)
+
+        # ── analyze_job_pipeline ──────────────────────────────────────────────
+        # Operations analysis — "Where Jobs Break".
+        # Fetches approved/in-progress estimates, looks up their tasks,
+        # classifies preview vs install tasks, measures timeline gaps,
+        # and returns a structured breakdown of where the process fails.
+        if name == "analyze_job_pipeline":
+            limit      = min(tool_input.get("limit", 20), 50)
+            status_ids = tool_input.get("status_ids", [22])
+            date_from  = tool_input.get("date_from")
+            date_to    = tool_input.get("date_to")
+            print(
+                f"[analyze_job_pipeline] limit={limit} "
+                f"status_ids={status_ids} "
+                f"date_from={date_from} date_to={date_to}",
+                flush=True,
+            )
+            return _run_pipeline_analysis(
+                limit=limit,
+                status_ids=status_ids,
+                date_from=date_from,
+                date_to=date_to,
+            )
 
         return {"error": f"Unknown tool: {name}"}
 
