@@ -2908,14 +2908,216 @@ def chat_api():
     tools_used: list[str] = []
 
     # ── System prompt ─────────────────────────────────────────────────────────
-    # We do NOT embed the full knowledge files here — that adds ~4,000 tokens
-    # to every single Claude API call, making each one progressively slower as
-    # conversation messages accumulate.
-    #
-    # Instead: knowledge is available via the search_knowledge tool (on demand).
-    # The system prompt tells Claude exactly when to use it.
-    # This drops per-call input from ~8,500 tokens to ~4,500 tokens.
     effective_prompt = _SYSTEM_PROMPT
+
+    # ── FAST PATH — single Claude call ────────────────────────────────────────
+    # For questions where we can determine the right tool deterministically from
+    # keywords, we skip the first Claude call entirely:
+    #   Normal flow:  Claude call #1 (pick tool) → Striven → Claude call #2 (answer)
+    #   Fast path:    Striven → Claude call #1 (answer)
+    #
+    # This cuts response time roughly in half for the most common queries.
+    # The full agentic loop below remains as the fallback for everything else.
+    #
+    # Rules for adding a pattern here:
+    #   - The intent must be unambiguous from keywords alone
+    #   - Exactly ONE tool must be the right answer
+    #   - The pattern must not conflict with another (order matters: more specific first)
+    #   - Anything ambiguous goes to the agentic loop — never force a wrong tool
+
+    import re as _re
+
+    def _fast_path_prefetch(question: str) -> tuple[str | None, dict | None]:
+        """
+        Classify the question and pre-fetch data without calling Claude first.
+
+        Returns (tool_name, result_dict) if a fast-path match is found,
+        or (None, None) to fall through to the agentic loop.
+
+        Pattern priority: most specific patterns listed first.
+        Gas log / audit patterns are intentionally excluded — they are slow
+        scans that take 60+ seconds and must use the dedicated audit tools.
+        """
+        q = question.lower()
+
+        # ── Estimate count ────────────────────────────────────────────────────
+        if _re.search(
+            r'\bhow many\b.*\bestimate|\bestimate.*\bhow many\b'
+            r'|\btotal.*\bestimate|\bestimate.*\bcount\b'
+            r'|\bcount.*\bestimate|\bhow many.*\border|\btotal.*\border',
+            q,
+        ):
+            return "count_estimates", _execute_tool("count_estimates", {})
+
+        # ── High-value / biggest jobs ─────────────────────────────────────────
+        if _re.search(
+            r'\bbiggest\b|\bhighest.?value\b|\blargest\b|\bmost\s+expensive\b'
+            r'|\btop\s+jobs\b|\bhigh.?value\b|\bover\s+\$',
+            q,
+        ):
+            return "high_value_estimates", _execute_tool("high_value_estimates", {})
+
+        # ── Approved estimates ────────────────────────────────────────────────
+        if _re.search(r'\bapproved\b.*\bestimate|\bestimate.*\bapproved\b|\bwhat.*\bapproved\b', q):
+            return "search_estimates", _execute_tool(
+                "search_estimates", {"status": 22, "page_size": 25}
+            )
+
+        # ── In-progress / active jobs ─────────────────────────────────────────
+        if _re.search(r'\bin.?progress\b|\bactive\s+jobs\b|\bcurrently\s+running\b', q):
+            return "search_estimates", _execute_tool(
+                "search_estimates", {"status": 25, "page_size": 25}
+            )
+
+        # ── Quoted / open estimates ───────────────────────────────────────────
+        if _re.search(r'\bquoted\b.*\bestimate|\bestimate.*\bquoted\b|\bopen\s+quote', q):
+            return "search_estimates", _execute_tool(
+                "search_estimates", {"status": 19, "page_size": 25}
+            )
+
+        # ── Recent / latest estimates (no status filter) ──────────────────────
+        if _re.search(
+            r'\brecent\b|\blatest\b|\blast\s+\d+\b|\bmost\s+recent\b|\bnew(?:est)?\s+estimate',
+            q,
+        ):
+            return "search_estimates", _execute_tool(
+                "search_estimates", {"page_size": 25}
+            )
+
+        # ── Specific estimate by number ───────────────────────────────────────
+        m = _re.search(r'\bestimate\s+#?\s*(\d{3,6})\b|\b#(\d{3,6})\b|\bso[-\s]?(\d{3,6})\b', q)
+        if m:
+            eid = int(next(g for g in m.groups() if g))
+            return "get_estimate_by_id", _execute_tool("get_estimate_by_id", {"estimate_id": eid})
+
+        # ── Customer lookup ───────────────────────────────────────────────────
+        # Pattern: one or more Title-Case words (no spaces in char class — prevents
+        # greedy over-capture). Matches "Scenic Custom Homes" but not plain words.
+        _TCASE  = r'[A-Z][a-zA-Z&]+(?:\s+[A-Z][a-zA-Z&]+)*'
+        _ENTITY = r'(?:estimate|job|order)s?'   # matches singular and plural
+        m = _re.search(
+            rf'{_ENTITY}\s+for\s+({_TCASE})'
+            rf'|(?:show|find|get)\s+(?:me\s+)?({_TCASE})(?:\'s|s)?\s+{_ENTITY}'
+            rf'|\bfor\s+(?:customer\s+)?({_TCASE})',
+            question,           # original case — customer names are capitalised
+            _re.IGNORECASE,     # match "show"/"Show"/"SHOW" etc.
+        )
+        if m:
+            cname = next(g for g in m.groups() if g).strip()
+            return "search_estimates_by_customer", _execute_tool(
+                "search_estimates_by_customer", {"name": cname}
+            )
+
+        # ── Invoices / AR ─────────────────────────────────────────────────────
+        if _re.search(r'\binvoice|\bwho\s+owes\b|\boutstanding\s+balance|\baccounts\s+receiv', q):
+            return "search_invoices", _execute_tool("search_invoices", {"page_size": 25})
+
+        # ── Payments received ─────────────────────────────────────────────────
+        if _re.search(r'\bpayment.*receiv|\bcash\s+collect|\bwho.*paid\b', q):
+            return "search_payments", _execute_tool("search_payments", {"page_size": 25})
+
+        # ── Bills / AP ────────────────────────────────────────────────────────
+        if _re.search(r'\bbill|\bvendor\s+bill|\baccounts\s+pay|\bwhat\s+we\s+owe\b', q):
+            return "search_bills", _execute_tool("search_bills", {"page_size": 25})
+
+        # ── Purchase orders ───────────────────────────────────────────────────
+        if _re.search(r'\bpurchase\s+order|\bopen\s+po\b|\bpo\s+list\b', q):
+            return "search_purchase_orders", _execute_tool(
+                "search_purchase_orders", {"page_size": 25}
+            )
+
+        # ── Tasks / workload ──────────────────────────────────────────────────
+        if _re.search(r'\bopen\s+task|\boverdue\s+task|\btask\s+list|\bworkload\b', q):
+            return "search_tasks", _execute_tool("search_tasks", {"page_size": 25})
+
+        # ── Knowledge-only questions (no live data needed) ────────────────────
+        if _re.search(
+            r'\bwhat\s+is\s+(?:the\s+)?process\b|\bhow\s+does\b|\bwhat\s+does\b'
+            r'|\bwhat\s+(?:fees|items|line\s+items)\b|\bwhat\s+should\b'
+            r'|\bexplain\b|\bdefinition\b|\bnaming\s+convention\b'
+            r'|\bwhat\s+(?:is\s+)?(?:a\s+)?(?:gas\s+log|chimney|isokern|preview\s+task)\b',
+            q,
+        ):
+            results   = _knowledge.search(question, top_k=5)
+            knowledge = _knowledge.format_search_results(results)
+            return "search_knowledge", {"sections_found": len(results), "content": knowledge}
+
+        return None, None   # no fast-path match — use agentic loop
+
+    # Try the fast path only when this is the first user message (not mid-conversation).
+    # Mid-conversation follow-ups need the full loop because context matters.
+    _is_first_turn = sum(1 for m in messages if m.get("role") == "user") == 1
+
+    if _is_first_turn:
+        try:
+            _fp_tool, _fp_data = _fast_path_prefetch(user_question)
+        except Exception as _fp_exc:
+            print(f"[fast-path] prefetch error — falling back: {_fp_exc}", flush=True)
+            _fp_tool, _fp_data = None, None
+    else:
+        _fp_tool, _fp_data = None, None
+
+    if _fp_tool is not None and _fp_data is not None:
+        # We have the data. Make exactly one Claude call — no tools, just reasoning.
+        t_fp = _time_mod.monotonic()
+        tools_used = [_fp_tool]
+
+        # Truncate prefetched data the same way the loop does
+        _MAX_RESULT_CHARS_FP = 6_000
+        _fp_data_str = json.dumps(_fp_data)
+        if len(_fp_data_str) > _MAX_RESULT_CHARS_FP:
+            _fp_data_str = (
+                _fp_data_str[:_MAX_RESULT_CHARS_FP]
+                + f'\n... [truncated — {len(_fp_data_str) - _MAX_RESULT_CHARS_FP} chars omitted]'
+            )
+
+        # Inject the data as a prefetch context block in the user message.
+        # The last message in the history is the current user question.
+        # We append the data inline so Claude sees: question + data in one turn.
+        _fp_messages = list(messages[:-1])  # all prior turns unchanged
+        _last_user_content = messages[-1].get("content", "") if messages else ""
+        _fp_messages.append({
+            "role": "user",
+            "content": (
+                f"{_last_user_content}\n\n"
+                f"[Prefetched data from {_fp_tool}]\n"
+                f"{_fp_data_str}\n\n"
+                "Use the data above to answer the question directly. "
+                "Do not call any tools — the data is already here."
+            ),
+        })
+
+        try:
+            _fp_response = _anthropic_client.messages.create(
+                model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
+                max_tokens=2_048,
+                system=effective_prompt,
+                messages=_fp_messages,
+                # No tools passed — forces a direct text response
+            )
+            _fp_text = next(
+                (b.text for b in _fp_response.content if hasattr(b, "text")),
+                None,
+            )
+            if _fp_text:
+                elapsed_fp = round(_time_mod.monotonic() - t_fp, 2)
+                elapsed_total = round(_time_mod.monotonic() - t_req_start, 2)
+                print(
+                    f"[chat] FAST-PATH tool={_fp_tool} "
+                    f"input_tokens={_fp_response.usage.input_tokens} "
+                    f"output_tokens={_fp_response.usage.output_tokens} "
+                    f"claude_elapsed={elapsed_fp}s total_elapsed={elapsed_total}s",
+                    flush=True,
+                )
+                try:
+                    log_chat(user_question, tools_used, _fp_text)
+                except Exception as _le:
+                    print(f"[log_chat] WARNING: {_le}", flush=True)
+                return jsonify({"response": _fp_text})
+            # Empty response — fall through to loop
+            print("[chat] fast-path got empty response — falling back to loop", flush=True)
+        except Exception as _fp_call_exc:
+            print(f"[chat] fast-path Claude call failed — falling back: {_fp_call_exc}", flush=True)
 
     # ── Agentic loop ──────────────────────────────────────────────────────────
     try:
