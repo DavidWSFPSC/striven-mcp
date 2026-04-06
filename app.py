@@ -1130,6 +1130,7 @@ ALWAYS present results in this exact order:
 
 2. BREAKDOWN — one line per issue type, with count and percentage:
    • No preview task: X (Y%)
+   • Preview admin task only (no site preview confirmed): X (Y%) — only show if > 0
    • Preview created late (>3 days after approval): X (Y%)
    • No install scheduled: X (Y%)
    • Avg days from approval to preview: N days
@@ -1842,27 +1843,99 @@ def _run_pipeline_analysis(
 
     limit = min(limit, 50)  # hard cap — prevents runaway API calls
 
-    # ── Task classification keywords ──────────────────────────────────────────
-    PREVIEW_KW = {
-        "preview", "pre-install", "pre install", "site visit", "measure",
-        "measurement", "assessment", "consult", "survey", "walkthrough",
-        "walk-through", "walk through", "site check", "site review",
-    }
-    INSTALL_KW = {"install", "installation", "set up", "setup"}
+    # ── Task classification ───────────────────────────────────────────────────
+    #
+    # Preview detection uses Striven's actual task naming patterns.
+    # Three tiers are recognised:
+    #
+    #   STRONG  — task_type contains "preview" or "site inspections/preview"
+    #             OR task name starts with "preview", contains "[preview]",
+    #             "preview-", or "site preview"
+    #             → counts as the primary preview task for the job
+    #
+    #   ADMIN   — task name contains "update preview status"
+    #             → administrative/support task; does NOT count as the primary
+    #             site preview unless no strong match exists for this job
+    #
+    #   INSTALL — task name or type contains "install" / "installation"
+    #
+    # Valid preview statuses: Open, On Hold (both still count as existing)
+    # A cancelled or deleted preview task is intentionally ignored.
 
-    def classify_task(task: dict) -> str:
-        """Return 'preview', 'install', or 'other' based on name and type keywords."""
+    PREVIEW_VALID_STATUSES = {"open", "on hold"}
+
+    def _is_preview_valid_status(task: dict) -> bool:
+        status = (task.get("status") or "").strip().lower()
+        # Treat unknown/blank status as valid — better to count than to drop
+        return status == "" or status in PREVIEW_VALID_STATUSES
+
+    def _classify_preview(task: dict) -> str:
+        """
+        Return 'strong', 'admin', or 'none' for this task's preview signal.
+
+        Strong signals (any one match = strong):
+          • task_type contains "preview" (covers "Site Inspections/Preview" etc.)
+          • task_name starts with "preview"
+          • task_name contains "[preview]"
+          • task_name contains "preview-"
+          • task_name contains "site preview"
+
+        Weak / admin signal:
+          • task_name contains "update preview status"
+        """
+        name = (task.get("name")      or "").strip().lower()
+        ttype = (task.get("task_type") or "").strip().lower()
+
+        # Admin signal — check first so it cannot accidentally match strong
+        if "update preview status" in name:
+            return "admin"
+
+        # Strong signals
+        if "preview" in ttype:
+            return "strong"
+        if name.startswith("preview"):
+            return "strong"
+        if "[preview]" in name:
+            return "strong"
+        if "preview-" in name:
+            return "strong"
+        if "site preview" in name:
+            return "strong"
+
+        return "none"
+
+    def _classify_install(task: dict) -> bool:
+        """Return True if this task is an install task."""
         text = " ".join([
             (task.get("name")      or "").lower(),
             (task.get("task_type") or "").lower(),
         ])
-        for kw in PREVIEW_KW:
-            if kw in text:
-                return "preview"
-        for kw in INSTALL_KW:
-            if kw in text:
-                return "install"
-        return "other"
+        return "install" in text or "installation" in text
+
+    def _pick_preview_task(tasks: list[dict]) -> tuple[dict | None, str]:
+        """
+        Return (best_preview_task, tier) where tier is 'strong' or 'admin'.
+        Prefers strong signals. Falls back to admin only if no strong match exists.
+        Only considers tasks whose status is Open or On Hold.
+        """
+        strong_candidates = [
+            t for t in tasks
+            if _classify_preview(t) == "strong" and _is_preview_valid_status(t)
+        ]
+        if strong_candidates:
+            # Pick earliest by date_created
+            strong_candidates.sort(key=lambda t: t.get("date_created") or "")
+            return strong_candidates[0], "strong"
+
+        admin_candidates = [
+            t for t in tasks
+            if _classify_preview(t) == "admin" and _is_preview_valid_status(t)
+        ]
+        if admin_candidates:
+            admin_candidates.sort(key=lambda t: t.get("date_created") or "")
+            return admin_candidates[0], "admin"
+
+        return None, "none"
 
     def parse_date(s: str | None) -> datetime | None:
         """Parse an ISO date string robustly. Returns None if unparseable."""
@@ -1935,11 +2008,20 @@ def _run_pipeline_analysis(
             print(f"[pipeline_analysis] WARNING: task fetch failed for est {est_id}: {exc}", flush=True)
             tasks = []
 
-        # Classify and pick earliest of each type
-        preview_tasks = [t for t in tasks if classify_task(t) == "preview"]
-        install_tasks = [t for t in tasks if classify_task(t) == "install"]
-        preview_task  = preview_tasks[0] if preview_tasks else None
+        # Classify tasks using tiered preview logic + install detection
+        preview_task, preview_tier = _pick_preview_task(tasks)
+        install_tasks = [t for t in tasks if _classify_install(t)]
         install_task  = install_tasks[0] if install_tasks else None
+
+        # Log classification for every estimate so we can verify in server logs
+        print(
+            f"[pipeline_analysis] est={est_id} tasks={len(tasks)} "
+            f"preview_tier={preview_tier} "
+            f"preview_name={preview_task.get('name') if preview_task else 'none'!r} "
+            f"preview_type={preview_task.get('task_type') if preview_task else 'none'!r} "
+            f"install={'yes' if install_task else 'no'}",
+            flush=True,
+        )
 
         # Compute timeline gaps
         days_to_preview = (
@@ -1953,9 +2035,13 @@ def _run_pipeline_analysis(
         days_to_install = days_between(date_approved, install_ref) if install_ref else None
 
         # Flag issues
+        # A job with only an admin preview task (no strong signal) is still
+        # flagged as "preview_admin_only" so leadership can review.
         issues: list[str] = []
-        if not preview_task:
+        if preview_tier == "none":
             issues.append("no_preview_task")
+        elif preview_tier == "admin":
+            issues.append("preview_admin_only")
         elif days_to_preview is not None and days_to_preview > 3:
             issues.append(f"preview_late_{days_to_preview}d")
         if not install_task:
@@ -1970,6 +2056,7 @@ def _run_pipeline_analysis(
             "total":           est.get("total"),
             "date_approved":   date_approved,
             "preview_task":    preview_task,
+            "preview_tier":    preview_tier,
             "install_task":    install_task,
             "days_to_preview": days_to_preview,
             "days_to_install": days_to_install,
@@ -1979,10 +2066,11 @@ def _run_pipeline_analysis(
         })
 
     # ── Step 3: Summary stats ─────────────────────────────────────────────────
-    no_preview   = [j for j in job_results if "no_preview_task"  in j["issues"]]
-    preview_late = [j for j in job_results if any("preview_late" in i for i in j["issues"])]
-    no_install   = [j for j in job_results if "no_install_task"  in j["issues"]]
-    has_issues   = [j for j in job_results if j["has_issues"]]
+    no_preview        = [j for j in job_results if "no_preview_task"    in j["issues"]]
+    preview_admin     = [j for j in job_results if "preview_admin_only" in j["issues"]]
+    preview_late      = [j for j in job_results if any("preview_late"   in i for i in j["issues"])]
+    no_install        = [j for j in job_results if "no_install_task"    in j["issues"]]
+    has_issues        = [j for j in job_results if j["has_issues"]]
 
     dtp = [j["days_to_preview"] for j in job_results if j["days_to_preview"] is not None]
     dti = [j["days_to_install"] for j in job_results if j["days_to_install"] is not None]
@@ -2022,22 +2110,26 @@ def _run_pipeline_analysis(
         "total_analyzed":    total_analyzed,
         "total_with_issues": len(has_issues),
         "summary": {
-            "no_preview_task":     len(no_preview),
-            "pct_no_preview":      round(len(no_preview)   / total_analyzed * 100) if total_analyzed else 0,
-            "preview_task_late":   len(preview_late),
-            "pct_preview_late":    round(len(preview_late) / total_analyzed * 100) if total_analyzed else 0,
-            "no_install_task":     len(no_install),
-            "pct_no_install":      round(len(no_install)   / total_analyzed * 100) if total_analyzed else 0,
-            "avg_days_to_preview": avg_days_to_preview,
-            "avg_days_to_install": avg_days_to_install,
+            "no_preview_task":       len(no_preview),
+            "pct_no_preview":        round(len(no_preview)      / total_analyzed * 100) if total_analyzed else 0,
+            "preview_admin_only":    len(preview_admin),
+            "pct_preview_admin":     round(len(preview_admin)   / total_analyzed * 100) if total_analyzed else 0,
+            "preview_task_late":     len(preview_late),
+            "pct_preview_late":      round(len(preview_late)    / total_analyzed * 100) if total_analyzed else 0,
+            "no_install_task":       len(no_install),
+            "pct_no_install":        round(len(no_install)      / total_analyzed * 100) if total_analyzed else 0,
+            "avg_days_to_preview":   avg_days_to_preview,
+            "avg_days_to_install":   avg_days_to_install,
         },
         "by_sales_rep": by_rep,
         "problem_jobs": problem_jobs,
         "note": (
             f"Analysed {total_analyzed} estimates in {elapsed}s. "
-            "Task classification uses name/type keyword matching. "
-            "Preview keywords: preview, site visit, measure, consult, survey. "
-            "Install keywords: install, installation."
+            "Preview detection: STRONG = task_type contains 'preview', or name starts with "
+            "'preview', contains '[preview]', 'preview-', or 'site preview'. "
+            "ADMIN = name contains 'update preview status' (counted separately). "
+            "Valid preview statuses: Open, On Hold. "
+            "Install detection: name or type contains 'install'."
         ),
     }
 
