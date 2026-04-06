@@ -54,6 +54,7 @@ from services.supabase_client import (
     log_chat,
     get_chat_logs,
 )
+from services import knowledge as _knowledge
 
 # Load environment variables from .env (ignored in production if not present)
 load_dotenv()
@@ -83,6 +84,10 @@ app = Flask(__name__)
 # Single shared client; token is cached internally and refreshed as needed
 striven = StrivenClient()
 print("StrivenClient initialised — ready to serve live data.", flush=True)
+
+# Load knowledge base into memory (runs once at startup)
+_knowledge.load_all()
+print("Knowledge base loaded.", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -928,6 +933,19 @@ You serve six core functions:
   4. ACCOUNTING        — explain what customers owe, what has been paid, what is outstanding
   5. LEADERSHIP        — identify profitable vs problematic products; flag revenue risk
   6. SALES MANAGEMENT  — track rep performance; surface missed steps and recurring errors
+
+You have TWO knowledge sources:
+  A. LIVE STRIVEN DATA — real-time via Striven tools (estimates, tasks, invoices, etc.)
+  B. KNOWLEDGE BASE    — company documents via search_knowledge tool:
+       audit_rules.md         — all audit patterns and business rules
+       order_lifecycle.md     — status flow, stuck definitions, workflow stages
+       product_categories.md  — job types, what each includes, audit triggers
+       customer_types.md      — builder accounts, homeowner patterns, geography
+       striven_fields.md      — field definitions, API conventions, status codes
+       order_naming.md        — naming convention and common errors
+       estimating_standards.md — what makes a complete estimate per job type
+       roles.md               — how to tailor answers by who is asking
+       company_overview.md    — company background, vendors, revenue drivers
 ════════════════════════════════════════════════════════
 
 ════════════════════════════════════════════════════════
@@ -988,6 +1006,90 @@ TASKS & SCHEDULING
 
 CATALOG
   products / services / pricing           → search_items
+
+KNOWLEDGE BASE — call search_knowledge for:
+  what is the process for [job type]      → search_knowledge
+  what should a [job type] estimate include → search_knowledge + get_estimate_by_id
+  what fees are required on [job]         → search_knowledge
+  what does [term / status] mean          → search_knowledge
+  what are our audit rules                → search_knowledge
+  who are our builder customers           → search_knowledge
+  does estimate #N include everything     → get_estimate_by_id + search_knowledge
+  is this estimate correct / complete     → get_estimate_by_id + search_knowledge
+  what job types require a preview        → search_knowledge
+  naming convention / order name format   → search_knowledge
+  how does [workflow step] work           → search_knowledge
+════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════
+ROLE DETECTION — TAILOR YOUR RESPONSE
+════════════════════════════════════════════════════════
+Infer who is asking from their question and adjust accordingly:
+
+WILLIAM SMITH (CEO/Owner) — asks about revenue, risk, business health
+  → Lead with the dollar number or headline risk. One-paragraph max.
+  → Skip operational detail. Surface red flags.
+
+OPERATIONS / PROJECT MANAGERS — asks about stuck jobs, scheduling, pipeline
+  → Job-level tables: Estimate #, Customer, Status, Date, Issue
+  → Group by problem type. Make it actionable: "These 7 need a preview task today."
+
+SALES REPS — asks about specific customers or their own estimates
+  → Filter to relevant data. Flag their own audit issues.
+  → Tone: helpful, not accusatory.
+
+SCHEDULERS — asks about what's ready to schedule, techs, geographic clusters
+  → List approved jobs with city and job type. Note tech workload.
+  → Mention geographic grouping where applicable (Charleston traffic).
+
+ACCOUNTING (David) — asks about AR, missing fees, payments, revenue
+  → Dollar amounts first. Sort by balance descending.
+  → Separate overdue from not-yet-due. State exact revenue at risk.
+
+SERVICE MANAGER — asks about open service calls, techs, callbacks
+  → Task-level detail. Group by technician. Flag overdue.
+════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════
+PROACTIVE FLAG PROTOCOL
+════════════════════════════════════════════════════════
+Whenever you retrieve live data, scan for these and surface them
+WITHOUT being asked — add an ANOMALIES section if any are found:
+
+  ⚠ Estimates with OrderTotal = $0 or missing total
+  ⚠ Incomplete (status 18) estimates older than 7 days
+  ⚠ Quoted (status 19) estimates older than 30 days — follow-up needed
+  ⚠ Builder customers with 3+ open estimates — flag for pipeline review
+  ⚠ Approved estimates older than 14 days with no install task
+  ⚠ Gas log / burner jobs — flag if you suspect removal fee may be missing
+    (full audit requires gas_log_audit tool)
+
+Do not list every anomaly if there are many — summarise: "⚠ 6 estimates are
+over 30 days old in Quoted status — ask me to show them if needed."
+════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════
+HYBRID QUESTION ROUTING
+════════════════════════════════════════════════════════
+LIVE DATA ONLY — just Striven tools:
+  "How many estimates do we have?" / "Show me stuck jobs" / "Who owes us money?"
+
+KNOWLEDGE ONLY — just search_knowledge:
+  "What's our chimney repair process?" / "What fees are required on a gas log install?"
+  "What does 'Incomplete' mean?" / "Who are our builder customers?"
+
+HYBRID — search_knowledge THEN Striven tool(s):
+  "Does estimate 9264 include everything it should?"
+    → search_knowledge("estimating standards gas log") + get_estimate_by_id(9264)
+  "Is this job priced correctly?"
+    → search_knowledge("pricing standards [job type]") + get_estimate_by_id(N)
+  "Show me Scenic Custom Homes' open jobs and flag anything wrong"
+    → search_estimates_by_customer("Scenic Custom Homes") + search_knowledge("audit rules")
+
+AUDIT — dedicated audit tools:
+  "Run the gas log fee audit" → gas_log_audit
+  "Check portal flags" → portal_flag_audit
+  "Where are jobs breaking?" → analyze_job_pipeline
 ════════════════════════════════════════════════════════
 
 ════════════════════════════════════════════════════════
@@ -1516,6 +1618,40 @@ _CHAT_TOOLS = [
                 },
             },
             "required": [],
+        },
+    },
+    # ── Knowledge Base ─────────────────────────────────────────────────────────
+    {
+        "name": "search_knowledge",
+        "description": (
+            "Search the WilliamSmith internal knowledge base. "
+            "Use this tool to answer questions about: company procedures, "
+            "audit rules, product categories, job types, order lifecycle, "
+            "customer types, Striven field definitions, order naming conventions, "
+            "and role-specific guidance. "
+            "Always call this tool BEFORE answering questions about: "
+            "'what is the correct process for...', "
+            "'what are the rules for...', "
+            "'what should a [job type] estimate include', "
+            "'what does [term] mean', "
+            "'how does [workflow step] work', "
+            "'who are our builder customers', "
+            "'what job types require a preview'. "
+            "Do NOT call this for live Striven data — use Striven tools for that."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The question or topic to search the knowledge base for.",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Maximum number of knowledge sections to return (default 4, max 8).",
+                },
+            },
+            "required": ["query"],
         },
     },
 ]
@@ -2650,6 +2786,21 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                 date_to=date_to,
             )
 
+        # ── search_knowledge ──────────────────────────────────────────────────
+        # Searches the structured knowledge base (markdown files in /knowledge/).
+        # Returns the most relevant sections for the query.
+        if name == "search_knowledge":
+            query  = tool_input.get("query", "").strip()
+            top_k  = min(tool_input.get("top_k", 4), 8)
+            print(f"[search_knowledge] query={query!r} top_k={top_k}", flush=True)
+            results  = _knowledge.search(query, top_k=top_k)
+            formatted = _knowledge.format_search_results(results)
+            return {
+                "query":    query,
+                "sections_found": len(results),
+                "content":  formatted,
+            }
+
         return {"error": f"Unknown tool: {name}"}
 
     except Exception as exc:
@@ -2699,12 +2850,28 @@ def chat_api():
 
     tools_used: list[str] = []
 
+    # Build the effective system prompt: base prompt + always-on knowledge context
+    # The knowledge context block contains audit rules, order lifecycle, and product
+    # categories — small enough to always include, critical enough to always need.
+    _knowledge_ctx = _knowledge.get_always_context()
+    _effective_prompt = (
+        _SYSTEM_PROMPT
+        + "\n\n"
+        + "════════════════════════════════════════════════════════\n"
+        + "EMBEDDED KNOWLEDGE — ALWAYS AVAILABLE\n"
+        + "════════════════════════════════════════════════════════\n"
+        + "The following knowledge is embedded directly. Use it to answer questions\n"
+        + "about audit rules, job types, and order status WITHOUT calling search_knowledge.\n"
+        + "Call search_knowledge for deeper lookups (customer types, naming, roles, etc.).\n\n"
+        + _knowledge_ctx
+    ) if _knowledge_ctx else _SYSTEM_PROMPT
+
     # Agentic loop — keep going until Claude stops calling tools
     while True:
         response = client.messages.create(
             model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
             max_tokens=4096,
-            system=_SYSTEM_PROMPT,
+            system=_effective_prompt,
             tools=_CHAT_TOOLS,
             messages=messages,
         )
