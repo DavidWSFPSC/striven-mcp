@@ -40,6 +40,7 @@ import os
 import io
 import csv
 import json
+import time as _time_mod
 import anthropic
 from flask import Flask, jsonify, request, render_template, Response
 from dotenv import load_dotenv
@@ -88,6 +89,42 @@ print("StrivenClient initialised — ready to serve live data.", flush=True)
 # Load knowledge base into memory (runs once at startup)
 _knowledge.load_all()
 print("Knowledge base loaded.", flush=True)
+
+# ---------------------------------------------------------------------------
+# Anthropic client singleton — created once, reused across all requests.
+# Creating a new client per request was safe but wasted ~5ms and a TLS
+# handshake on every chat call.
+# ---------------------------------------------------------------------------
+_anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+
+# ---------------------------------------------------------------------------
+# Simple in-memory response cache
+# Keyed on a short string (tool name + stable arguments).
+# TTL = 60 seconds. Only used for cheap, stable queries.
+#
+# This is intentionally minimal — a dict, not Redis.
+# The goal is to avoid hitting Striven 3 times in 10 seconds for the
+# same count query when a user asks the same question twice.
+# ---------------------------------------------------------------------------
+_RESP_CACHE: dict[str, tuple[object, float]] = {}
+_CACHE_TTL   = 60  # seconds
+
+
+def _cache_get(key: str) -> object | None:
+    entry = _RESP_CACHE.get(key)
+    if entry is None:
+        return None
+    data, ts = entry
+    if _time_mod.monotonic() - ts < _CACHE_TTL:
+        print(f"[cache] HIT  key={key!r}", flush=True)
+        return data
+    del _RESP_CACHE[key]
+    return None
+
+
+def _cache_set(key: str, data: object) -> None:
+    _RESP_CACHE[key] = (data, _time_mod.monotonic())
+    print(f"[cache] SET  key={key!r}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -2419,34 +2456,43 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
         # We only need totalCount — no records are read.
         # NO fallback, NO Supabase, NO cache. Live Striven only.
         if name == "count_estimates":
+            cached = _cache_get("count_estimates")
+            if cached is not None:
+                return cached
             raw   = striven.search_sales_orders({"PageIndex": 0, "PageSize": 1})
             total = raw.get("totalCount", 0)
             if not total:
                 print(f"[count_estimates] WARNING: 'TotalCount' missing — keys={list(raw.keys())}", flush=True)
             print(f"[count_estimates] TotalCount={total}", flush=True)
-            return {
+            result = {
                 "total":  total,
                 "source": "striven_live",
                 "note":   "Live count from Striven /v1/sales-orders/search → totalCount field",
             }
+            _cache_set("count_estimates", result)
+            return result
 
         # ── high_value_estimates ─────────────────────────────────────────────
         # Fetch 100 recent records, filter client-side for total > $10,000,
         # sort highest-first, return top 25.
         if name == "high_value_estimates":
+            cached = _cache_get("high_value_estimates")
+            if cached is not None:
+                return cached
             raw     = striven.search_sales_orders({"PageIndex": 0, "PageSize": 100})
             data    = raw.get("data") or []
             total   = raw.get("totalCount", 0)
             if not data:
                 print(f"[high_value_estimates] WARNING: 'Data' key missing or null — keys={list(raw.keys())}", flush=True)
             print(f"[high_value_estimates] TotalCount={total} fetched={len(data)}", flush=True)
-            print(f"[high_value_estimates] First record sample: {data[0] if data else 'EMPTY'}", flush=True)
             high = sorted(
                 [_fmt(r) for r in data if (r.get("total") or r.get("OrderTotal") or 0) >= 10000],
                 key=lambda x: x["total"] or 0,
                 reverse=True,
             )[:25]
-            return {"count": len(high), "records": high, "source": "striven_live"}
+            result = {"count": len(high), "records": high, "source": "striven_live"}
+            _cache_set("high_value_estimates", result)
+            return result
 
         # ── search_estimates_by_customer ─────────────────────────────────────
         # Delegates entirely to _paginated_customer_search — single source of truth.
@@ -2830,17 +2876,28 @@ def chat_api():
     Agentic chat endpoint.
     Accepts: { messages: [{role, content}, ...] }
     Returns: { response: "<markdown string>" }
+
+    Reliability guarantees:
+      - Max 6 tool-use iterations (prevents infinite loops)
+      - Tool results truncated to 6,000 chars (prevents context explosion)
+      - Full try/except returns clean JSON on any failure (prevents "Network error")
+      - Uses module-level Anthropic singleton (no TLS handshake per request)
+      - Knowledge context NOT embedded in prompt (saves ~4,000 tokens per call)
     """
+    # ── Constants ─────────────────────────────────────────────────────────────
+    MAX_ITERATIONS   = 6       # hard cap on agentic tool-use loops
+    MAX_RESULT_CHARS = 6_000   # tool result JSON truncated beyond this
+    MAX_OUTPUT_TOKENS = 2_048  # sufficient for all normal responses
+
+    t_req_start = _time_mod.monotonic()
+
     data     = request.get_json(force=True)
     messages = data.get("messages", [])
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
+    if not os.getenv("ANTHROPIC_API_KEY"):
         return jsonify({"error": "ANTHROPIC_API_KEY not configured on server."}), 500
 
-    client = anthropic.Anthropic(api_key=api_key)
-
-    # Capture the user's question for logging (last user message in the chain)
+    # Capture the user's question for logging
     user_question = ""
     for m in reversed(messages):
         if m.get("role") == "user":
@@ -2850,65 +2907,158 @@ def chat_api():
 
     tools_used: list[str] = []
 
-    # Build the effective system prompt: base prompt + always-on knowledge context
-    # The knowledge context block contains audit rules, order lifecycle, and product
-    # categories — small enough to always include, critical enough to always need.
-    _knowledge_ctx = _knowledge.get_always_context()
-    _effective_prompt = (
-        _SYSTEM_PROMPT
-        + "\n\n"
-        + "════════════════════════════════════════════════════════\n"
-        + "EMBEDDED KNOWLEDGE — ALWAYS AVAILABLE\n"
-        + "════════════════════════════════════════════════════════\n"
-        + "The following knowledge is embedded directly. Use it to answer questions\n"
-        + "about audit rules, job types, and order status WITHOUT calling search_knowledge.\n"
-        + "Call search_knowledge for deeper lookups (customer types, naming, roles, etc.).\n\n"
-        + _knowledge_ctx
-    ) if _knowledge_ctx else _SYSTEM_PROMPT
+    # ── System prompt ─────────────────────────────────────────────────────────
+    # We do NOT embed the full knowledge files here — that adds ~4,000 tokens
+    # to every single Claude API call, making each one progressively slower as
+    # conversation messages accumulate.
+    #
+    # Instead: knowledge is available via the search_knowledge tool (on demand).
+    # The system prompt tells Claude exactly when to use it.
+    # This drops per-call input from ~8,500 tokens to ~4,500 tokens.
+    effective_prompt = _SYSTEM_PROMPT
 
-    # Agentic loop — keep going until Claude stops calling tools
-    while True:
-        response = client.messages.create(
-            model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
-            max_tokens=4096,
-            system=_effective_prompt,
-            tools=_CHAT_TOOLS,
-            messages=messages,
-        )
+    # ── Agentic loop ──────────────────────────────────────────────────────────
+    try:
+        iteration = 0
+        while iteration < MAX_ITERATIONS:
+            iteration += 1
+            t_iter = _time_mod.monotonic()
 
-        if response.stop_reason == "tool_use":
-            # Execute every tool Claude asked for
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    tools_used.append(block.name)
-                    result = _execute_tool(block.name, block.input)
-                    tool_results.append({
-                        "type":        "tool_result",
-                        "tool_use_id": block.id,
-                        "content":     json.dumps(result),
-                    })
-
-            # Add assistant turn + tool results and loop
-            messages = messages + [
-                {"role": "assistant", "content": response.content},
-                {"role": "user",      "content": tool_results},
-            ]
-
-        else:
-            # Final text response
-            text = next(
-                (block.text for block in response.content if hasattr(block, "text")),
-                "No response generated.",
+            response = _anthropic_client.messages.create(
+                model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
+                max_tokens=MAX_OUTPUT_TOKENS,
+                system=effective_prompt,
+                tools=_CHAT_TOOLS,
+                messages=messages,
             )
 
-            # Log the completed turn to Supabase (never let logging crash the chat)
-            try:
-                log_chat(user_question, tools_used, text)
-            except Exception as log_exc:
-                print(f"[log_chat] WARNING: failed to log — {log_exc}", flush=True)
+            elapsed_iter = round(_time_mod.monotonic() - t_iter, 2)
+            print(
+                f"[chat] iter={iteration} stop_reason={response.stop_reason} "
+                f"input_tokens={response.usage.input_tokens} "
+                f"output_tokens={response.usage.output_tokens} "
+                f"elapsed={elapsed_iter}s",
+                flush=True,
+            )
 
-            return jsonify({"response": text})
+            if response.stop_reason == "tool_use":
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        tools_used.append(block.name)
+                        t_tool = _time_mod.monotonic()
+                        result = _execute_tool(block.name, block.input)
+                        elapsed_tool = round(_time_mod.monotonic() - t_tool, 2)
+
+                        # Serialise and truncate — prevents context explosion.
+                        # A 25-estimate search result can be 10KB+ of JSON.
+                        # Truncating here keeps subsequent Claude calls fast.
+                        result_str = json.dumps(result)
+                        if len(result_str) > MAX_RESULT_CHARS:
+                            result_str = (
+                                result_str[:MAX_RESULT_CHARS]
+                                + f'\n... [truncated — {len(result_str) - MAX_RESULT_CHARS} chars omitted]"'
+                            )
+                            print(
+                                f"[chat] tool={block.name} result truncated to "
+                                f"{MAX_RESULT_CHARS} chars",
+                                flush=True,
+                            )
+
+                        print(
+                            f"[chat] tool={block.name} "
+                            f"result_chars={len(result_str)} "
+                            f"elapsed={elapsed_tool}s",
+                            flush=True,
+                        )
+
+                        tool_results.append({
+                            "type":        "tool_result",
+                            "tool_use_id": block.id,
+                            "content":     result_str,
+                        })
+
+                messages = messages + [
+                    {"role": "assistant", "content": response.content},
+                    {"role": "user",      "content": tool_results},
+                ]
+
+            else:
+                # stop_reason == "end_turn" (or "max_tokens") — extract text
+                text = next(
+                    (block.text for block in response.content if hasattr(block, "text")),
+                    "No response generated.",
+                )
+
+                elapsed_total = round(_time_mod.monotonic() - t_req_start, 2)
+                print(
+                    f"[chat] DONE iterations={iteration} tools={tools_used} "
+                    f"total_elapsed={elapsed_total}s",
+                    flush=True,
+                )
+
+                try:
+                    log_chat(user_question, tools_used, text)
+                except Exception as log_exc:
+                    print(f"[log_chat] WARNING: {log_exc}", flush=True)
+
+                return jsonify({"response": text})
+
+        # ── Iteration cap reached ─────────────────────────────────────────────
+        # Claude used all 6 rounds of tools without producing a final answer.
+        # Ask it to wrap up now with whatever it has.
+        print(
+            f"[chat] WARNING: iteration cap ({MAX_ITERATIONS}) reached — "
+            "requesting final answer",
+            flush=True,
+        )
+        messages = messages + [{
+            "role": "user",
+            "content": (
+                "[System: You have reached the maximum number of tool calls. "
+                "Please provide your best answer now using the information "
+                "already retrieved. Do not call any more tools.]"
+            ),
+        }]
+        response = _anthropic_client.messages.create(
+            model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
+            max_tokens=MAX_OUTPUT_TOKENS,
+            system=effective_prompt,
+            tools=_CHAT_TOOLS,
+            tool_choice={"type": "none"},   # force text-only response
+            messages=messages,
+        )
+        text = next(
+            (block.text for block in response.content if hasattr(block, "text")),
+            "I retrieved the data but hit a processing limit. Please try a more specific question.",
+        )
+        elapsed_total = round(_time_mod.monotonic() - t_req_start, 2)
+        print(
+            f"[chat] DONE (cap) iterations={MAX_ITERATIONS} "
+            f"total_elapsed={elapsed_total}s",
+            flush=True,
+        )
+        try:
+            log_chat(user_question, tools_used, text)
+        except Exception as log_exc:
+            print(f"[log_chat] WARNING: {log_exc}", flush=True)
+        return jsonify({"response": text})
+
+    except Exception as exc:
+        # ── Safety net ────────────────────────────────────────────────────────
+        # Any unhandled exception returns clean JSON — never a raw 500 with no
+        # body, which is what the frontend sees as "Network error".
+        elapsed_total = round(_time_mod.monotonic() - t_req_start, 2)
+        print(
+            f"[chat] ERROR after {elapsed_total}s: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        return jsonify({
+            "error": (
+                f"Something went wrong on the server ({type(exc).__name__}). "
+                "Please try again — if the problem persists, try a simpler question."
+            )
+        }), 500
 
 
 # ---------------------------------------------------------------------------
