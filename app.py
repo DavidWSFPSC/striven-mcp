@@ -536,10 +536,18 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
             flush=True,
         )
 
+    # TEMP filtered + limited scan to avoid Render timeout; replace with full background job later
+    #
     # Only audit active estimates — Quoted(19), Pending Approval(20),
-    # Approved(22), In Progress(25).  Completed(27) and Incomplete(18)
-    # don't need the audit and dramatically shrink the pool size.
+    # Approved(22), In Progress(25).
+    # Excluded intentionally: Incomplete(18), Completed(27), Cancelled, Lost.
+    # These statuses are never queried so they never enter the count.
     ACTIVE_STATUSES = (19, 20, 22, 25)
+
+    # Cap total estimates inspected per production run.
+    # Explicit limit= arg (test runs) takes precedence; otherwise DEFAULT_SCAN_LIMIT applies.
+    DEFAULT_SCAN_LIMIT = 400
+    effective_limit    = limit if limit is not None else DEFAULT_SCAN_LIMIT
 
     print(
         f"[gas-log-audit] Starting — 2025 estimates with statuses {ACTIVE_STATUSES}",
@@ -589,7 +597,7 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
 
             # ── Process each stub immediately — no accumulation ──────────────
             for r in data:
-                if limit and total_inspected >= limit:
+                if total_inspected >= effective_limit:
                     break
 
                 customer  = r.get("Customer") or r.get("customer") or {}
@@ -671,9 +679,9 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
                         flush=True,
                     )
 
-            # Honour optional test limit
-            if limit and total_inspected >= limit:
-                print(f"[gas-log-audit] Limit {limit} reached — stopping.", flush=True)
+            # Honour scan limit (test runs use explicit limit; production uses DEFAULT_SCAN_LIMIT)
+            if total_inspected >= effective_limit:
+                print(f"[gas-log-audit] Limit {effective_limit} reached — stopping.", flush=True)
                 break
 
             # All pages for this status exhausted
@@ -686,7 +694,7 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
 
             page_index += 1
 
-        if limit and total_inspected >= limit:
+        if total_inspected >= effective_limit:
             break
 
     elapsed = round(_time.monotonic() - t_start, 2)
