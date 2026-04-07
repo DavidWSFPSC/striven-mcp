@@ -1022,30 +1022,48 @@ def estimates_by_customer():
 @app.route("/debug-one-order", methods=["GET"])
 def debug_one_order():
     """
-    Fetch ONE raw Striven sales order and print every field to logs.
-    Used to identify the correct field names for sales rep, type, etc.
+    Fetch raw Striven sales orders and return every field for inspection.
+    ?n=N  — number of records to return (default 5, max 20)
+    ?id=N — also fetch the full GET detail for order id N
+
+    Returns raw search stubs AND _fmt() normalised forms side by side.
     No Claude call — safe to hit repeatedly.
     """
     import json as _json
     try:
-        raw = striven.search_sales_orders({"PageIndex": 0, "PageSize": 1})
+        n = min(int(request.args.get("n", 5)), 20)
+        raw = striven.search_sales_orders({"PageIndex": 0, "PageSize": n})
         orders = raw.get("data") or []
         if not orders:
             print("[debug-one-order] NO ORDERS RETURNED", flush=True)
             return jsonify({"status": "no orders"})
 
-        order = orders[0]
-        print("----- RAW ORDER DEBUG -----", flush=True)
-        print(_json.dumps(order, indent=2), flush=True)
-        print("---------------------------", flush=True)
+        results = []
+        for order in orders:
+            normalised = _fmt(order)
+            results.append({
+                "raw":        order,
+                "normalised": normalised,
+            })
+            print("----- RAW ORDER DEBUG -----", flush=True)
+            print(_json.dumps(order, indent=2), flush=True)
+            print("----- NORMALISED -----", flush=True)
+            print(_json.dumps(normalised, indent=2), flush=True)
 
-        # Also show what _fmt() extracts from it
-        normalised = _fmt(order)
-        print("----- NORMALISED (_fmt) -----", flush=True)
-        print(_json.dumps(normalised, indent=2), flush=True)
-        print("-----------------------------", flush=True)
+        # Optionally fetch the full GET detail for a specific order
+        detail_result = None
+        detail_id = request.args.get("id")
+        if detail_id:
+            detail_result = striven.get_estimate(int(detail_id))
+            print("----- FULL GET DETAIL -----", flush=True)
+            print(_json.dumps(detail_result, indent=2), flush=True)
 
-        return jsonify({"status": "printed to logs", "normalised": normalised})
+        return jsonify({
+            "status":        "ok",
+            "count":         len(results),
+            "search_stubs":  results,
+            "full_detail":   detail_result,
+        })
 
     except Exception as exc:
         print(f"[debug-one-order] ERROR: {exc}", flush=True)
