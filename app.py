@@ -986,6 +986,39 @@ def estimates_by_customer():
 # The full analyze_install_gaps tool gives the precise count.
 # ---------------------------------------------------------------------------
 
+@app.get("/debug-one-order")
+def debug_one_order():
+    """
+    Fetch ONE raw Striven sales order and print every field to logs.
+    Used to identify the correct field names for sales rep, type, etc.
+    No Claude call — safe to hit repeatedly.
+    """
+    import json as _json
+    try:
+        raw = striven.search_sales_orders({"PageIndex": 0, "PageSize": 1})
+        orders = raw.get("data") or []
+        if not orders:
+            print("[debug-one-order] NO ORDERS RETURNED", flush=True)
+            return jsonify({"status": "no orders"})
+
+        order = orders[0]
+        print("----- RAW ORDER DEBUG -----", flush=True)
+        print(_json.dumps(order, indent=2), flush=True)
+        print("---------------------------", flush=True)
+
+        # Also show what _fmt() extracts from it
+        normalised = _fmt(order)
+        print("----- NORMALISED (_fmt) -----", flush=True)
+        print(_json.dumps(normalised, indent=2), flush=True)
+        print("-----------------------------", flush=True)
+
+        return jsonify({"status": "printed to logs", "normalised": normalised})
+
+    except Exception as exc:
+        print(f"[debug-one-order] ERROR: {exc}", flush=True)
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.get("/snapshot/stuck_jobs")
 def snapshot_stuck_jobs():
     """
@@ -2263,6 +2296,28 @@ def _fmt(r: dict) -> dict:
         "job_type":        job_type,
         "category":        category,
     }
+
+
+def extract_sales_rep(order: dict) -> str:
+    """
+    Best-effort extraction of the sales rep name from a RAW Striven order dict.
+    Tries every known field pattern in priority order.
+    NOT wired into the main pipeline yet — verify correct field via /debug-one-order first.
+    """
+    def _name(obj):
+        if not obj:
+            return None
+        if isinstance(obj, dict):
+            return obj.get("Name") or obj.get("name")
+        return None
+
+    return (
+        _name(order.get("SalesRep")    or order.get("salesRep"))
+        or _name(order.get("AssignedTo") or order.get("assignedTo"))
+        or _name(order.get("Employee")   or order.get("employee"))
+        or _name(order.get("CreatedBy")  or order.get("createdBy"))
+        or "Unassigned"
+    )
 
 
 def _fmt_task(t: dict) -> dict:
@@ -4461,13 +4516,37 @@ def chat_api():
         # Any unhandled exception returns clean JSON — never a raw 500 with no
         # body, which is what the frontend sees as "Network error".
         elapsed_total = round(_time_mod.monotonic() - t_req_start, 2)
+        exc_type = type(exc).__name__
+        exc_str  = str(exc).lower()
         print(
-            f"[chat] ERROR after {elapsed_total}s: {type(exc).__name__}: {exc}",
+            f"[chat] ERROR after {elapsed_total}s: {exc_type}: {exc}",
             flush=True,
         )
+
+        # Detect rate-limit / overload conditions from Claude API and return a
+        # "response" (not "error") so the UI renders it as an assistant message,
+        # not a generic error banner.
+        _is_rate_limit = (
+            "ratelimit" in exc_type.lower()
+            or "overloaded" in exc_str
+            or "rate limit" in exc_str
+            or "529" in exc_str
+            or "overload" in exc_str
+            or getattr(exc, "status_code", None) in (429, 529)
+        )
+        if _is_rate_limit:
+            print("[chat] Claude rate-limit / overload detected — returning friendly fallback", flush=True)
+            return jsonify({
+                "response": (
+                    "The AI is currently busy — but live data is still available. "
+                    "Try clicking **Stuck Jobs**, **Install Gaps**, or **Weekly Pipeline** "
+                    "above for instant results, or ask a simpler question in a moment."
+                )
+            })
+
         return jsonify({
             "error": (
-                f"Something went wrong on the server ({type(exc).__name__}). "
+                f"Something went wrong on the server ({exc_type}). "
                 "Please try again — if the problem persists, try a simpler question."
             )
         }), 500
