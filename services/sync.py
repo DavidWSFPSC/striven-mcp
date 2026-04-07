@@ -331,18 +331,23 @@ def sync_estimates_to_supabase(limit: int | None = None) -> int:
             if rep_id and rep_id not in rep_seen:
                 rep_seen[rep_id] = rep_name
 
-        # ── Step 4: upsert when buffer is large enough ───────────────────────
-        while len(est_buffer) >= UPSERT_BATCH:
-            batch = est_buffer[:UPSERT_BATCH]
+        # ── Step 4: flush estimates FIRST, then line items ──────────────────
+        # Estimates are always written before line items so FK constraints
+        # are never violated regardless of buffer sizes.
+
+        # 4a. Flush ALL estimates accumulated so far (sub-batched for memory)
+        while est_buffer:
+            batch      = est_buffer[:UPSERT_BATCH]
             upsert_full_estimates(batch)
             total_synced += len(batch)
-            est_buffer    = est_buffer[UPSERT_BATCH:]
+            est_buffer   = est_buffer[UPSERT_BATCH:]
             print(f"[sync] Upserted {total_synced} estimates so far.", flush=True)
 
-        while len(li_buffer) >= UPSERT_BATCH:
-            batch      = li_buffer[:UPSERT_BATCH]
+        # 4b. Now safe to flush line items — every parent estimate is in Supabase
+        while li_buffer:
+            batch     = li_buffer[:UPSERT_BATCH]
             upsert_line_items(batch)
-            li_buffer  = li_buffer[UPSERT_BATCH:]
+            li_buffer = li_buffer[UPSERT_BATCH:]
 
         # Flush reps every page (small table, cheap)
         if rep_seen:
@@ -351,9 +356,7 @@ def sync_estimates_to_supabase(limit: int | None = None) -> int:
                 for rid, rname in rep_seen.items()
             ])
 
-        total_synced += len(details) - min(len(est_buffer), len(details))
-
-        # Check stop conditions
+        # ── Check stop conditions ────────────────────────────────────────────
         if limit is not None and total_synced >= limit:
             print(f"[sync] Limit {limit} reached — stopping.", flush=True)
             break
