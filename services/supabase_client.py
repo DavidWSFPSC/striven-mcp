@@ -185,6 +185,62 @@ def get_gas_log_audit() -> dict | None:
     return data[0] if data else None
 
 
+def upsert_full_estimates(records: list[dict]) -> None:
+    """
+    Upsert a batch of fully-transformed estimate rows into the `estimates` table.
+
+    Conflicts are resolved on `estimate_id` (Striven's primary key).
+    Safe to call multiple times — idempotent.
+
+    Args:
+        records: List of dicts produced by sync._transform().
+                 Each dict must include `estimate_id`.
+    """
+    if not records:
+        return
+
+    _get_client().table("estimates").upsert(
+        records, on_conflict="estimate_id"
+    ).execute()
+
+
+def upsert_line_items(records: list[dict]) -> None:
+    """
+    Upsert a batch of line item rows into the `estimate_line_items` table.
+
+    Conflicts are resolved on `line_item_id` (Striven's line item primary key).
+    Safe to call multiple times — idempotent.
+
+    Args:
+        records: List of dicts produced by sync._transform().
+                 Each dict must include `line_item_id`.
+    """
+    if not records:
+        return
+
+    _get_client().table("estimate_line_items").upsert(
+        records, on_conflict="line_item_id"
+    ).execute()
+
+
+def upsert_sales_reps(records: list[dict]) -> None:
+    """
+    Upsert a batch of sales rep rows into the `sales_reps` table.
+
+    Conflicts are resolved on `rep_id` (Striven's user id).
+    Keeps the sales_reps lookup table in sync after every sync batch.
+
+    Args:
+        records: List of dicts with keys `rep_id` (int) and `rep_name` (str).
+    """
+    if not records:
+        return
+
+    _get_client().table("sales_reps").upsert(
+        records, on_conflict="rep_id"
+    ).execute()
+
+
 def upsert_gas_log_audit(
     total_checked: int,
     missing_count: int,
