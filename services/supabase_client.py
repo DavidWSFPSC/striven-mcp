@@ -131,6 +131,93 @@ def get_estimates_by_customer(name: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Fast direct-query helpers — no LLM, sub-second, Supabase only
+# ---------------------------------------------------------------------------
+
+def query_gas_log_missing(limit: int = 50) -> list[dict]:
+    """
+    Estimates that have gas log line items but are MISSING the removal fee.
+
+    Used by /queries/gas-log-missing to answer "which gas log jobs have
+    no removal fee?" without any AI reasoning step.
+    """
+    res = (
+        _get_client()
+        .table("estimates")
+        .select("estimate_number, customer_name, total_amount, sales_rep_name, status_normalized")
+        .eq("has_gas_logs", True)
+        .eq("has_removal_fee", False)
+        .order("estimate_number", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return res.data or []
+
+
+def query_unassigned_reps(limit: int = 50) -> list[dict]:
+    """
+    Estimates where no sales rep has been assigned.
+
+    Used by /queries/unassigned-reps to surface attribution gaps quickly.
+    """
+    res = (
+        _get_client()
+        .table("estimates")
+        .select("estimate_number, customer_name, total_amount, status_normalized, created_date")
+        .eq("sales_rep_name", "Unassigned")
+        .order("created_date", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return res.data or []
+
+
+def query_no_line_items(limit: int = 50) -> list[dict]:
+    """
+    Data integrity check: estimates that have zero line items in Supabase.
+
+    Implemented as two fast queries:
+      1. Collect distinct estimate_ids present in estimate_line_items.
+      2. Return estimates whose estimate_id is NOT in that set.
+
+    This is equivalent to:
+      SELECT e.estimate_number, e.customer_name
+      FROM estimates e
+      LEFT JOIN estimate_line_items li ON e.estimate_id = li.estimate_id
+      WHERE li.estimate_id IS NULL
+    """
+    # Step 1: all estimate_ids that DO have line items (integer ids only)
+    li_res = (
+        _get_client()
+        .table("estimate_line_items")
+        .select("estimate_id")
+        .execute()
+    )
+    ids_with_items = list({row["estimate_id"] for row in (li_res.data or [])})
+
+    # Step 2: estimates not in that set
+    if ids_with_items:
+        res = (
+            _get_client()
+            .table("estimates")
+            .select("estimate_number, customer_name, status_normalized, created_date")
+            .not_.in_("estimate_id", ids_with_items)
+            .limit(limit)
+            .execute()
+        )
+    else:
+        # No line items exist at all — return first N estimates
+        res = (
+            _get_client()
+            .table("estimates")
+            .select("estimate_number, customer_name, status_normalized, created_date")
+            .limit(limit)
+            .execute()
+        )
+    return res.data or []
+
+
+# ---------------------------------------------------------------------------
 # Chat log helpers — record every WilliamSmith conversation turn
 # ---------------------------------------------------------------------------
 

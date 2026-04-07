@@ -56,6 +56,9 @@ from services.supabase_client import (
     get_chat_logs,
     get_gas_log_audit as _sb_get_gas_log_audit,
     upsert_gas_log_audit as _sb_upsert_gas_log_audit,
+    query_gas_log_missing,
+    query_unassigned_reps,
+    query_no_line_items,
 )
 from services import knowledge as _knowledge
 
@@ -1006,6 +1009,173 @@ def estimates_by_customer():
         return jsonify({"count": len(records), "records": records})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Fast direct-query endpoints — no LLM, deterministic, sub-second
+#
+# These routes bypass Claude entirely and execute pre-built Supabase queries
+# for known, high-value business questions.  They MUST:
+#   • Return in < 1 second (pure Supabase reads, no Striven calls)
+#   • Return JSON with {"count": N, "records": [...]}
+#   • Never call the Anthropic API or block on any external service
+# ---------------------------------------------------------------------------
+
+def _run_query(records: list[dict]) -> "Response":
+    """
+    Standard JSON wrapper for all direct-query results.
+
+    Converts a list of record dicts (returned by supabase_client query_*
+    functions) into a consistent {"count": N, "records": [...]} envelope.
+    All /queries/* routes use this to guarantee a uniform response shape.
+
+    Args:
+        records: Row list from any query_* helper in supabase_client.
+
+    Returns:
+        Flask JSON response with count and records.
+    """
+    return jsonify({"count": len(records), "records": records})
+
+
+@app.route("/queries/gas-log-missing", methods=["GET"])
+def gas_log_missing():
+    """
+    Gas log installs that are missing a removal fee line item.
+
+    Returns estimates where has_gas_logs=true AND has_removal_fee=false,
+    ordered newest-first. Limit defaults to 50; pass ?limit=N to override.
+
+    No LLM. Reads directly from Supabase estimates table.
+    Expected response time: < 300ms.
+    """
+    limit = min(int(request.args.get("limit", 50)), 200)
+    try:
+        return _run_query(query_gas_log_missing(limit=limit))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/unassigned-reps", methods=["GET"])
+def unassigned_reps():
+    """
+    Estimates with no sales rep assigned (sales_rep_name = 'Unassigned').
+
+    Surfaces attribution gaps so they can be corrected in Striven.
+    Limit defaults to 50; pass ?limit=N to override (max 200).
+
+    No LLM. Reads directly from Supabase estimates table.
+    Expected response time: < 300ms.
+    """
+    limit = min(int(request.args.get("limit", 50)), 200)
+    try:
+        return _run_query(query_unassigned_reps(limit=limit))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/no-line-items", methods=["GET"])
+def no_line_items():
+    """
+    Data integrity check: estimates that have zero line items in Supabase.
+
+    Equivalent to:
+        SELECT e.estimate_number, e.customer_name
+        FROM estimates e
+        LEFT JOIN estimate_line_items li ON e.estimate_id = li.estimate_id
+        WHERE li.estimate_id IS NULL
+
+    A non-zero result means the sync may have dropped line items for those
+    estimates, or they genuinely have no line items in Striven.
+    Limit defaults to 50; pass ?limit=N to override (max 200).
+
+    No LLM. Two Supabase reads. Expected response time: < 1s.
+    """
+    limit = min(int(request.args.get("limit", 50)), 200)
+    try:
+        return _run_query(query_no_line_items(limit=limit))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# /ask — keyword router: routes known questions to direct endpoints, falls
+#         through to the Claude agentic loop only for unknown questions.
+# ---------------------------------------------------------------------------
+
+def _route_question(question: str):
+    """
+    Pure keyword router — NO LLM involved.
+
+    Matches known question patterns to their direct Supabase query.
+    Returns a Flask Response immediately if matched, or None if the
+    question should fall through to the Claude /api/chat pipeline.
+
+    Matching is intentionally broad (substring) so natural phrasing works:
+        "which gas log jobs are missing removal fees?"  → matched
+        "show unassigned sales rep estimates"           → matched
+        "estimates with no line items"                  → matched
+        "what's the biggest job ever?"                  → None (Claude handles)
+    """
+    q = question.lower()
+
+    # Gas log + removal fee missing
+    if ("gas log" in q or "gas logs" in q) and ("removal" in q or "missing" in q):
+        try:
+            return _run_query(query_gas_log_missing())
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    # Unassigned sales reps
+    if "unassigned" in q and ("rep" in q or "sales" in q or "assign" in q):
+        try:
+            return _run_query(query_unassigned_reps())
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    # Missing line items (data integrity)
+    if ("line item" in q or "line items" in q) and ("missing" in q or "no " in q or "without" in q):
+        try:
+            return _run_query(query_no_line_items())
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    return None   # no direct route matched
+
+
+@app.route("/ask", methods=["POST"])
+def ask():
+    """
+    Lightweight question endpoint.
+
+    Tries the keyword router first (instant, no LLM). Falls back to a
+    simple "no route found" message.  The full agentic Claude loop lives
+    at /api/chat — use that for open-ended or exploratory questions.
+
+    Request body (JSON):
+        {"question": "which gas log jobs are missing removal fees?"}
+
+    Response (always JSON):
+        Matched:   {"count": N, "records": [...]}
+        No match:  {"error": "No direct route found", "question": "..."}
+
+    Expected response time: < 300ms for matched questions.
+    """
+    data     = request.get_json(silent=True) or {}
+    question = (data.get("question") or "").strip()
+
+    if not question:
+        return jsonify({"error": "Request body must include a non-empty 'question' field."}), 400
+
+    result = _route_question(question)
+    if result is not None:
+        return result
+
+    return jsonify({
+        "error":    "No direct route found for this question.",
+        "question": question,
+        "hint":     "Use POST /api/chat for open-ended questions handled by Claude.",
+    }), 404
 
 
 # ---------------------------------------------------------------------------
