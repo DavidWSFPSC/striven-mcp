@@ -1043,33 +1043,71 @@ def _run_query(records: list[dict]) -> "Response":
     return jsonify({"count": len(records), "records": records})
 
 
-def _enrich_sales_rep(orders: list[dict], limit: int = 20) -> list[dict]:
+def _normalize_sales_rep(name: str | None) -> str:
     """
-    Attach sales_rep to a subset of search-stub orders by fetching full detail.
+    Normalize a raw sales rep name to a clean, consistent string.
 
-    salesRep is NOT present on POST /v1/sales-orders/search stubs.
-    It only appears on GET /v1/sales-orders/{id}.  Each enrichment costs
-    one Striven API call, so we cap at `limit` to keep response times
-    acceptable.  Orders beyond the limit are returned with sales_rep=None.
+    Rules:
+      - None / empty / whitespace-only  → "Unassigned"
+      - Any other value                 → stripped of leading/trailing whitespace
+
+    This is the single source of truth for sales rep normalization in the
+    Flask layer.  Every route that surfaces a sales_rep field MUST call this
+    function instead of using raw values from Striven or Supabase.
+
+    Args:
+        name: Raw rep name from Striven detail or Supabase column.
+
+    Returns:
+        Normalized string — NEVER null, NEVER empty.
+    """
+    if not name or not str(name).strip():
+        return "Unassigned"
+    return str(name).strip()
+
+
+def _enrich_sales_rep(orders: list[dict], limit: int = 50) -> list[dict]:
+    """
+    Attach a normalized sales_rep field to search-stub orders via GET detail.
+
+    salesRep is NOT present on POST /v1/sales-orders/search stubs — it only
+    appears on GET /v1/sales-orders/{id}.  Each enrichment costs one Striven
+    API call, so we cap at `limit` to keep response times acceptable.
+
+    All values are passed through _normalize_sales_rep() so the output field
+    is ALWAYS a non-null string.  On any error the field is set to "Unassigned"
+    rather than None, preventing null-grouping bugs in downstream analytics.
 
     Args:
         orders: List of dicts from _fmt() (search stubs).  Must have an "id" key.
-        limit:  Maximum number of orders to enrich (default 20).
+        limit:  Maximum number of orders to enrich (default 50).
 
     Returns:
-        Same list with sales_rep field populated for the first `limit` items.
+        Same list with sales_rep populated for every item.
+        Items beyond the limit receive sales_rep = "Unassigned" (safe default).
+
+    # FUTURE:
+    # Store sales_rep_name directly in Supabase during data sync.
+    # This will eliminate the need for enrichment calls entirely —
+    # sales_rep will be available on every Supabase row with no extra API cost.
     """
     enriched = []
     for order in orders[:limit]:
         try:
             raw    = striven.get_estimate(order.get("id") or order.get("estimate_id"))
             detail = _fmt_detail(raw)
-            order["sales_rep"] = detail.get("sales_rep_name") or "Unassigned"
+            order["sales_rep"] = _normalize_sales_rep(detail.get("sales_rep_name"))
         except Exception:
-            order["sales_rep"] = None
+            order["sales_rep"] = "Unassigned"   # safe default — never None
         enriched.append(order)
-    # Orders past the limit pass through unchanged (sales_rep remains None)
-    enriched.extend(orders[limit:])
+
+    # Orders past the limit: guarantee sales_rep is always present and normalized
+    for order in orders[limit:]:
+        order["sales_rep"] = _normalize_sales_rep(
+            order.get("sales_rep") or order.get("sales_rep_name")
+        )
+        enriched.append(order)
+
     return enriched
 
 
@@ -1239,7 +1277,7 @@ def jobs_by_location():
                 "customer":        r["customer_name"],
                 "status":          r["status_normalized"],
                 "amount":          r["total_amount"],
-                "sales_rep":       r["sales_rep_name"],
+                "sales_rep":       _normalize_sales_rep(r.get("sales_rep_name")),
                 "created":         r["created_date"],
             }
             for r in rows[:25]
@@ -1353,13 +1391,13 @@ def backlog_by_rep():
         # ── Enrich first `enrich_limit` stubs with real salesRep from GET detail
         enriched = _enrich_sales_rep(all_orders, limit=enrich_limit)
 
-        # ── Group by rep
+        # ── Group by rep — always use normalized value so keys are stable
         backlog: dict[str, dict] = defaultdict(lambda: {
             "total_jobs":    0,
             "total_revenue": 0.0,
         })
         for o in enriched:
-            rep = o.get("sales_rep") or o.get("sales_rep_name") or "Unassigned"
+            rep = _normalize_sales_rep(o.get("sales_rep") or o.get("sales_rep_name"))
             backlog[rep]["total_jobs"]    += 1
             backlog[rep]["total_revenue"] += float(o.get("total") or 0)
 

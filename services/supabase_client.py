@@ -131,6 +131,31 @@ def get_estimates_by_customer(name: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Sales rep normalization — single source of truth for the data layer
+# ---------------------------------------------------------------------------
+
+def _normalize_sales_rep(name: str | None) -> str:
+    """
+    Normalize a raw sales rep name to a clean, consistent string.
+
+    Rules:
+      - None / empty / whitespace-only  → "Unassigned"
+      - Any other value                 → stripped of leading/trailing whitespace
+
+    Every query helper that returns a sales_rep field MUST call this function.
+    This ensures grouping, filtering, and display are always consistent.
+
+    # FUTURE:
+    # Store sales_rep_name directly in Supabase during data sync.
+    # This will eliminate the need for enrichment calls entirely —
+    # sales_rep will be available on every Supabase row with no extra API cost.
+    """
+    if not name or not str(name).strip():
+        return "Unassigned"
+    return str(name).strip()
+
+
+# ---------------------------------------------------------------------------
 # Fast direct-query helpers — no LLM, sub-second, Supabase only
 # ---------------------------------------------------------------------------
 
@@ -140,6 +165,8 @@ def query_gas_log_missing(limit: int = 50) -> list[dict]:
 
     Used by /queries/gas-log-missing to answer "which gas log jobs have
     no removal fee?" without any AI reasoning step.
+
+    sales_rep is always normalized — never null, never empty.
     """
     res = (
         _get_client()
@@ -151,7 +178,16 @@ def query_gas_log_missing(limit: int = 50) -> list[dict]:
         .limit(limit)
         .execute()
     )
-    return res.data or []
+    return [
+        {
+            "estimate_number": r["estimate_number"],
+            "customer_name":   r["customer_name"],
+            "total_amount":    r["total_amount"],
+            "status":          r["status_normalized"],
+            "sales_rep":       _normalize_sales_rep(r.get("sales_rep_name")),
+        }
+        for r in (res.data or [])
+    ]
 
 
 def query_unassigned_reps(limit: int = 50) -> list[dict]:
@@ -267,7 +303,7 @@ def query_jobs_by_location(search: str, year: int | None = None, limit: int = 50
                 "address":     None,   # not stored — field does not exist in Striven API response
                 "status":      r["status_normalized"],
                 "amount":      r["total_amount"],
-                "sales_rep":   r["sales_rep_name"],
+                "sales_rep":   _normalize_sales_rep(r.get("sales_rep_name")),
                 "created":     r["created_date"],
             }
             for r in (res.data or [])
@@ -318,12 +354,12 @@ def query_jobs_past_install_date(limit: int = 100) -> dict:
         except Exception:
             overdue = None
         jobs.append({
-            "estimate_id":        r["estimate_id"],
-            "customer":           r["customer_name"],
+            "estimate_id":         r["estimate_id"],
+            "customer":            r["customer_name"],
             "target_install_date": r["target_date"],
-            "days_overdue":       overdue,
-            "sales_rep":          r["sales_rep_name"],
-            "amount":             r["total_amount"],
+            "days_overdue":        overdue,
+            "sales_rep":           _normalize_sales_rep(r.get("sales_rep_name")),
+            "amount":              r["total_amount"],
         })
 
     return {"count": len(jobs), "jobs": jobs}
@@ -362,7 +398,7 @@ def query_sales_rep_backlog() -> dict:
     )
 
     for r in records:
-        rep = r.get("sales_rep_name") or "Unassigned"
+        rep = _normalize_sales_rep(r.get("sales_rep_name"))
         td  = r.get("target_date")
 
         backlog[rep]["total_jobs"] += 1
