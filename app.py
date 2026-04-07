@@ -3633,6 +3633,22 @@ def _slim_analysis_result(result: dict) -> dict:
     return result  # non-analysis tools pass through unchanged
 
 
+def _slim_order(o: dict) -> dict:
+    """
+    Strip a normalised (_fmt) order dict down to the 6 fields Claude needs.
+    Reduces per-order token cost from ~120 tokens → ~30 tokens.
+    Applied to search_estimates and high_value_estimates results before Claude sees them.
+    """
+    return {
+        "id":       o.get("id"),
+        "number":   o.get("estimate_number"),
+        "customer": o.get("customer_name"),
+        "status":   o.get("status"),
+        "rep":      o.get("sales_rep"),
+        "total":    o.get("total"),
+    }
+
+
 def _execute_tool(name: str, tool_input: dict) -> dict:
     """Map a Claude tool call to the live Striven API. All operations are read-only."""
     try:
@@ -3675,7 +3691,7 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                 key=lambda x: x["total"] or 0,
                 reverse=True,
             )[:25]
-            result = {"count": len(high), "records": high, "source": "striven_live"}
+            result = {"count": len(high), "records": [_slim_order(o) for o in high], "source": "striven_live"}
             _cache_set("high_value_estimates", result)
             return result
 
@@ -3719,7 +3735,8 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                     print(f"[search_estimates] deep status={sid} → {len(data)} records", flush=True)
                 records = all_records[:page_size]
                 print(f"[search_estimates] deep total_pool={grand_total} returned={len(records)}", flush=True)
-                return {"total": grand_total, "count": len(records), "estimates": records,
+                return {"total": grand_total, "count": len(records),
+                        "estimates": [_slim_order(o) for o in records],
                         "note": "Deep mode — active statuses 19,20,22,25"}
             else:
                 # ── FAST MODE: single API call, one page, most recent first ───
@@ -3737,7 +3754,7 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                 if not data:
                     print(f"[search_estimates] WARNING: empty response — keys={list(raw.keys())}", flush=True)
                 print(f"[search_estimates] TotalCount={total} returned={len(data)}", flush=True)
-                records = [_fmt(r) for r in data]
+                records = [_slim_order(_fmt(r)) for r in data]
                 return {"total": total, "count": len(records), "estimates": records,
                         "note": "Fast mode — 1 page, most recent first"}
 
@@ -4095,8 +4112,9 @@ def chat_api():
     """
     # ── Constants ─────────────────────────────────────────────────────────────
     MAX_ITERATIONS   = 6        # hard cap on agentic tool-use loops
-    MAX_RESULT_CHARS = 10_000   # safety-net truncation (primary trimming via _slim_analysis_result)
+    MAX_RESULT_CHARS = 5_000    # safety-net truncation after _slim_order/_slim_analysis_result
     MAX_OUTPUT_TOKENS = 2_048   # sufficient for all normal responses
+    MAX_HISTORY      = 8        # keep last N messages (4 turns) — older context trimmed
 
     t_req_start = _time_mod.monotonic()
 
@@ -4385,6 +4403,12 @@ def chat_api():
             print(f"[chat] fast-path Claude call failed — falling back: {_fp_call_exc}", flush=True)
 
     # ── Agentic loop ──────────────────────────────────────────────────────────
+    # Trim conversation history to last MAX_HISTORY messages before the loop.
+    # Keeps the most recent context while preventing token bloat from long sessions.
+    if len(messages) > MAX_HISTORY:
+        print(f"[chat] trimming history {len(messages)} → {MAX_HISTORY} messages", flush=True)
+        messages = messages[-MAX_HISTORY:]
+
     try:
         iteration = 0
         while iteration < MAX_ITERATIONS:
