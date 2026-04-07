@@ -715,6 +715,9 @@
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
+  // Minimum ms between request completions (prevents rapid-fire bursts)
+  const COOLDOWN_MS = 700;
+
   // Lock / unlock all interactive controls while a request is in-flight
   function setBusy(state) {
     busy = state;
@@ -723,6 +726,19 @@
       if (state) c.classList.add("loading");
       else       c.classList.remove("loading");
     });
+  }
+
+  // Briefly replace the hint text to signal the UI is still processing
+  const _hintEl = document.querySelector(".hint");
+  const _hintDefault = _hintEl ? _hintEl.textContent : "";
+  function _flashHint(msg, ms = 1800) {
+    if (!_hintEl) return;
+    _hintEl.textContent = msg;
+    _hintEl.style.color = "#f59e0b";
+    setTimeout(() => {
+      _hintEl.textContent = _hintDefault;
+      _hintEl.style.color = "";
+    }, ms);
   }
 
   // ── Snapshot loading ───────────────────────────────────────────────────────
@@ -965,6 +981,8 @@
       removeTyping();
       addMessage("assistant", "Network error — please try again.");
     }
+    // Cooldown: keep busy=true for COOLDOWN_MS after response to prevent burst requests
+    await new Promise(r => setTimeout(r, COOLDOWN_MS));
     setBusy(false);
     inputEl.focus();
   }
@@ -1006,7 +1024,8 @@
   // ── Regular chat ───────────────────────────────────────────────────────────
   async function sendMessage() {
     const text = inputEl.value.trim();
-    if (!text || busy) return;
+    if (!text) return;
+    if (busy) { _flashHint("Finishing previous request…"); return; }
 
     // Intent routing — match common phrases to module triggers
     if (!INTENT_BYPASS.test(text)) {
