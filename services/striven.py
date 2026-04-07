@@ -489,3 +489,41 @@ class StrivenClient:
         response = requests.get(url, headers=self._get_headers(), timeout=15)
         response.raise_for_status()
         return response.json()
+
+    # ------------------------------------------------------------------
+    # HR — Employees
+    # ------------------------------------------------------------------
+
+    def get_employees(self, page_index: int = 0, page_size: int = 100) -> dict:
+        """
+        Return a paginated list of employees.
+
+        GET /v1/employees
+
+        Query params:
+            PageIndex  int  — 0-based page number
+            PageSize   int  — results per page (default 100)
+
+        Response shape:
+            {"TotalCount": int, "Data": [{Id, Name, FirstName, LastName,
+             Email, Phone, IsActive, ...}, ...]}
+        """
+        return self._get("/employees", params={
+            "PageIndex": page_index,
+            "PageSize":  page_size,
+        })
+
+    def search_customers_full(self, filters: dict | None = None) -> dict:
+        """
+        Full-featured customer search supporting all Striven filter keys.
+
+        POST /v1/customers/search
+
+        Filter keys (all optional):
+            PageIndex   int   — 0-based page
+            PageSize    int   — results per page
+            Name        str   — partial name match
+            Number      str   — customer number
+            IsActive    bool  — filter active/inactive
+        """
+        return self._post("/customers/search", body=filters or {})

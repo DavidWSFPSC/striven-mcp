@@ -3252,6 +3252,432 @@ def _fmt_opportunity(r: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Normaliser helpers for /striven/* endpoints
+# ---------------------------------------------------------------------------
+
+def _striven_page(resp: dict) -> tuple[int, list]:
+    """
+    Extract (total_count, data_list) from any Striven paginated search response.
+
+    Striven uses both TitleCase and camelCase across different endpoints, so
+    we check both.  Returns (0, []) on malformed responses rather than crashing.
+    """
+    total = resp.get("TotalCount") or resp.get("totalCount") or 0
+    data  = resp.get("Data")       or resp.get("data")       or []
+    return int(total), list(data)
+
+
+def _fmt_customer(r: dict) -> dict:
+    """
+    Normalise a Striven customer record.
+
+    Address fields may be nested under an 'Address' object or flat on the root —
+    we check both.  This matches the shape returned by GET /v1/customers/{id}
+    and POST /v1/customers/search.
+    """
+    addr = r.get("Address") or r.get("address") or {}
+    return {
+        "customer_id": _n(r, "Id",     "id"),
+        "name":        _n(r, "Name",   "name"),
+        "number":      _n(r, "Number", "number"),
+        "phone":       _n(r, "Phone",  "phone"),
+        "email":       _n(r, "Email",  "email"),
+        "is_active":   _n(r, "IsActive", "isActive"),
+        # Address — check nested object first, then flat keys on root
+        "address_1": (
+            _n(addr, "Line1", "line1", "AddressLine1", "addressLine1")
+            or _n(r,   "AddressLine1", "addressLine1")
+        ),
+        "address_2": (
+            _n(addr, "Line2", "line2", "AddressLine2", "addressLine2")
+            or _n(r,   "AddressLine2", "addressLine2")
+        ),
+        "city":  _n(addr, "City",  "city")  or _n(r, "City",  "city"),
+        "state": _n(addr, "State", "state") or _n(r, "State", "state"),
+        "zip": (
+            _n(addr, "Zip", "zip", "ZipCode", "zipCode", "PostalCode", "postalCode")
+            or _n(r,  "Zip", "zip", "ZipCode", "zipCode", "PostalCode", "postalCode")
+        ),
+    }
+
+
+def _fmt_employee(r: dict) -> dict:
+    """
+    Normalise a Striven employee record.
+
+    Name may be a single 'Name' field or split as FirstName / LastName.
+    We try the combined field first, then construct from parts.
+    """
+    first = _n(r, "FirstName", "firstName") or ""
+    last  = _n(r, "LastName",  "lastName")  or ""
+    full  = _n(r, "Name", "name") or " ".join(filter(None, [first, last])) or None
+    return {
+        "employee_id": _n(r, "Id",    "id"),
+        "name":        full,
+        "first_name":  first or None,
+        "last_name":   last  or None,
+        "email":       _n(r, "Email", "email"),
+        "phone":       _n(r, "Phone", "phone"),
+        "is_active":   _n(r, "IsActive", "isActive"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# /striven/* — Flexible read-only proxy endpoints to the Striven API
+#
+# DESIGN PRINCIPLES:
+#   • Each endpoint maps one-to-one to a Striven API resource.
+#   • Query params translate to the Striven POST/GET filter body.
+#   • All responses are normalised to snake_case before returning.
+#   • Pagination metadata (total_count, page, page_size) is always included.
+#   • Read-only guard in before_request blocks non-GET on this prefix.
+#
+# IMPORTANT — salesRep on search stubs:
+#   POST /v1/sales-orders/search does NOT return salesRep in its stubs.
+#   Only GET /v1/sales-orders/{id} includes the full salesRep object.
+#   The sales_rep field on /striven/sales-orders will always be "Unassigned".
+#   Use /striven/sales-orders/{id} for accurate rep attribution.
+# ---------------------------------------------------------------------------
+
+@app.before_request
+def read_only_guard():
+    """
+    Block all non-GET requests on the /striven/* prefix.
+
+    Applies only to paths beginning with /striven/ so the rest of the app
+    (/api/chat, /ask, /sync-estimates, etc.) is completely unaffected.
+    """
+    if request.path.startswith("/striven/") and request.method != "GET":
+        return jsonify({"error": "Read-only API — /striven/* accepts GET requests only."}), 403
+
+
+@app.route("/striven/sales-orders", methods=["GET"])
+def striven_sales_orders():
+    """
+    Flexible search across all sales orders (estimates) in Striven.
+
+    Internally: POST /v1/sales-orders/search
+
+    Query params (all optional):
+        page       int    — 0-based page index (default 0)
+        pageSize   int    — records per page (default 25, max 100)
+        status     int    — Striven status ID
+                            18=Incomplete  19=Quoted  20=Pending Approval
+                            22=Approved    25=In Progress  27=Completed
+        date_from  str    — ISO date, filters DateCreatedRange.DateFrom
+        date_to    str    — ISO date, filters DateCreatedRange.DateTo
+        search     str    — partial match on order Name
+        customer_id int   — filter by Striven customer ID
+
+    NOTE: sales_rep filtering is not supported by the Striven search API.
+          salesRep is also NOT present on search stubs — it only appears on
+          GET /striven/sales-orders/{id}. The sales_rep field here is always null.
+
+    Examples:
+        GET /striven/sales-orders?status=22&pageSize=50
+        GET /striven/sales-orders?date_from=2025-01-01&date_to=2025-12-31
+        GET /striven/sales-orders?search=charleston&page=1
+    """
+    page      = max(0, int(request.args.get("page", 0)))
+    page_size = min(int(request.args.get("pageSize", 25)), 100)
+
+    body: dict = {"PageIndex": page, "PageSize": page_size}
+
+    if request.args.get("status"):
+        try:
+            body["StatusChangedTo"] = int(request.args["status"])
+        except ValueError:
+            return jsonify({"error": "status must be an integer (e.g. 22 for Approved)."}), 400
+
+    if request.args.get("customer_id"):
+        try:
+            body["CustomerId"] = int(request.args["customer_id"])
+        except ValueError:
+            return jsonify({"error": "customer_id must be an integer."}), 400
+
+    if request.args.get("search"):
+        body["Name"] = request.args["search"]
+
+    if request.args.get("date_from") or request.args.get("date_to"):
+        dr: dict = {}
+        if request.args.get("date_from"):
+            dr["DateFrom"] = request.args["date_from"]
+        if request.args.get("date_to"):
+            dr["DateTo"] = request.args["date_to"]
+        body["DateCreatedRange"] = dr
+
+    try:
+        resp = striven.search_sales_orders(body)
+        total, data = _striven_page(resp)
+        return jsonify({
+            "total_count": total,
+            "page":        page,
+            "page_size":   page_size,
+            "count":       len(data),
+            "note":        "sales_rep is null on search results — use /striven/sales-orders/{id} for full detail including rep.",
+            "data": [_fmt(r) for r in data],
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/striven/sales-orders/<int:order_id>", methods=["GET"])
+def striven_sales_order_detail(order_id: int):
+    """
+    Full detail for a single sales order including line items and custom fields.
+
+    Internally: GET /v1/sales-orders/{id}
+
+    This is the only endpoint that returns a reliable sales_rep value.
+    Line items, product types, and all custom fields are included.
+
+    Example:
+        GET /striven/sales-orders/14843
+    """
+    try:
+        raw    = striven.get_estimate(order_id)
+        detail = _fmt_detail(raw)
+        return jsonify(detail)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/striven/tasks", methods=["GET"])
+def striven_tasks():
+    """
+    Search tasks across the business.
+
+    Internally: POST /v2/tasks/search
+
+    Query params (all optional):
+        page         int  — 0-based page (default 0)
+        pageSize     int  — records per page (default 25, max 100)
+        task_type    int  — TaskTypeId (use GET /striven/task-types for IDs)
+        assigned_to  int  — AssignedToId (employee/user ID)
+        status_id    int  — task status ID
+        entity_id    int  — RelatedEntityId (linked sales order / estimate ID)
+        date_from    str  — ISO date for DueDateRange.DateFrom
+        date_to      str  — ISO date for DueDateRange.DateTo
+
+    Examples:
+        GET /striven/tasks?entity_id=14843          → all tasks for estimate 14843
+        GET /striven/tasks?task_type=5&pageSize=50  → 50 tasks of a specific type
+        GET /striven/tasks?assigned_to=12           → tasks assigned to employee 12
+    """
+    page      = max(0, int(request.args.get("page", 0)))
+    page_size = min(int(request.args.get("pageSize", 25)), 100)
+
+    body: dict = {"PageIndex": page, "PageSize": page_size}
+
+    for param, key in (
+        ("task_type",   "TaskTypeId"),
+        ("assigned_to", "AssignedToId"),
+        ("status_id",   "StatusId"),
+        ("entity_id",   "RelatedEntityId"),
+    ):
+        if request.args.get(param):
+            try:
+                body[key] = int(request.args[param])
+            except ValueError:
+                return jsonify({"error": f"{param} must be an integer."}), 400
+
+    if request.args.get("date_from") or request.args.get("date_to"):
+        dr: dict = {}
+        if request.args.get("date_from"):
+            dr["DateFrom"] = request.args["date_from"]
+        if request.args.get("date_to"):
+            dr["DateTo"] = request.args["date_to"]
+        body["DueDateRange"] = dr
+
+    try:
+        resp = striven.search_tasks(body)
+        total, data = _striven_page(resp)
+        return jsonify({
+            "total_count": total,
+            "page":        page,
+            "page_size":   page_size,
+            "count":       len(data),
+            "data":        [_fmt_task(t) for t in data],
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/striven/invoices", methods=["GET"])
+def striven_invoices():
+    """
+    Search customer invoices.
+
+    Internally: POST /v1/invoices/search
+
+    Query params (all optional):
+        page         int  — 0-based page (default 0)
+        pageSize     int  — records per page (default 25, max 100)
+        status_id    int  — invoice status ID
+        customer_id  int  — filter by Striven customer ID
+        date_from    str  — ISO date for DateCreatedRange.DateFrom
+        date_to      str  — ISO date for DateCreatedRange.DateTo
+        due_from     str  — ISO date for DueDateRange.DateFrom
+        due_to       str  — ISO date for DueDateRange.DateTo
+
+    Examples:
+        GET /striven/invoices?date_from=2025-01-01&date_to=2025-12-31
+        GET /striven/invoices?customer_id=4521&pageSize=50
+    """
+    page      = max(0, int(request.args.get("page", 0)))
+    page_size = min(int(request.args.get("pageSize", 25)), 100)
+
+    body: dict = {"PageIndex": page, "PageSize": page_size}
+
+    if request.args.get("status_id"):
+        try:
+            body["StatusId"] = int(request.args["status_id"])
+        except ValueError:
+            return jsonify({"error": "status_id must be an integer."}), 400
+
+    if request.args.get("customer_id"):
+        try:
+            body["CustomerId"] = int(request.args["customer_id"])
+        except ValueError:
+            return jsonify({"error": "customer_id must be an integer."}), 400
+
+    if request.args.get("date_from") or request.args.get("date_to"):
+        dr: dict = {}
+        if request.args.get("date_from"):
+            dr["DateFrom"] = request.args["date_from"]
+        if request.args.get("date_to"):
+            dr["DateTo"] = request.args["date_to"]
+        body["DateCreatedRange"] = dr
+
+    if request.args.get("due_from") or request.args.get("due_to"):
+        dr2: dict = {}
+        if request.args.get("due_from"):
+            dr2["DateFrom"] = request.args["due_from"]
+        if request.args.get("due_to"):
+            dr2["DateTo"] = request.args["due_to"]
+        body["DueDateRange"] = dr2
+
+    try:
+        resp = striven.search_invoices(body)
+        total, data = _striven_page(resp)
+        return jsonify({
+            "total_count": total,
+            "page":        page,
+            "page_size":   page_size,
+            "count":       len(data),
+            "data":        [_fmt_invoice(r) for r in data],
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/striven/customers", methods=["GET"])
+def striven_customers():
+    """
+    Search customers with full address data.
+
+    Internally: POST /v1/customers/search
+
+    Query params (all optional):
+        page      int   — 0-based page (default 0)
+        pageSize  int   — records per page (default 25, max 100)
+        search    str   — partial name match
+        number    str   — exact customer number
+        active    bool  — "true" / "false" to filter IsActive
+
+    Examples:
+        GET /striven/customers?search=charleston
+        GET /striven/customers?search=smith&pageSize=50
+    """
+    page      = max(0, int(request.args.get("page", 0)))
+    page_size = min(int(request.args.get("pageSize", 25)), 100)
+
+    body: dict = {"PageIndex": page, "PageSize": page_size}
+
+    if request.args.get("search"):
+        body["Name"] = request.args["search"]
+    if request.args.get("number"):
+        body["Number"] = request.args["number"]
+    if request.args.get("active") is not None:
+        body["IsActive"] = request.args["active"].lower() == "true"
+
+    try:
+        resp = striven.search_customers_full(body)
+        total, data = _striven_page(resp)
+        return jsonify({
+            "total_count": total,
+            "page":        page,
+            "page_size":   page_size,
+            "count":       len(data),
+            "data":        [_fmt_customer(r) for r in data],
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/striven/employees", methods=["GET"])
+def striven_employees():
+    """
+    Return a paginated list of all employees.
+
+    Internally: GET /v1/employees
+
+    Query params (all optional):
+        page      int  — 0-based page (default 0)
+        pageSize  int  — records per page (default 100, max 200)
+
+    Example:
+        GET /striven/employees
+        GET /striven/employees?page=1&pageSize=50
+    """
+    page      = max(0, int(request.args.get("page", 0)))
+    page_size = min(int(request.args.get("pageSize", 100)), 200)
+
+    try:
+        resp = striven.get_employees(page_index=page, page_size=page_size)
+        total, data = _striven_page(resp)
+        return jsonify({
+            "total_count": total,
+            "page":        page,
+            "page_size":   page_size,
+            "count":       len(data),
+            "data":        [_fmt_employee(r) for r in data],
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/striven/task-types", methods=["GET"])
+def striven_task_types():
+    """
+    Return all task types — useful for looking up TaskTypeId values before
+    querying /striven/tasks?task_type=<id>.
+
+    Internally: GET /v2/tasks/types  (no pagination, small static list)
+
+    Example:
+        GET /striven/task-types
+    """
+    try:
+        data = striven.get_task_types()
+        # Normalize whatever shape the API returns
+        items = data if isinstance(data, list) else (data.get("Data") or data.get("data") or [data])
+        return jsonify({
+            "count": len(items),
+            "data": [
+                {
+                    "task_type_id": _n(t, "Id", "id"),
+                    "name":         _n(t, "Name", "name"),
+                }
+                for t in items
+                if isinstance(t, dict)
+            ],
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 def _paginated_customer_search(search_name: str) -> dict:
     """
     Single source of truth for customer-name → estimates lookup.
