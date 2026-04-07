@@ -941,6 +941,206 @@ def estimates_by_customer():
 
 
 # ---------------------------------------------------------------------------
+# Snapshot endpoints — lightweight, cached, NO Claude
+#
+# Purpose: feed the Intelligence Panel cards with instant counts + top-3
+# previews so the UI feels live on page load.
+#
+# Design constraints:
+#   • pageSize ≤ 25 per status — keeps each Striven call fast
+#   • Parallel Striven calls via ThreadPoolExecutor — multiple statuses
+#     fetched concurrently instead of serially
+#   • 60-second in-memory cache (reuses existing _cache_get/_cache_set)
+#   • Never calls Claude — pure data, no interpretation
+#   • Returns 200 on Striven errors with count=0 so the UI degrades
+#     gracefully rather than showing broken cards
+#
+# The "count" in install_gaps is an upper bound (approved + in-progress
+# total) because task-level checking would exceed the latency budget.
+# The full analyze_install_gaps tool gives the precise count.
+# ---------------------------------------------------------------------------
+
+@app.get("/snapshot/stuck_jobs")
+def snapshot_stuck_jobs():
+    """
+    Return the count of stuck jobs and the top-3 worst offenders.
+
+    Stuck definitions (no task checking — purely date-based):
+      Quoted      > 7 days  since date_created
+      Approved    > 5 days  since date_approved
+      In Progress > 10 days since date_approved (proxy — no task API call)
+    """
+    cached = _cache_get("snap:stuck_jobs")
+    if cached is not None:
+        return jsonify(cached)
+
+    from datetime import datetime
+    from concurrent.futures import ThreadPoolExecutor
+
+    today = datetime.utcnow()
+    THRESH = {19: 7, 22: 5, 25: 10}
+    ISSUE  = {
+        19: "Quoted, no follow-up",
+        22: "Approved, not scheduled",
+        25: "In progress, no install confirmed",
+    }
+
+    def _fetch(sid):
+        try:
+            raw = striven.search_sales_orders({
+                "PageIndex": 0, "PageSize": 25, "StatusChangedTo": sid,
+            })
+            return sid, raw.get("data") or []
+        except Exception as exc:
+            print(f"[snap:stuck] WARNING status={sid}: {exc}", flush=True)
+            return sid, []
+
+    try:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            fetched = list(pool.map(_fetch, [19, 22, 25]))
+    except Exception as exc:
+        print(f"[snap:stuck] ERROR: {exc}", flush=True)
+        return jsonify({"count": 0, "top": [], "error": str(exc)})
+
+    stuck: list[dict] = []
+    for sid, data in fetched:
+        for r in data:
+            est     = _fmt(r)
+            ref_str = est.get("date_approved") if sid == 22 else est.get("date_created")
+            ref     = _parse_date_str(ref_str)
+            if ref is None:
+                continue
+            days = (today - ref).days
+            if days > THRESH[sid]:
+                stuck.append({
+                    "id":       str(est.get("estimate_number") or est.get("id") or ""),
+                    "customer": est.get("customer_name") or "Unknown",
+                    "rep":      est.get("sales_rep") or "Unassigned",
+                    "days":     days,
+                    "issue":    ISSUE[sid],
+                })
+
+    stuck.sort(key=lambda x: x["days"], reverse=True)
+    result = {"count": len(stuck), "top": stuck[:3]}
+    _cache_set("snap:stuck_jobs", result)
+    print(f"[snap:stuck] count={result['count']}", flush=True)
+    return jsonify(result)
+
+
+@app.get("/snapshot/install_gaps")
+def snapshot_install_gaps():
+    """
+    Return the count of approved/in-progress jobs and the 3 oldest (by approval date).
+
+    Note: count is an upper bound — task checking is skipped for speed.
+    The full analyze_install_gaps tool gives the precise figure.
+    """
+    cached = _cache_get("snap:install_gaps")
+    if cached is not None:
+        return jsonify(cached)
+
+    from datetime import datetime
+    from concurrent.futures import ThreadPoolExecutor
+
+    today = datetime.utcnow()
+
+    def _fetch(sid):
+        try:
+            raw = striven.search_sales_orders({
+                "PageIndex": 0, "PageSize": 25, "StatusChangedTo": sid,
+            })
+            return sid, raw.get("data") or []
+        except Exception as exc:
+            print(f"[snap:install] WARNING status={sid}: {exc}", flush=True)
+            return sid, []
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fetched = list(pool.map(_fetch, [22, 25]))
+    except Exception as exc:
+        print(f"[snap:install] ERROR: {exc}", flush=True)
+        return jsonify({"count": 0, "top": [], "error": str(exc)})
+
+    STATUS_LABEL = {22: "Approved", 25: "In Progress"}
+    all_ests: list[dict] = []
+    for sid, data in fetched:
+        label = STATUS_LABEL.get(sid, "Active")
+        for r in data:
+            est     = _fmt(r)
+            ref_str = est.get("date_approved") or est.get("date_created")
+            ref     = _parse_date_str(ref_str)
+            days    = (today - ref).days if ref else 0
+            all_ests.append({
+                "id":       str(est.get("estimate_number") or est.get("id") or ""),
+                "customer": est.get("customer_name") or "Unknown",
+                "rep":      est.get("sales_rep") or "Unassigned",
+                "days":     days,
+                "issue":    f"{label}, install not yet confirmed",
+            })
+
+    all_ests.sort(key=lambda x: x["days"], reverse=True)
+    result = {
+        "count": len(all_ests),
+        "top":   all_ests[:3],
+        "note":  "Upper bound — full analysis confirms which have no install task",
+    }
+    _cache_set("snap:install_gaps", result)
+    print(f"[snap:install] count={result['count']}", flush=True)
+    return jsonify(result)
+
+
+@app.get("/snapshot/rep_pipeline")
+def snapshot_rep_pipeline():
+    """
+    Return the count of active sales reps and the top-3 by open-job volume.
+    """
+    cached = _cache_get("snap:rep_pipeline")
+    if cached is not None:
+        return jsonify(cached)
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _fetch(sid):
+        try:
+            raw = striven.search_sales_orders({
+                "PageIndex": 0, "PageSize": 25, "StatusChangedTo": sid,
+            })
+            return raw.get("data") or []
+        except Exception as exc:
+            print(f"[snap:rep] WARNING status={sid}: {exc}", flush=True)
+            return []
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            batches = list(pool.map(_fetch, [22, 25]))
+    except Exception as exc:
+        print(f"[snap:rep] ERROR: {exc}", flush=True)
+        return jsonify({"count": 0, "top": [], "error": str(exc)})
+
+    rep_counts: dict[str, int] = {}
+    for data in batches:
+        for r in data:
+            rep = _fmt(r).get("sales_rep") or "Unassigned"
+            rep_counts[rep] = rep_counts.get(rep, 0) + 1
+
+    reps_sorted = sorted(rep_counts.items(), key=lambda x: x[1], reverse=True)
+    top3 = [
+        {
+            "id":       rep,     # rep name used as drill-down key
+            "customer": rep,
+            "days":     count,   # "days" field reused for job count
+            "issue":    f"{count} open job{'s' if count != 1 else ''}",
+        }
+        for rep, count in reps_sorted[:3]
+    ]
+
+    result = {"count": len(rep_counts), "top": top3}
+    _cache_set("snap:rep_pipeline", result)
+    print(f"[snap:rep] reps={result['count']}", flush=True)
+    return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
 # Chat UI — WilliamSmith web interface
 # ---------------------------------------------------------------------------
 
