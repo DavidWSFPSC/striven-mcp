@@ -2530,6 +2530,41 @@ _CHAT_TOOLS = [
 # This is a read-only BI system. Write operations are not exposed as tools.
 
 
+def _resolve_rep(r: dict) -> tuple[int | None, str]:
+    """
+    Extract sales rep from a raw Striven order dict using a priority fallback chain.
+
+    Field priority (highest → lowest):
+        SalesRep   — the dedicated rep field; most reliable
+        AssignedTo — task/job assignment; used when SalesRep is blank
+        Employee   — occasionally populated on older records
+        CreatedBy  — last-resort; the user who entered the estimate
+
+    Returns (rep_id, rep_name).  rep_name is always a string ("Unassigned" if
+    no field resolves to a name).  rep_id may be None.
+
+    API field mapping confirmed from /debug-one-order logs:
+        SalesRep   → {"Id": <int>, "Name": "<string>"}
+        AssignedTo → {"Id": <int>, "Name": "<string>"}
+        Employee   → {"Id": <int>, "Name": "<string>"}   (rare)
+        CreatedBy  → {"Id": <int>, "Name": "<string>"}
+    Both TitleCase and camelCase keys are checked for resilience.
+    """
+    for key_pair in (
+        ("SalesRep",   "salesRep"),
+        ("AssignedTo", "assignedTo"),
+        ("Employee",   "employee"),
+        ("CreatedBy",  "createdBy"),
+    ):
+        obj = r.get(key_pair[0]) or r.get(key_pair[1])
+        if isinstance(obj, dict):
+            name = obj.get("Name") or obj.get("name")
+            if name:
+                rep_id = obj.get("Id") or obj.get("id")
+                return rep_id, name
+    return None, "Unassigned"
+
+
 def _fmt(r: dict) -> dict:
     """
     Normalise a raw Striven sales-order search record into a clean dict.
@@ -2539,12 +2574,18 @@ def _fmt(r: dict) -> dict:
         SalesRep{Id,Name}, DateCreated, DateApproved, OrderTotal
     We check TitleCase first, then fall back to camelCase for safety.
 
+    Sales rep uses a 4-level fallback chain via _resolve_rep():
+        SalesRep → AssignedTo → Employee → CreatedBy → "Unassigned"
+    sales_rep_name is ALWAYS a string; never None.
+    sales_rep_id   is the integer id or None if fully unresolved.
+    sales_rep      mirrors sales_rep_name for backward compatibility.
+
     Note: OrderTotal is not always populated on search stubs — it IS
     available on the single-record GET endpoint (get_estimate_by_id).
     """
-    customer  = r.get("Customer")  or r.get("customer")  or {}
-    status    = r.get("Status")    or r.get("status")    or {}
-    sales_rep = r.get("SalesRep")  or r.get("salesRep")  or {}
+    customer          = r.get("Customer")  or r.get("customer")  or {}
+    status            = r.get("Status")    or r.get("status")    or {}
+    rep_id, rep_name  = _resolve_rep(r)
 
     # Job type — Striven may return this as a dict {"Id":…,"Name":…} or a plain string.
     # We capture both forms and normalise to a plain string.
@@ -2567,15 +2608,17 @@ def _fmt(r: dict) -> dict:
         category = raw_cat or None
 
     return {
-        "id":              r.get("Id")           or r.get("id"),
-        "estimate_number": r.get("Number")       or r.get("number"),
-        "name":            r.get("Name")         or r.get("name"),
-        "customer_name":   customer.get("Name")  or customer.get("name"),
-        "customer_id":     customer.get("Id")    or customer.get("id"),
-        "sales_rep":       sales_rep.get("Name") or sales_rep.get("name"),
-        "status":          status.get("Name")    or status.get("name"),
-        "total":           r.get("OrderTotal")   or r.get("orderTotal")  or r.get("total"),
-        "date_created":    r.get("DateCreated")  or r.get("dateCreated"),
+        "id":              r.get("Id")          or r.get("id"),
+        "estimate_number": r.get("Number")      or r.get("number"),
+        "name":            r.get("Name")        or r.get("name"),
+        "customer_name":   customer.get("Name") or customer.get("name"),
+        "customer_id":     customer.get("Id")   or customer.get("id"),
+        "sales_rep_name":  rep_name,            # always a string; "Unassigned" if not found
+        "sales_rep_id":    rep_id,              # int or None
+        "sales_rep":       rep_name,            # backward-compat alias — same as sales_rep_name
+        "status":          status.get("Name")   or status.get("name"),
+        "total":           r.get("OrderTotal")  or r.get("orderTotal") or r.get("total"),
+        "date_created":    r.get("DateCreated") or r.get("dateCreated"),
         "date_approved":   r.get("DateApproved") or r.get("dateApproved"),
         "job_type":        job_type,
         "category":        category,
@@ -4041,7 +4084,13 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                     all_records.extend([_fmt(r) for r in data])
                     print(f"[search_estimates] deep status={sid} → {len(data)} records", flush=True)
                 records = all_records[:page_size]
-                print(f"[search_estimates] deep total_pool={grand_total} returned={len(records)}", flush=True)
+                _unassigned = sum(1 for o in records if o.get("sales_rep_name") == "Unassigned")
+                print(
+                    f"[search_estimates] deep total_pool={grand_total} returned={len(records)} "
+                    f"unassigned_rep={_unassigned}/{len(records)} "
+                    f"({100*_unassigned//len(records) if records else 0}%)",
+                    flush=True,
+                )
                 return {"total": grand_total, "count": len(records),
                         "estimates": [_slim_order(o) for o in records],
                         "note": "Deep mode — active statuses 19,20,22,25"}
@@ -4060,9 +4109,16 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                 total   = raw.get("totalCount", 0)
                 if not data:
                     print(f"[search_estimates] WARNING: empty response — keys={list(raw.keys())}", flush=True)
-                print(f"[search_estimates] TotalCount={total} returned={len(data)}", flush=True)
-                records = [_slim_order(_fmt(r)) for r in data]
-                return {"total": total, "count": len(records), "estimates": records,
+                records = [_fmt(r) for r in data]
+                _unassigned = sum(1 for o in records if o.get("sales_rep_name") == "Unassigned")
+                print(
+                    f"[search_estimates] TotalCount={total} returned={len(records)} "
+                    f"unassigned_rep={_unassigned}/{len(records)} "
+                    f"({100*_unassigned//len(records) if records else 0}%)",
+                    flush=True,
+                )
+                return {"total": total, "count": len(records),
+                        "estimates": [_slim_order(o) for o in records],
                         "note": "Fast mode — 1 page, most recent first"}
 
         if name == "get_estimate_by_id":
@@ -4082,15 +4138,17 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                     "unit_price":  li.get("unitPrice")   or li.get("UnitPrice"),
                     "total":       li.get("total")       or li.get("Total"),
                 })
-            customer  = raw.get("customer")  or raw.get("Customer")  or {}
-            status    = raw.get("status")    or raw.get("Status")    or {}
-            sales_rep = raw.get("salesRep")  or raw.get("SalesRep")  or {}
+            customer               = raw.get("customer")  or raw.get("Customer")  or {}
+            status                 = raw.get("status")    or raw.get("Status")    or {}
+            rep_id, rep_name       = _resolve_rep(raw)
             return {
                 "id":              raw.get("id")          or raw.get("Id"),
                 "estimate_number": raw.get("number")      or raw.get("Number"),
                 "name":            raw.get("name")        or raw.get("Name"),
                 "customer_name":   customer.get("name")   or customer.get("Name"),
-                "sales_rep":       sales_rep.get("name")  or sales_rep.get("Name"),
+                "sales_rep_name":  rep_name,
+                "sales_rep_id":    rep_id,
+                "sales_rep":       rep_name,              # backward-compat alias
                 "status":          status.get("name")     or status.get("Name"),
                 "total":           raw.get("orderTotal")  or raw.get("OrderTotal"),
                 "date_created":    raw.get("dateCreated") or raw.get("DateCreated"),
