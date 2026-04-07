@@ -1018,10 +1018,15 @@ OPERATIONS ANALYSIS
   where are jobs breaking                 → analyze_job_pipeline
   pipeline delays / ops report            → analyze_job_pipeline
   which jobs have no preview task         → analyze_job_pipeline
-  which jobs have no install scheduled    → analyze_job_pipeline
   how long from approval to install       → analyze_job_pipeline
-  delayed jobs / approval to install      → analyze_job_pipeline
   process breakdown / pipeline report     → analyze_job_pipeline
+
+INTELLIGENCE MODULES (structured analysis — Claude interprets, not computes)
+  stuck / delayed / stalled / not moving  → analyze_stuck_jobs
+  no install scheduled / install gaps     → analyze_install_gaps
+  sales rep health / rep performance      → analyze_rep_pipeline
+  which rep has most problems             → analyze_rep_pipeline
+  what jobs need to be scheduled          → analyze_install_gaps
 
 FINANCIAL
   unpaid invoices / AR / who owes us      → search_invoices
@@ -1257,6 +1262,39 @@ HARD FORMAT RULES
   ✓ Dollar amounts rounded to nearest dollar with $ sign
   ✓ Dates as Mon D, YYYY (e.g. Apr 5, 2026)
   ✓ Percentages where useful (e.g. "60% unpaid")
+════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════
+INTELLIGENCE MODULES — OUTPUT FORMAT
+════════════════════════════════════════════════════════
+When analyze_stuck_jobs, analyze_install_gaps, or analyze_rep_pipeline
+returns data, ALWAYS respond in this exact order:
+
+1. SUMMARY — one bold sentence with the critical finding and count.
+   ✓ "**23 jobs are stuck — 14 quoted with no follow-up, 9 approved with no action.**"
+   ✗ "Based on the analysis data, I can see that there are jobs that are stuck..."
+
+2. KEY FINDINGS — 3–5 bullet points with specific numbers and context.
+   • Longest stuck: [Customer], [N] days in [Status]
+   • Most affected rep: [Name] — [N] of their [X] jobs have issues
+   • Revenue at risk: $[total] across [N] stuck jobs
+
+3. EXAMPLES — table of the top 5–8 worst offenders (sorted by days, highest first).
+   | Customer | Rep | Status | Days | Issue |
+   Use plain-English issue text — no raw field names like "no_install_task".
+
+4. ACTIONS — 2–3 specific, role-appropriate next steps.
+   ✓ "Contact [Customer] today — their quote has been sitting 18 days."
+   ✓ "Schedule install tasks for the 9 approved jobs before end of week."
+   ✗ "You should follow up on stuck jobs." (too generic)
+
+RULES:
+  ✓ Always state the count in the SUMMARY (never vague)
+  ✓ Dollar amounts with $ sign, rounded to nearest dollar
+  ✓ Rep names from the data — never invent names
+  ✓ Percentages where useful: "7 of 15 approved jobs (47%) have no install"
+  ✗ Never show raw JSON field names in the response
+  ✗ Never say "the data shows" or "based on the analysis"
 ════════════════════════════════════════════════════════
 
 ════════════════════════════════════════════════════════
@@ -1657,6 +1695,69 @@ _CHAT_TOOLS = [
             "required": [],
         },
     },
+    # ── Intelligence Modules ───────────────────────────────────────────────────
+    {
+        "name": "analyze_stuck_jobs",
+        "description": (
+            "Identify jobs that are stuck — not progressing through the pipeline. "
+            "Checks Quoted (>7 days), Approved (>5 days), and In Progress (>10 days "
+            "with no install task). Returns each stuck job with customer, rep, "
+            "days stuck, and the specific issue. "
+            "Use for: 'what jobs are stuck', 'delayed jobs', 'stalled estimates', "
+            "'which jobs aren't moving', 'pipeline problems'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max estimates to check per status (default 50, max 50).",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "analyze_install_gaps",
+        "description": (
+            "Find approved or in-progress jobs that have NO install task scheduled. "
+            "Returns each job with customer, rep, status, and days since approval. "
+            "Use for: 'what jobs have no install scheduled', 'install gaps', "
+            "'what needs to be scheduled', 'missing install tasks', "
+            "'what's not scheduled yet', 'scheduling gaps'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max estimates to check (default 40, max 50).",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "analyze_rep_pipeline",
+        "description": (
+            "Sales rep pipeline health — groups job issues by rep. "
+            "Shows each rep's total jobs, stuck jobs, jobs missing install, "
+            "and average days from approval to install. Worst reps listed first. "
+            "Use for: 'sales rep performance', 'rep pipeline', 'how are reps doing', "
+            "'which rep has the most stuck jobs', 'rep accountability', "
+            "'who has the most problems', 'rep health check'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max estimates to analyse across all reps (default 30, max 50).",
+                },
+            },
+            "required": [],
+        },
+    },
     # ── Knowledge Base ─────────────────────────────────────────────────────────
     {
         "name": "search_knowledge",
@@ -2015,6 +2116,27 @@ def _paginated_customer_search(search_name: str) -> dict:
         "total":     grand_total,
         "source":    "striven_live",
     }
+
+
+def _parse_date_str(s):
+    """
+    Parse an ISO date string to a naive datetime. Returns None if unparseable.
+    Handles both '2025-01-15T14:30:00' and '2025-01-15' forms.
+    Module-level helper shared by all intelligence modules.
+    """
+    from datetime import datetime
+    if not s:
+        return None
+    s = str(s)[:19]
+    if "T" in s:
+        try:
+            return datetime.strptime(s, "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            pass
+    try:
+        return datetime.strptime(s[:10], "%Y-%m-%d")
+    except ValueError:
+        return None
 
 
 def _run_pipeline_analysis(
@@ -2435,6 +2557,7 @@ def _run_pipeline_analysis(
         },
         "by_sales_rep": by_rep,
         "problem_jobs": problem_jobs,
+        "all_jobs": job_results,
         "note": (
             f"Analysed {total_analyzed} estimates in {elapsed}s. "
             f"{total_req} require a preview task (remodel/new construction); "
@@ -2445,6 +2568,317 @@ def _run_pipeline_analysis(
             "contains '[preview]', 'preview-', or 'site preview'. "
             "Install detection: name or type contains 'install'."
         ),
+    }
+
+
+
+# ---------------------------------------------------------------------------
+# Intelligence Module 1 — Stuck Jobs Analysis
+# ---------------------------------------------------------------------------
+
+def _analyze_stuck_jobs(limit: int = 50) -> dict:
+    """
+    Identify jobs that are stuck across Quoted, Approved, and In Progress statuses.
+
+    Stuck thresholds (business-defined):
+      Quoted      > 7 days  — no customer follow-up
+      Approved    > 5 days  — no scheduling action taken
+      In Progress > 10 days — in progress but no install task scheduled
+
+    For In Progress jobs: checks task list for install keyword (costs 1 API call/job).
+    Capped at 25 in-progress estimates to control latency.
+
+    Returns structured dict ready for Claude interpretation.
+    """
+    import time as _time
+    from datetime import datetime
+
+    t_start = _time.monotonic()
+    today   = datetime.utcnow()
+
+    stuck_jobs:   list[dict] = []
+    total_checked = 0
+
+    # ── Quoted: flag anything older than 7 days ───────────────────────────────
+    print(f"[stuck_jobs] Fetching Quoted (19) estimates...", flush=True)
+    raw_q  = striven.search_sales_orders({"PageIndex": 0, "PageSize": min(limit, 50), "StatusChangedTo": 19})
+    for r in (raw_q.get("data") or []):
+        total_checked += 1
+        est  = _fmt(r)
+        ref  = _parse_date_str(est.get("date_created"))
+        if ref is None:
+            continue
+        days = (today - ref).days
+        if days > 7:
+            stuck_jobs.append({
+                "id":               str(est.get("id") or ""),
+                "estimate_number":  est.get("estimate_number"),
+                "customer":         est.get("customer_name") or "Unknown",
+                "sales_rep":        est.get("sales_rep") or "Unassigned",
+                "status":           "Quoted",
+                "days_in_status":   days,
+                "total":            est.get("total"),
+                "issue":            f"Quote not followed up in {days} days — needs customer contact",
+            })
+
+    # ── Approved: flag anything older than 5 days ─────────────────────────────
+    print(f"[stuck_jobs] Fetching Approved (22) estimates...", flush=True)
+    raw_a  = striven.search_sales_orders({"PageIndex": 0, "PageSize": min(limit, 50), "StatusChangedTo": 22})
+    for r in (raw_a.get("data") or []):
+        total_checked += 1
+        est  = _fmt(r)
+        ref  = _parse_date_str(est.get("date_approved") or est.get("date_created"))
+        if ref is None:
+            continue
+        days = (today - ref).days
+        if days > 5:
+            stuck_jobs.append({
+                "id":               str(est.get("id") or ""),
+                "estimate_number":  est.get("estimate_number"),
+                "customer":         est.get("customer_name") or "Unknown",
+                "sales_rep":        est.get("sales_rep") or "Unassigned",
+                "status":           "Approved",
+                "days_in_status":   days,
+                "total":            est.get("total"),
+                "issue":            f"Approved {days} days ago — no scheduling action taken",
+            })
+
+    # ── In Progress: flag > 10 days with no install task ─────────────────────
+    # Caps at 25 in-progress estimates to control the per-job task API call cost.
+    print(f"[stuck_jobs] Fetching In Progress (25) estimates...", flush=True)
+    raw_ip = striven.search_sales_orders({"PageIndex": 0, "PageSize": min(limit, 25), "StatusChangedTo": 25})
+    for r in (raw_ip.get("data") or []):
+        total_checked += 1
+        est  = _fmt(r)
+        ref  = _parse_date_str(est.get("date_approved") or est.get("date_created"))
+        if ref is None:
+            continue
+        days = (today - ref).days
+        if days <= 10:
+            continue
+
+        # Only cost the task API call for actually old in-progress jobs
+        est_id      = est.get("id")
+        has_install = False
+        try:
+            task_raw  = striven.search_tasks({"RelatedEntityId": est_id, "PageSize": 25})
+            tasks     = [_fmt_task(t) for t in (task_raw.get("data") or [])]
+            has_install = any(
+                "install" in (t.get("name")      or "").lower() or
+                "install" in (t.get("task_type") or "").lower()
+                for t in tasks
+            )
+        except Exception as exc:
+            print(f"[stuck_jobs] WARNING: task fetch failed for est {est_id}: {exc}", flush=True)
+
+        if not has_install:
+            stuck_jobs.append({
+                "id":               str(est_id or ""),
+                "estimate_number":  est.get("estimate_number"),
+                "customer":         est.get("customer_name") or "Unknown",
+                "sales_rep":        est.get("sales_rep") or "Unassigned",
+                "status":           "In Progress",
+                "days_in_status":   days,
+                "total":            est.get("total"),
+                "issue":            f"In progress {days} days — no install task scheduled",
+            })
+
+    # Sort worst-first
+    stuck_jobs.sort(key=lambda x: x["days_in_status"], reverse=True)
+    elapsed = round(_time.monotonic() - t_start, 2)
+
+    print(
+        f"[stuck_jobs] complete — checked={total_checked} "
+        f"stuck={len(stuck_jobs)} elapsed={elapsed}s",
+        flush=True,
+    )
+
+    return {
+        "analysis_type":   "stuck_jobs",
+        "total_checked":   total_checked,
+        "stuck_count":     len(stuck_jobs),
+        "stuck_jobs":      stuck_jobs,
+        "thresholds": {
+            "quoted_days":      7,
+            "approved_days":    5,
+            "in_progress_days": 10,
+        },
+        "elapsed_seconds": elapsed,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Intelligence Module 2 — Install Scheduling Gaps
+# ---------------------------------------------------------------------------
+
+def _analyze_install_gaps(limit: int = 40) -> dict:
+    """
+    Find approved or in-progress jobs that have no install task scheduled.
+
+    Fetches up to `limit` estimates across Approved (22) and In Progress (25),
+    then checks each for an install task. Returns every job missing one,
+    sorted by days since approval (oldest first).
+
+    This is the definitive install-gap check — more focused than the full
+    pipeline analysis because it only answers one question: "Which jobs
+    have no install date set?"
+    """
+    import time as _time
+    from datetime import datetime
+
+    t_start = _time.monotonic()
+    today   = datetime.utcnow()
+    per_status = max(limit // 2, 10)
+
+    # Fetch approved and in-progress estimates
+    all_estimates: list[dict] = []
+    for sid in [22, 25]:
+        raw  = striven.search_sales_orders({
+            "PageIndex": 0,
+            "PageSize":  per_status,
+            "StatusChangedTo": sid,
+        })
+        data = raw.get("data") or []
+        all_estimates.extend([_fmt(r) for r in data])
+        print(f"[install_gaps] status={sid} → {len(data)} estimates", flush=True)
+
+    total_checked = len(all_estimates)
+    gaps: list[dict] = []
+
+    for est in all_estimates:
+        est_id      = est.get("id")
+        has_install = False
+        try:
+            task_raw  = striven.search_tasks({"RelatedEntityId": est_id, "PageSize": 25})
+            tasks     = [_fmt_task(t) for t in (task_raw.get("data") or [])]
+            has_install = any(
+                "install" in (t.get("name")      or "").lower() or
+                "install" in (t.get("task_type") or "").lower()
+                for t in tasks
+            )
+        except Exception as exc:
+            print(f"[install_gaps] WARNING: task fetch failed for est {est_id}: {exc}", flush=True)
+
+        if not has_install:
+            ref  = _parse_date_str(est.get("date_approved") or est.get("date_created"))
+            days = (today - ref).days if ref else None
+            gaps.append({
+                "id":                  str(est_id or ""),
+                "estimate_number":     est.get("estimate_number"),
+                "customer":            est.get("customer_name") or "Unknown",
+                "sales_rep":           est.get("sales_rep") or "Unassigned",
+                "status":              est.get("status") or "Unknown",
+                "days_since_approval": days,
+                "total":               est.get("total"),
+            })
+
+    # Oldest approval first — highest urgency
+    gaps.sort(key=lambda x: x.get("days_since_approval") or 0, reverse=True)
+    elapsed = round(_time.monotonic() - t_start, 2)
+
+    print(
+        f"[install_gaps] complete — checked={total_checked} "
+        f"missing_install={len(gaps)} elapsed={elapsed}s",
+        flush=True,
+    )
+
+    return {
+        "analysis_type":        "install_gaps",
+        "total_checked":        total_checked,
+        "missing_install_count": len(gaps),
+        "jobs_without_install": gaps,
+        "elapsed_seconds":      elapsed,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Intelligence Module 3 — Sales Rep Pipeline Health
+# ---------------------------------------------------------------------------
+
+def _analyze_rep_pipeline(limit: int = 30) -> dict:
+    """
+    Sales rep pipeline health — group operational issues by rep.
+
+    Runs the full pipeline analysis (approved + in-progress jobs, task checks,
+    timeline gaps) and restructures the output as a per-rep accountability view:
+      • How many jobs does each rep own?
+      • How many are stuck (have issues)?
+      • How many have no install scheduled?
+      • What is the average days from approval to install?
+
+    Reps are sorted by issue count (worst first) so the most urgent problems
+    are always at the top.
+    """
+    import time as _time
+
+    t_start  = _time.monotonic()
+
+    # Reuse the full pipeline analysis — avoids duplicate API calls
+    pipeline = _run_pipeline_analysis(limit=limit, status_ids=[22, 25])
+    all_jobs = pipeline.get("all_jobs") or []
+
+    # Build per-rep aggregates
+    rep_data: dict[str, dict] = {}
+    for j in all_jobs:
+        rep = j.get("sales_rep") or "Unassigned"
+        if rep not in rep_data:
+            rep_data[rep] = {
+                "rep":               rep,
+                "total_jobs":        0,
+                "stuck_jobs":        0,       # jobs with any issue
+                "missing_install":   0,
+                "days_to_install_list": [],   # raw list for avg computation
+            }
+        rd = rep_data[rep]
+        rd["total_jobs"] += 1
+
+        if j.get("has_issues"):
+            rd["stuck_jobs"] += 1
+
+        if "no_install_task" in (j.get("issues") or []):
+            rd["missing_install"] += 1
+
+        dti = j.get("days_to_install")
+        if dti is not None:
+            rd["days_to_install_list"].append(dti)
+
+    # Compute averages and clean up raw lists
+    rep_summary: list[dict] = []
+    for rep, rd in rep_data.items():
+        dti_list = rd.pop("days_to_install_list")
+        avg = round(sum(dti_list) / len(dti_list), 1) if dti_list else None
+        rep_summary.append({
+            "rep":                  rd["rep"],
+            "total_jobs":           rd["total_jobs"],
+            "stuck_jobs":           rd["stuck_jobs"],
+            "missing_install":      rd["missing_install"],
+            "avg_days_to_install":  avg,
+        })
+
+    # Worst reps first (most stuck jobs, then most missing install)
+    rep_summary.sort(key=lambda x: (-x["stuck_jobs"], -x["missing_install"]))
+
+    # Overall health metrics
+    total_jobs        = len(all_jobs)
+    total_stuck       = sum(r["stuck_jobs"]       for r in rep_summary)
+    total_no_install  = sum(r["missing_install"]   for r in rep_summary)
+
+    elapsed = round(_time.monotonic() - t_start, 2)
+    print(
+        f"[rep_pipeline] complete — {len(rep_summary)} reps, "
+        f"{total_jobs} jobs, {total_stuck} stuck, "
+        f"{total_no_install} missing install, {elapsed}s",
+        flush=True,
+    )
+
+    return {
+        "analysis_type":     "rep_pipeline",
+        "total_jobs":        total_jobs,
+        "total_reps":        len(rep_summary),
+        "total_stuck":       total_stuck,
+        "total_no_install":  total_no_install,
+        "rep_summary":       rep_summary,
+        "elapsed_seconds":   elapsed,
     }
 
 
@@ -2832,6 +3266,24 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
                 date_to=date_to,
             )
 
+        # ── analyze_stuck_jobs ────────────────────────────────────────────────
+        if name == "analyze_stuck_jobs":
+            limit = min(tool_input.get("limit", 50), 50)
+            print(f"[analyze_stuck_jobs] limit={limit}", flush=True)
+            return _analyze_stuck_jobs(limit=limit)
+
+        # ── analyze_install_gaps ──────────────────────────────────────────────
+        if name == "analyze_install_gaps":
+            limit = min(tool_input.get("limit", 40), 50)
+            print(f"[analyze_install_gaps] limit={limit}", flush=True)
+            return _analyze_install_gaps(limit=limit)
+
+        # ── analyze_rep_pipeline ──────────────────────────────────────────────
+        if name == "analyze_rep_pipeline":
+            limit = min(tool_input.get("limit", 30), 50)
+            print(f"[analyze_rep_pipeline] limit={limit}", flush=True)
+            return _analyze_rep_pipeline(limit=limit)
+
         # ── search_knowledge ──────────────────────────────────────────────────
         # Searches the structured knowledge base (markdown files in /knowledge/).
         # Returns the most relevant sections for the query.
@@ -3029,6 +3481,32 @@ def chat_api():
         # ── Tasks / workload ──────────────────────────────────────────────────
         if _re.search(r'\bopen\s+task|\boverdue\s+task|\btask\s+list|\bworkload\b', q):
             return "search_tasks", _execute_tool("search_tasks", {"page_size": 25})
+
+        # ── Stuck / delayed jobs (intelligence module) ────────────────────────
+        if _re.search(
+            r'\bstuck\b|\bdelayed?\b|\bstalled?\b|\bnot\s+moving\b'
+            r'|\bno\s+progress\b|\bwhat.*\bstuck\b|\bstuck.*\bjob',
+            q,
+        ):
+            return "analyze_stuck_jobs", _execute_tool("analyze_stuck_jobs", {})
+
+        # ── Install scheduling gaps (intelligence module) ─────────────────────
+        if _re.search(
+            r'\bno\s+install\b|\bmissing\s+install\b|\binstall\s+gap\b'
+            r'|\bnot\s+scheduled\b|\bneeds?\s+to\s+be\s+scheduled\b'
+            r'|\bscheduling\s+gap\b|\bwhat.*\bschedul\b|\bschedul.*\bgap\b',
+            q,
+        ):
+            return "analyze_install_gaps", _execute_tool("analyze_install_gaps", {})
+
+        # ── Sales rep pipeline health (intelligence module) ───────────────────
+        if _re.search(
+            r'\bsales\s+rep\b|\brep\s+(?:health|performance|pipeline|report)\b'
+            r'|\bhow\s+are\s+(?:the\s+)?reps\b|\bwhich\s+rep\b'
+            r'|\brep\s+account|\bperformance\s+by\s+rep',
+            q,
+        ):
+            return "analyze_rep_pipeline", _execute_tool("analyze_rep_pipeline", {})
 
         # ── Knowledge-only questions (no live data needed) ────────────────────
         if _re.search(
