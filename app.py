@@ -159,7 +159,7 @@ def _cache_set(key: str, data: object) -> None:
 # Health check
 # ---------------------------------------------------------------------------
 
-@app.get("/health")
+@app.route("/health", methods=["GET"])
 def health():
     """Simple liveness probe — returns 200 if the server is running."""
     return jsonify({"status": "ok", "service": "striven-api"})
@@ -169,7 +169,7 @@ def health():
 # Estimates
 # ---------------------------------------------------------------------------
 
-@app.get("/get-estimate/<int:estimate_id>")
+@app.route("/get-estimate/<int:estimate_id>", methods=["GET"])
 def get_estimate(estimate_id: int):
     """
     Fetch a single estimate from Striven by ID.
@@ -187,7 +187,7 @@ def get_estimate(estimate_id: int):
         return jsonify({"error": str(exc)}), 500
 
 
-@app.get("/search-estimates")
+@app.route("/search-estimates", methods=["GET"])
 def search_estimates():
     """
     Search estimates (Striven sales orders) with optional query filters.
@@ -270,7 +270,7 @@ def search_estimates():
 # totals and other calculated fields not available in /v1/sales-orders/search.
 # ---------------------------------------------------------------------------
 
-@app.get("/report-preview")
+@app.route("/report-preview", methods=["GET"])
 def report_preview():
     """
     Fetch a Striven report by access key and return the raw structure.
@@ -439,8 +439,8 @@ def _run_portal_flag_audit() -> dict:
     }
 
 
-@app.get("/missing-portal-flag")
-@app.get("/portal-flag-audit")
+@app.route("/missing-portal-flag", methods=["GET"])
+@app.route("/portal-flag-audit", methods=["GET"])
 def missing_portal_flag():
     """
     Audit every estimate for the Customer Portal display flag.
@@ -737,7 +737,7 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
     return result
 
 
-@app.get("/gas-log-audit")
+@app.route("/gas-log-audit", methods=["GET"])
 def gas_log_audit():
     """
     Thin route wrapper around _run_gas_log_audit().
@@ -759,7 +759,7 @@ def gas_log_audit():
 # Both reuse _run_gas_log_audit() — no logic is duplicated.
 # ---------------------------------------------------------------------------
 
-@app.get("/gas-log-audit-export")
+@app.route("/gas-log-audit-export", methods=["GET"])
 def gas_log_audit_export():
     """
     Run the gas log audit (limit=200) and return results as a
@@ -796,7 +796,7 @@ def gas_log_audit_export():
         return jsonify({"error": str(exc)}), 500
 
 
-@app.get("/gas-log-audit-pdf")
+@app.route("/gas-log-audit-pdf", methods=["GET"])
 def gas_log_audit_pdf():
     """
     Run the gas log audit (limit=200) and return results as a
@@ -898,7 +898,7 @@ def gas_log_audit_pdf():
 # Data pipeline: Striven → Supabase
 # ---------------------------------------------------------------------------
 
-@app.get("/sync-estimates")
+@app.route("/sync-estimates", methods=["GET"])
 def sync_estimates():
     """
     Trigger an estimate sync from Striven into Supabase.
@@ -947,7 +947,7 @@ def sync_estimates():
 # Supabase query endpoints — read-only, Claude-facing
 # ---------------------------------------------------------------------------
 
-@app.get("/estimates/count")
+@app.route("/estimates/count", methods=["GET"])
 def estimates_count():
     """Return the total number of estimates stored in Supabase."""
     try:
@@ -956,7 +956,7 @@ def estimates_count():
         return jsonify({"error": str(exc)}), 500
 
 
-@app.get("/estimates/high-value")
+@app.route("/estimates/high-value", methods=["GET"])
 def estimates_high_value():
     """
     Return up to 25 estimates where total > 10 000, sorted highest first.
@@ -969,7 +969,7 @@ def estimates_high_value():
         return jsonify({"error": str(exc)}), 500
 
 
-@app.get("/estimates/by-customer")
+@app.route("/estimates/by-customer", methods=["GET"])
 def estimates_by_customer():
     """
     Case-insensitive customer name search against Supabase.
@@ -1011,7 +1011,7 @@ def estimates_by_customer():
 # The full analyze_install_gaps tool gives the precise count.
 # ---------------------------------------------------------------------------
 
-@app.get("/debug-one-order")
+@app.route("/debug-one-order", methods=["GET"])
 def debug_one_order():
     """
     Fetch ONE raw Striven sales order and print every field to logs.
@@ -1044,7 +1044,7 @@ def debug_one_order():
         return jsonify({"error": str(exc)}), 500
 
 
-@app.get("/assign-missing-reps")
+@app.route("/assign-missing-reps", methods=["GET"])
 def assign_missing_reps():
     """
     Find all Approved (22) jobs with no SalesRep and assign the fallback rep
@@ -1208,7 +1208,7 @@ def assign_missing_reps():
     })
 
 
-@app.get("/snapshot/stuck_jobs")
+@app.route("/snapshot/stuck_jobs", methods=["GET"])
 def snapshot_stuck_jobs():
     """
     Return the count of stuck jobs and the top-3 worst offenders.
@@ -1297,7 +1297,7 @@ def snapshot_stuck_jobs():
     return jsonify(result)
 
 
-@app.get("/snapshot/install_gaps")
+@app.route("/snapshot/install_gaps", methods=["GET"])
 def snapshot_install_gaps():
     """
     Return the count of approved/in-progress jobs and the 3 oldest (by approval date).
@@ -1372,7 +1372,7 @@ def snapshot_install_gaps():
     return jsonify(result)
 
 
-@app.get("/snapshot/rep_pipeline")
+@app.route("/snapshot/rep_pipeline", methods=["GET"])
 def snapshot_rep_pipeline():
     """
     Return the count of active sales reps and the top-3 by open-job volume.
@@ -1423,7 +1423,7 @@ def snapshot_rep_pipeline():
     return jsonify(result)
 
 
-@app.get("/snapshot/pipeline")
+@app.route("/snapshot/pipeline", methods=["GET"])
 def snapshot_pipeline():
     """
     Return a live summary of the full active sales pipeline.
@@ -1509,7 +1509,7 @@ def snapshot_pipeline():
     return jsonify(result)
 
 
-@app.get("/snapshot/gas_log_audit")
+@app.route("/snapshot/gas_log_audit", methods=["GET"])
 def snapshot_gas_log_audit():
     """
     Return a lightweight gas-log audit summary.
@@ -4380,13 +4380,13 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
         return {"error": str(exc)}
 
 
-@app.get("/")
+@app.route("/", methods=["GET"])
 def chat_ui():
     """Serve the WilliamSmith chat interface."""
     return render_template("index.html")
 
 
-@app.get("/logs")
+@app.route("/logs", methods=["GET"])
 def view_logs():
     """Admin view — shows the last 100 WilliamSmith search queries."""
     try:
@@ -4397,7 +4397,7 @@ def view_logs():
     return render_template("logs.html", logs=rows)
 
 
-@app.post("/api/chat")
+@app.route("/api/chat", methods=["POST"])
 def chat_api():
     """
     Agentic chat endpoint.
@@ -5010,7 +5010,7 @@ def _format_count(result: dict) -> str:
 
 # ── Route ─────────────────────────────────────────────────────────────────────
 
-@app.post("/chat")
+@app.route("/chat", methods=["POST"])
 def simple_chat():
     """
     Rule-based natural language chat endpoint.
