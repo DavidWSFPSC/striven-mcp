@@ -486,106 +486,12 @@
   </div>
 </div>
 
-<!-- ── Intelligence Panel ── -->
-<div class="intel-panel">
-  <div class="intel-inner">
-
-    <div class="intel-header">
-      <div class="intel-title">⚡ Straude Intelligence</div>
-      <p class="intel-sub">Operations Overview</p>
-    </div>
-
-    <div class="intel-cards">
-
-      <button class="intel-card" id="card-stuck" onclick="runModule('stuck_jobs')">
-        <div class="intel-card-icon">🔴</div>
-        <div class="intel-card-body">
-          <div class="intel-card-name-row">
-            <span class="intel-card-name">Stuck Jobs</span>
-            <span class="intel-badge state-loading" id="badge-stuck">...</span>
-          </div>
-          <div class="intel-card-desc">Quoted, approved &amp; in-progress jobs not moving</div>
-          <div class="intel-card-impact" id="impact-stuck"></div>
-        </div>
-        <div class="intel-card-arrow">→</div>
-      </button>
-
-      <button class="intel-card" id="card-install" onclick="runModule('install_gaps')">
-        <div class="intel-card-icon">📅</div>
-        <div class="intel-card-body">
-          <div class="intel-card-name-row">
-            <span class="intel-card-name">Install Gaps</span>
-            <span class="intel-badge state-loading" id="badge-install">...</span>
-          </div>
-          <div class="intel-card-desc">Approved jobs with no install task scheduled</div>
-          <div class="intel-card-impact" id="impact-install"></div>
-        </div>
-        <div class="intel-card-arrow">→</div>
-      </button>
-
-      <button class="intel-card" id="card-rep" onclick="runModule('rep_pipeline')">
-        <div class="intel-card-icon">📊</div>
-        <div class="intel-card-body">
-          <div class="intel-card-name-row">
-            <span class="intel-card-name">Sales Rep Performance</span>
-            <span class="intel-badge state-loading" id="badge-rep">...</span>
-          </div>
-          <div class="intel-card-desc">Pipeline health grouped by sales rep</div>
-        </div>
-        <div class="intel-card-arrow">→</div>
-      </button>
-
-      <div class="intel-card pipeline-split" id="card-pipeline">
-        <div class="intel-card-icon">📈</div>
-        <div class="intel-card-body pipeline-actions">
-
-          <!-- Top: run full analysis (same behavior as before) -->
-          <button class="pipeline-top-btn" onclick="runModule('weekly_pipeline')">
-            <div class="intel-card-name-row">
-              <span class="intel-card-name">Weekly Pipeline</span>
-              <span class="intel-badge state-loading" id="badge-pipeline">...</span>
-            </div>
-            <div class="intel-card-desc">Full pipeline review — analysis &amp; rep breakdown</div>
-          </button>
-
-          <!-- Bottom: direct Excel download (same URL as footer button) -->
-          <a class="pipeline-excel-btn"
-             href="https://striven-mcp-v2.onrender.com/gas-log-audit-export"
-             target="_blank" rel="noopener">
-            <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM8 11h8v1.5H8V11zm0 3h8v1.5H8V14zm0 3h5v1.5H8V17z"/>
-            </svg>
-            Open Excel Report
-          </a>
-
-        </div>
-      </div>
-
-    </div>
-
-    <!-- Preview panel — slides open when a card is clicked -->
-    <div id="intel-preview" class="intel-preview">
-      <div class="intel-preview-inner">
-        <div class="intel-preview-header" id="preview-header">Top results</div>
-        <div id="preview-items"></div>
-      </div>
-    </div>
-
-  </div>
-</div>
 
 <!-- ── Chat ── -->
 <div class="chat-window">
   <div class="messages" id="messages">
     <div class="welcome">
-      <h2>Get instant insight into your jobs, installs, and pipeline.</h2>
-      <p>Click a module above or choose a question below.</p>
-      <div class="suggestions">
-        <button class="suggestion-btn" onclick="ask(this)">What's stuck right now?</button>
-        <button class="suggestion-btn" onclick="ask(this)">Which installs are coming up?</button>
-        <button class="suggestion-btn" onclick="ask(this)">Which jobs have no install scheduled?</button>
-        <button class="suggestion-btn" onclick="ask(this)">Which gas log installs are missing the removal fee?</button>
-      </div>
+      <h2>Ask Straude anything about your business.</h2>
     </div>
   </div>
 
@@ -603,20 +509,6 @@
       </button>
     </div>
     <div class="hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</div>
-    <div class="export-bar">
-      <a class="export-btn csv"
-         href="https://striven-mcp-v2.onrender.com/gas-log-audit-export"
-         target="_blank" rel="noopener">
-        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM8 11h8v1.5H8V11zm0 3h8v1.5H8V14zm0 3h5v1.5H8V17z"/></svg>
-        Download Excel Report
-      </a>
-      <a class="export-btn pdf"
-         href="https://striven-mcp-v2.onrender.com/gas-log-audit-pdf"
-         target="_blank" rel="noopener">
-        <svg viewBox="0 0 24 24"><path d="M20 2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-8.5 7.5c0 .83-.67 1.5-1.5 1.5H9v2H7.5V7H10c.83 0 1.5.67 1.5 1.5v1zm5 2c0 .83-.67 1.5-1.5 1.5h-2.5V7H15c.83 0 1.5.67 1.5 1.5v3zm4-3H19v1h1.5V11H19v2h-1.5V7h3v1.5zM9 9.5h1v-1H9v1zM4 6H2v14a2 2 0 0 0 2 2h14v-2H4V6zm10 5.5h1v-3h-1v3z"/></svg>
-        Download PDF Report
-      </a>
-    </div>
   </div>
 </div>
 
@@ -636,18 +528,8 @@
   // Capture initial welcome state so resetHome() can restore it exactly
   const WELCOME_HTML = messagesEl.innerHTML;
 
-  const CARDS = {
-    stuck_jobs:      document.getElementById("card-stuck"),
-    install_gaps:    document.getElementById("card-install"),
-    rep_pipeline:    document.getElementById("card-rep"),
-    weekly_pipeline: document.getElementById("card-pipeline"),
-  };
-  const BADGES = {
-    stuck_jobs:      document.getElementById("badge-stuck"),
-    install_gaps:    document.getElementById("badge-install"),
-    rep_pipeline:    document.getElementById("badge-rep"),
-    weekly_pipeline: document.getElementById("badge-pipeline"),
-  };
+  const CARDS  = {};   // intelligence panel removed
+  const BADGES = {};   // intelligence panel removed
 
   marked.setOptions({ breaks: true, gfm: true });
 
@@ -1118,7 +1000,7 @@
 
   // ── Boot ───────────────────────────────────────────────────────────────────
   inputEl.focus();
-  loadSnapshots();   // fetch all 3 snapshots in parallel on page load
+  // loadSnapshots() removed — intelligence panel no longer shown
 </script>
 </body>
 </html>
