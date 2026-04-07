@@ -38,11 +38,25 @@
     }
     .header-text h1 { font-size: 17px; font-weight: 700; letter-spacing: 0.3px; }
     .header-text p  { font-size: 12px; color: #a0a8c0; margin-top: 1px; }
-    .status-dot {
+    .header-right {
       margin-left: auto;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .status-dot {
       display: flex; align-items: center; gap: 6px;
       font-size: 12px; color: #6ee7b7;
     }
+    .home-btn {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 13px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px;
+      color: #e2e8f0; font-size: 12.5px; font-weight: 600;
+      cursor: pointer; font-family: inherit;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .home-btn:hover { background: rgba(255,255,255,0.18); border-color: rgba(255,255,255,0.3); }
     .dot {
       width: 8px; height: 8px; border-radius: 50%;
       background: #6ee7b7; animation: pulse 2s infinite;
@@ -392,6 +406,30 @@
     .export-btn.csv { background: #1a1a2e; color: #fff; }
     .export-btn.pdf { background: linear-gradient(135deg, #e85d04, #f48c06); color: #fff; }
     .export-btn svg { width: 14px; height: 14px; fill: currentColor; flex-shrink: 0; }
+
+    /* ── Follow-up suggestion row ────────────────────────────────────────────── */
+    .followup-row {
+      display: flex; flex-wrap: wrap; gap: 8px;
+      padding: 2px 0 6px 44px;
+    }
+    .followup-btn {
+      background: #f0f7ff;
+      border: 1.5px solid #bfdbfe;
+      border-radius: 20px;
+      padding: 6px 14px;
+      font-size: 12.5px; color: #1d4ed8;
+      cursor: pointer; font-family: inherit;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .followup-btn:hover { background: #dbeafe; border-color: #93c5fd; color: #1e40af; }
+
+    /* ── Response spacing tweaks ─────────────────────────────────────────────── */
+    .bubble p { margin: 6px 0; }
+    .bubble p:first-child { margin-top: 0; }
+    .bubble h2 { margin-top: 16px; }
+    .bubble h2:first-child { margin-top: 0; }
+    .bubble ul, .bubble ol { margin: 8px 0; }
+    .bubble li { margin: 4px 0; }
   </style>
 </head>
 <body>
@@ -403,7 +441,10 @@
     <h1>Straude</h1>
     <p>Operational Intelligence</p>
   </div>
-  <div class="status-dot"><div class="dot"></div> Live</div>
+  <div class="header-right">
+    <div class="status-dot"><div class="dot"></div> Live</div>
+    <button class="home-btn" onclick="resetHome()">🏠 Home</button>
+  </div>
 </div>
 
 <!-- ── Intelligence Panel ── -->
@@ -484,13 +525,15 @@
 <div class="chat-window">
   <div class="messages" id="messages">
     <div class="welcome">
-      <h2>I'm Straude.</h2>
-      <p>Click a module above for instant analysis, or ask me anything about your pipeline, customers, and job status.</p>
+      <h2>Ask me anything about jobs, customers, installs, or your pipeline.</h2>
+      <p>Click a module above for instant analysis, or type a question below.</p>
       <div class="suggestions">
-        <button class="suggestion-btn" onclick="ask(this)">How many estimates do we have?</button>
-        <button class="suggestion-btn" onclick="ask(this)">Show me our biggest jobs</button>
-        <button class="suggestion-btn" onclick="ask(this)">What estimates are approved right now?</button>
-        <button class="suggestion-btn" onclick="ask(this)">Find estimates for a customer</button>
+        <button class="suggestion-btn" onclick="ask(this)">What should I be working on today?</button>
+        <button class="suggestion-btn" onclick="ask(this)">Show me my jobs</button>
+        <button class="suggestion-btn" onclick="ask(this)">What's stuck right now?</button>
+        <button class="suggestion-btn" onclick="ask(this)">Which installs are coming up?</button>
+        <button class="suggestion-btn" onclick="ask(this)">Do any jobs need attention?</button>
+        <button class="suggestion-btn" onclick="ask(this)">Which gas log installs are missing the removal fee?</button>
       </div>
     </div>
   </div>
@@ -539,6 +582,9 @@
   const inputEl    = document.getElementById("input");
   const sendBtn    = document.getElementById("sendBtn");
 
+  // Capture initial welcome state so resetHome() can restore it exactly
+  const WELCOME_HTML = messagesEl.innerHTML;
+
   const CARDS = {
     stuck_jobs:      document.getElementById("card-stuck"),
     install_gaps:    document.getElementById("card-install"),
@@ -582,6 +628,24 @@
     },
   };
 
+  // ── Follow-up suggestions per module ──────────────────────────────────────
+  const FOLLOWUPS = {
+    stuck_jobs:      ["Show me the worst ones", "Who owns these jobs?", "What should I fix first?"],
+    install_gaps:    ["Which installs are most urgent?", "Who's responsible for scheduling?", "Show missing installs by rep"],
+    rep_pipeline:    ["Who has the most stuck jobs?", "Which rep needs attention first?", "Show full rep details"],
+    weekly_pipeline: ["What's the biggest risk this week?", "Show me the rep breakdown", "Which jobs need action today?"],
+  };
+
+  // ── Intent routing map ─────────────────────────────────────────────────────
+  const INTENT_RULES = [
+    { re: /\bstuck\b|jobs? (are )?not moving|delayed jobs?|what.s stuck/i,                       key: "stuck_jobs"      },
+    { re: /install.*(gap|not scheduled|coming up)|no install|missing (an )?install task/i,        key: "install_gaps"    },
+    { re: /sales rep performance|\brep breakdown\b|by (sales )?rep|rep.s pipeline/i,              key: "rep_pipeline"    },
+    { re: /weekly pipeline|pipeline (review|report|meeting|status)\b|full pipeline/i,             key: "weekly_pipeline" },
+  ];
+  // Phrases that are too specific to route to a module (let Claude handle them)
+  const INTENT_BYPASS = /gas log|removal fee|estimate #|job #\d|customer:/i;
+
   // ── Utilities ──────────────────────────────────────────────────────────────
   function escHtml(str) {
     return String(str)
@@ -601,6 +665,50 @@
 
   function dismissWelcome() {
     document.querySelector(".welcome")?.remove();
+  }
+
+  function clearFollowups() {
+    document.querySelectorAll(".followup-row").forEach(el => el.remove());
+  }
+
+  // ── Home reset ─────────────────────────────────────────────────────────────
+  function resetHome() {
+    history = [];
+    activeModule = null;
+    setBusy(false);
+    hidePreview();
+    clearFollowups();
+    Object.values(CARDS).forEach(c => c.classList.remove("active-card"));
+    messagesEl.innerHTML = WELCOME_HTML;
+    inputEl.value = "";
+    inputEl.style.height = "auto";
+    inputEl.focus();
+  }
+
+  // ── Follow-up suggestions renderer ────────────────────────────────────────
+  function showFollowups(moduleKey) {
+    const items = FOLLOWUPS[moduleKey];
+    if (!items) return;
+    const row = document.createElement("div");
+    row.className = "followup-row";
+    items.forEach(label => {
+      const btn = document.createElement("button");
+      btn.className = "followup-btn";
+      btn.textContent = label;
+      btn.onclick = () => {
+        if (busy) return;
+        clearFollowups();
+        dismissWelcome();
+        setBusy(true);
+        addMessage("user", label);
+        history.push({ role: "user", content: label });
+        showTyping();
+        callChat();
+      };
+      row.appendChild(btn);
+    });
+    messagesEl.appendChild(row);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
   // Lock / unlock all interactive controls while a request is in-flight
@@ -863,6 +971,8 @@
     const mod = MODULES[key];
     if (!mod) return;
 
+    clearFollowups();
+
     // Highlight the active card
     Object.entries(CARDS).forEach(([k, c]) => {
       c.classList.toggle("active-card", k === key);
@@ -884,6 +994,9 @@
 
     // 4. Fire the full Claude analysis (existing behavior unchanged)
     await callChat();
+
+    // 5. Show contextual follow-up suggestions
+    showFollowups(key);
   }
 
   // ── Regular chat ───────────────────────────────────────────────────────────
@@ -891,7 +1004,20 @@
     const text = inputEl.value.trim();
     if (!text || busy) return;
 
-    // Clear active card highlight when user types freely
+    // Intent routing — match common phrases to module triggers
+    if (!INTENT_BYPASS.test(text)) {
+      for (const { re, key } of INTENT_RULES) {
+        if (re.test(text)) {
+          inputEl.value = "";
+          inputEl.style.height = "auto";
+          runModule(key);
+          return;
+        }
+      }
+    }
+
+    // Normal chat flow
+    clearFollowups();
     Object.values(CARDS).forEach(c => c.classList.remove("active-card"));
     activeModule = null;
     hidePreview();
