@@ -91,7 +91,7 @@ def count_estimates() -> int:
     res = (
         _get_client()
         .table("estimates")
-        .select("id", count="exact")
+        .select("estimate_id", count="exact")
         .execute()
     )
     return res.count or 0
@@ -99,15 +99,15 @@ def count_estimates() -> int:
 
 def get_high_value_estimates(min_total: float = 10000, limit: int = 25) -> list[dict]:
     """
-    Return estimates where total > min_total, capped at limit rows.
+    Return estimates where total_amount > min_total, capped at limit rows.
     Only pulls the columns Claude needs — keeps the payload small.
     """
     res = (
         _get_client()
         .table("estimates")
-        .select("estimate_number, customer_name, total")
-        .gt("total", min_total)
-        .order("total", desc=True)
+        .select("estimate_number, customer_name, sales_rep_name, status_normalized, total_amount")
+        .gt("total_amount", min_total)
+        .order("total_amount", desc=True)
         .limit(limit)
         .execute()
     )
@@ -122,7 +122,7 @@ def get_estimates_by_customer(name: str) -> list[dict]:
     res = (
         _get_client()
         .table("estimates")
-        .select("estimate_number, customer_name, status, total, created_date")
+        .select("estimate_number, customer_name, sales_rep_name, status_normalized, total_amount, created_date")
         .ilike("customer_name", f"%{name}%")
         .order("created_date", desc=True)
         .execute()
