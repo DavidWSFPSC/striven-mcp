@@ -48,15 +48,19 @@
     }
     .home-btn {
       display: flex; align-items: center; gap: 6px;
-      padding: 6px 13px;
-      background: rgba(255,255,255,0.08);
-      border: 1px solid rgba(255,255,255,0.18);
+      padding: 8px 16px;
+      background: #eff6ff;
+      border: none;
       border-radius: 8px;
-      color: #e2e8f0; font-size: 12.5px; font-weight: 600;
-      cursor: pointer; font-family: inherit;
-      transition: background 0.15s, border-color 0.15s;
+      color: #1e3a8a; font-size: 13px; font-weight: 600;
+      cursor: pointer; font-family: inherit; white-space: nowrap;
+      transition: background 0.15s, transform 0.1s, opacity 0.1s;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.18);
     }
-    .home-btn:hover { background: rgba(255,255,255,0.18); border-color: rgba(255,255,255,0.3); }
+    .home-btn:hover  { background: #dbeafe; }
+    .home-btn:active { transform: scale(0.96); opacity: 0.85; }
+    .header-logo { cursor: pointer; }
+    .header-text { cursor: pointer; }
     .dot {
       width: 8px; height: 8px; border-radius: 50%;
       background: #6ee7b7; animation: pulse 2s infinite;
@@ -436,14 +440,14 @@
 
 <!-- ── Header ── -->
 <div class="header">
-  <div class="header-logo">🔥</div>
-  <div class="header-text">
+  <div class="header-logo" onclick="resetHome()">🔥</div>
+  <div class="header-text" onclick="resetHome()">
     <h1>Straude</h1>
     <p>Operational Intelligence</p>
   </div>
   <div class="header-right">
     <div class="status-dot"><div class="dot"></div> Live</div>
-    <button class="home-btn" onclick="resetHome()">🏠 Home</button>
+    <button class="home-btn" onclick="resetHome()">← Back to Home</button>
   </div>
 </div>
 
