@@ -962,24 +962,35 @@
   // ── Core API call (shared by all entry points) ─────────────────────────────
   async function callChat() {
     try {
-      const res  = await fetch("/api/chat", {
+      const res = await fetch("/api/chat", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ messages: history }),
       });
-      const data = await res.json();
+
+      // Parse JSON defensively — non-JSON body (e.g. Render cold-start HTML) would throw
+      let data;
+      try { data = await res.json(); }
+      catch { data = { error: `Server error (HTTP ${res.status}) — the service may be waking up. Please try again in a few seconds.` }; }
+
       removeTyping();
 
-      const text = data.error
-        ? `Sorry, something went wrong: ${data.error}`
-        : data.response;
+      // Friendly messages for known HTTP status codes
+      let text;
+      if (res.status === 429) {
+        text = "Still processing the last request — please wait a moment and try again.";
+      } else if (res.status >= 500) {
+        text = "The server ran into an issue. Please wait a few seconds and try again.";
+      } else {
+        text = data.error ? `Something went wrong: ${data.error}` : data.response;
+      }
 
       addMessage("assistant", text);
-      if (!data.error) history.push({ role: "assistant", content: data.response });
+      if (!data.error && res.ok) history.push({ role: "assistant", content: data.response });
 
     } catch {
       removeTyping();
-      addMessage("assistant", "Network error — please try again.");
+      addMessage("assistant", "Connection error — the service may be waking up. Please try again in a few seconds.");
     }
     // Cooldown: keep busy=true for COOLDOWN_MS after response to prevent burst requests
     await new Promise(r => setTimeout(r, COOLDOWN_MS));
