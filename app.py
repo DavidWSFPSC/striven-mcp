@@ -54,6 +54,8 @@ from services.supabase_client import (
     get_estimates_by_customer,
     log_chat,
     get_chat_logs,
+    get_gas_log_audit as _sb_get_gas_log_audit,
+    upsert_gas_log_audit as _sb_upsert_gas_log_audit,
 )
 from services import knowledge as _knowledge
 
@@ -708,6 +710,29 @@ def _run_gas_log_audit(limit: int | None = None) -> dict:
         _GAS_LOG_CACHE["result"] = result
         _GAS_LOG_CACHE["ts"]     = _time2.monotonic()
         print(f"[gas-log-audit] Result cached — TTL={_GAS_LOG_CACHE_TTL}s", flush=True)
+
+        # ── Supabase persistence (full-scan calls only) ──────────────────────
+        # Write the summary so the next server cold-start can serve stale data
+        # instantly rather than forcing another 60-second full scan.
+        try:
+            pct = (
+                round(len(matches) / gas_log_installs * 100, 1)
+                if gas_log_installs
+                else 0.0
+            )
+            _sb_upsert_gas_log_audit(
+                total_checked=total_inspected,
+                missing_count=len(matches),
+                percent_missing=pct,
+            )
+            print(
+                f"[gas-log-audit] Supabase upsert OK — "
+                f"total_checked={total_inspected} missing={len(matches)} pct={pct}%",
+                flush=True,
+            )
+        except Exception as _sb_err:
+            # Supabase write failure must never crash the audit itself.
+            print(f"[gas-log-audit] Supabase upsert FAILED (non-fatal): {_sb_err}", flush=True)
 
     return result
 
@@ -1482,6 +1507,93 @@ def snapshot_pipeline():
         flush=True,
     )
     return jsonify(result)
+
+
+@app.get("/snapshot/gas_log_audit")
+def snapshot_gas_log_audit():
+    """
+    Return a lightweight gas-log audit summary.
+
+    Priority order (fastest → slowest):
+      1. Supabase (persisted from last full scan — survives server restarts)
+      2. In-memory _GAS_LOG_CACHE (5-min TTL, fastest on warm server)
+      3. Full scan via _run_gas_log_audit() (60 s — cold start only)
+
+    All computation is done in Python via _run_gas_log_audit().
+    Claude is never involved in the data processing.
+
+    Response shape:
+      {
+        "count":            N,   # jobs missing the removal fee
+        "total_checked":    N,
+        "gas_log_installs": N,
+        "top":              [{number, customer, url}]  # top 3 for preview panel
+      }
+    """
+    try:
+        # ── Priority 1: Supabase (persists across server restarts) ───────────
+        # The summary row (id=1) is written every time _run_gas_log_audit()
+        # completes a full scan.  If it exists we return it immediately —
+        # no Striven API call, no compute.
+        sb_row = None
+        try:
+            sb_row = _sb_get_gas_log_audit()
+        except Exception as _sb_read_err:
+            print(
+                f"[snap:gas_log_audit] Supabase read failed (non-fatal): {_sb_read_err}",
+                flush=True,
+            )
+
+        if sb_row:
+            print(
+                f"[snap:gas_log_audit] Supabase HIT — "
+                f"missing={sb_row.get('missing_count')} "
+                f"total_checked={sb_row.get('total_checked')} "
+                f"updated_at={sb_row.get('updated_at')}",
+                flush=True,
+            )
+            snap = {
+                "count":            sb_row.get("missing_count", 0),
+                "total_checked":    sb_row.get("total_checked", 0),
+                "gas_log_installs": None,   # not stored in summary row
+                "percent_missing":  sb_row.get("percent_missing", 0.0),
+                "top":              [],     # detail not persisted — fetch lazily if needed
+                "source":           "supabase",
+                "updated_at":       sb_row.get("updated_at"),
+            }
+            return jsonify(snap)
+
+        # ── Priority 2 & 3: in-memory cache then full scan ───────────────────
+        # _run_gas_log_audit() handles both: returns cache if warm, else scans.
+        result  = _run_gas_log_audit()
+        missing = result.get("missing_removal_fee", 0)
+        top3 = [
+            {
+                "id":       m.get("estimate_number"),
+                "customer": m.get("customer_name"),
+                "days":     0,
+                "issue":    "Missing gas log removal fee",
+                "url":      m.get("url"),
+            }
+            for m in (result.get("matches") or [])[:3]
+        ]
+        snap = {
+            "count":            missing,
+            "total_checked":    result.get("total_checked"),
+            "gas_log_installs": result.get("gas_log_installs"),
+            "top":              top3,
+            "source":           "computed",
+        }
+        print(
+            f"[snap:gas_log_audit] computed — missing={missing} "
+            f"total_checked={result.get('total_checked')}",
+            flush=True,
+        )
+        return jsonify(snap)
+
+    except Exception as exc:
+        print(f"[snap:gas_log_audit] ERROR: {exc}", flush=True)
+        return jsonify({"error": str(exc)}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -3813,6 +3925,29 @@ def _slim_order(o: dict) -> dict:
     }
 
 
+def _slim_gas_log_for_claude(result: dict) -> dict:
+    """
+    Trim a full gas-log audit result to the minimum Claude needs for summarization.
+    Full result can have 200+ matches × ~4 fields each ≈ 6,000+ chars.
+    Slim version: counts + top 10 examples ≈ 400 chars (~100 tokens).
+    """
+    return {
+        "analysis_type":      "gas_log_audit",
+        "total_checked":      result.get("total_checked"),
+        "gas_log_installs":   result.get("gas_log_installs"),
+        "missing_removal_fee": result.get("missing_removal_fee"),
+        "top_examples": [
+            {
+                "number":   m.get("estimate_number"),
+                "customer": m.get("customer_name"),
+                "rep":      m.get("sales_rep"),
+                "url":      m.get("url"),
+            }
+            for m in (result.get("matches") or [])[:10]
+        ],
+    }
+
+
 def _execute_tool(name: str, tool_input: dict) -> dict:
     """Map a Claude tool call to the live Striven API. All operations are read-only."""
     try:
@@ -3960,14 +4095,16 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
         if name == "gas_log_audit":
             print("[TOOL] gas_log_audit called — running _run_gas_log_audit()", flush=True)
             result = _run_gas_log_audit()
+            slim   = _slim_gas_log_for_claude(result)
             print(
                 f"[TOOL] gas_log_audit complete — "
                 f"total_checked={result.get('total_checked')} "
                 f"gas_log_installs={result.get('gas_log_installs')} "
-                f"missing_removal_fee={result.get('missing_removal_fee')}",
+                f"missing_removal_fee={result.get('missing_removal_fee')} "
+                f"slim_chars={len(str(slim))}",
                 flush=True,
             )
-            return result
+            return slim
 
         if name == "portal_flag_audit":
             print("[TOOL] portal_flag_audit called — running _run_portal_flag_audit()", flush=True)
@@ -4346,10 +4483,21 @@ def chat_api():
         or (None, None) to fall through to the agentic loop.
 
         Pattern priority: most specific patterns listed first.
-        Gas log / audit patterns are intentionally excluded — they are slow
-        scans that take 60+ seconds and must use the dedicated audit tools.
+        Gas log is now safe to fast-path: _run_gas_log_audit() checks the
+        5-minute cache first, so cached responses return in < 1ms.
+        Only the first uncached call is slow (60s full scan).
         """
         q = question.lower()
+
+        # ── Gas log / removal fee ─────────────────────────────────────────────
+        # Uses cache — instant if audit ran in the last 5 minutes.
+        if _re.search(
+            r'\bgas\s*log\b|\bremoval\s+fee\b|\bmissing.*removal\b'
+            r'|\bburner\s+log\b|\bburner\s+install\b|\bgas\s+log\s+install\b',
+            q,
+        ):
+            raw = _run_gas_log_audit()
+            return "gas_log_audit", _slim_gas_log_for_claude(raw)
 
         # ── Estimate count ────────────────────────────────────────────────────
         if _re.search(

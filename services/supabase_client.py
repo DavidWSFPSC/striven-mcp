@@ -161,3 +161,55 @@ def get_chat_logs(limit: int = 100) -> list[dict]:
         .execute()
     )
     return res.data or []
+
+
+# ---------------------------------------------------------------------------
+# Gas log audit helpers — single-row summary table (id always = 1)
+# ---------------------------------------------------------------------------
+
+def get_gas_log_audit() -> dict | None:
+    """
+    Read the latest gas log audit summary from Supabase.
+
+    Returns the row dict if it exists, or None if the table is empty
+    (i.e. no audit has ever been persisted yet).
+    """
+    res = (
+        _get_client()
+        .table("gas_log_audit")
+        .select("id, total_checked, missing_count, percent_missing, updated_at")
+        .eq("id", 1)
+        .execute()
+    )
+    data = res.data or []
+    return data[0] if data else None
+
+
+def upsert_gas_log_audit(
+    total_checked: int,
+    missing_count: int,
+    percent_missing: float,
+) -> None:
+    """
+    Persist (or overwrite) the gas log audit summary in Supabase.
+
+    Always writes to row id=1 — there is only ever one summary row.
+    Calling this multiple times is safe; each call updates the same row.
+
+    Args:
+        total_checked:   Total estimates inspected in the scan.
+        missing_count:   Number of gas-log installs missing the removal fee.
+        percent_missing: missing_count / gas_log_installs * 100 (0 if no installs).
+    """
+    from datetime import datetime, timezone
+
+    _get_client().table("gas_log_audit").upsert(
+        {
+            "id":              1,
+            "total_checked":   total_checked,
+            "missing_count":   missing_count,
+            "percent_missing": round(percent_missing, 1),
+            "updated_at":      datetime.now(timezone.utc).isoformat(),
+        },
+        on_conflict="id",
+    ).execute()
