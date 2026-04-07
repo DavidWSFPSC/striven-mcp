@@ -134,6 +134,15 @@ class StrivenClient:
         """
         return self._get(f"/sales-orders/{estimate_id}")
 
+    def update_sales_order(self, order_id: int, body: dict) -> dict:
+        """Partial-update a sales order via PATCH.
+
+        PATCH /v1/sales-orders/{id}
+        Striven accepts a partial JSON body — only the fields you include
+        are changed. Returns the updated sales order.
+        """
+        return self._patch(f"/sales-orders/{order_id}", body)
+
     def get_item(self, item_id: int) -> dict:
         """Fetch a single item (product) by its ID.
 

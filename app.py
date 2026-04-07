@@ -1019,6 +1019,170 @@ def debug_one_order():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.get("/assign-missing-reps")
+def assign_missing_reps():
+    """
+    Find all Approved (22) jobs with no SalesRep and assign the fallback rep
+    (CreatedBy). Returns a dry-run preview by default.
+
+    Query params:
+      dry_run=true   (default) — report only, no writes
+      dry_run=false            — perform PATCH updates (requires confirm=yes)
+      confirm=yes              — required safety gate when dry_run=false
+      page_size=N              — how many Approved jobs to scan (default 50, max 100)
+
+    Example:
+      GET /assign-missing-reps                           → dry run, 50 jobs
+      GET /assign-missing-reps?dry_run=false&confirm=yes → live update
+    """
+    import json as _json
+
+    dry_run   = request.args.get("dry_run", "true").lower() != "false"
+    confirmed = request.args.get("confirm", "").lower() == "yes"
+    page_size = min(int(request.args.get("page_size", 50)), 100)
+
+    # Extra safety gate — live mode requires explicit confirm=yes
+    if not dry_run and not confirmed:
+        return jsonify({
+            "error": "Live mode requires ?dry_run=false&confirm=yes",
+            "hint":  "Add &confirm=yes to the URL to proceed with updates.",
+        }), 400
+
+    print(
+        f"[assign-missing-reps] dry_run={dry_run} page_size={page_size}",
+        flush=True,
+    )
+
+    # ── 1. Fetch Approved jobs ────────────────────────────────────────────────
+    try:
+        raw  = striven.search_sales_orders({
+            "PageIndex": 0, "PageSize": page_size, "StatusChangedTo": 22,
+        })
+        rows = raw.get("data") or []
+    except Exception as exc:
+        print(f"[assign-missing-reps] fetch error: {exc}", flush=True)
+        return jsonify({"error": f"Failed to fetch approved jobs: {exc}"}), 500
+
+    print(f"[assign-missing-reps] fetched {len(rows)} approved jobs", flush=True)
+
+    # ── 2. Identify jobs with no SalesRep ─────────────────────────────────────
+    to_fix = []
+    skipped_no_fallback = []
+
+    for r in rows:
+        sr = (r.get("SalesRep") or r.get("salesRep") or {})
+        if sr.get("Id") or sr.get("id"):
+            continue  # already has a rep — skip
+
+        # No SalesRep — try to find a fallback
+        created_by = (r.get("CreatedBy") or r.get("createdBy") or {})
+        assigned_to = (r.get("AssignedTo") or r.get("assignedTo") or {})
+
+        fallback_id   = (created_by.get("Id")   or created_by.get("id")
+                         or assigned_to.get("Id") or assigned_to.get("id"))
+        fallback_name = (created_by.get("Name") or created_by.get("name")
+                         or assigned_to.get("Name") or assigned_to.get("name")
+                         or "Unknown")
+
+        order_id  = r.get("Id") or r.get("id")
+        order_num = r.get("Number") or r.get("number") or str(order_id)
+        customer  = (r.get("Customer") or r.get("customer") or {})
+        cust_name = customer.get("Name") or customer.get("name") or "—"
+
+        if not fallback_id:
+            skipped_no_fallback.append({
+                "id": order_id, "number": order_num, "customer": cust_name,
+                "reason": "No CreatedBy or AssignedTo available",
+            })
+            print(
+                f"[assign-missing-reps] SKIP {order_num} — no fallback rep available",
+                flush=True,
+            )
+            continue
+
+        to_fix.append({
+            "id":            order_id,
+            "number":        order_num,
+            "customer":      cust_name,
+            "fallback_id":   fallback_id,
+            "fallback_name": fallback_name,
+            "_raw":          r,          # kept for update payload; stripped from response
+        })
+
+    print(
+        f"[assign-missing-reps] missing_rep={len(to_fix)} "
+        f"no_fallback={len(skipped_no_fallback)} "
+        f"already_assigned={len(rows)-len(to_fix)-len(skipped_no_fallback)}",
+        flush=True,
+    )
+
+    # ── 3. Dry run — report without writing ───────────────────────────────────
+    if dry_run:
+        preview = [
+            {
+                "id":           j["id"],
+                "number":       j["number"],
+                "customer":     j["customer"],
+                "would_assign": j["fallback_name"],
+                "fallback_id":  j["fallback_id"],
+            }
+            for j in to_fix
+        ]
+        return jsonify({
+            "mode":                "DRY RUN — no changes made",
+            "total_scanned":       len(rows),
+            "already_assigned":    len(rows) - len(to_fix) - len(skipped_no_fallback),
+            "will_be_updated":     len(to_fix),
+            "skipped_no_fallback": len(skipped_no_fallback),
+            "preview":             preview,
+            "skipped_detail":      skipped_no_fallback,
+            "next_step":           "Add ?dry_run=false&confirm=yes to apply",
+        })
+
+    # ── 4. Live mode — PATCH each job ─────────────────────────────────────────
+    updated  = []
+    errors   = []
+
+    for j in to_fix:
+        order_id = j["id"]
+        try:
+            # Minimal PATCH payload — only set the SalesRep field
+            patch_body = {"SalesRep": {"Id": j["fallback_id"]}}
+
+            print(
+                f"[assign-missing-reps] PATCH {j['number']} "
+                f"SalesRep → {j['fallback_name']} (id={j['fallback_id']})",
+                flush=True,
+            )
+            striven.update_sales_order(order_id, patch_body)
+            updated.append({
+                "id":       order_id,
+                "number":   j["number"],
+                "customer": j["customer"],
+                "assigned": j["fallback_name"],
+            })
+
+        except Exception as exc:
+            print(
+                f"[assign-missing-reps] ERROR patching {j['number']}: {exc}",
+                flush=True,
+            )
+            errors.append({
+                "id": order_id, "number": j["number"],
+                "error": str(exc),
+            })
+
+    return jsonify({
+        "mode":                "LIVE — updates applied",
+        "total_scanned":       len(rows),
+        "updated":             len(updated),
+        "failed":              len(errors),
+        "skipped_no_fallback": len(skipped_no_fallback),
+        "results":             updated,
+        "errors":              errors,
+    })
+
+
 @app.get("/snapshot/stuck_jobs")
 def snapshot_stuck_jobs():
     """
