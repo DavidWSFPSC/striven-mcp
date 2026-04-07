@@ -218,6 +218,249 @@ def query_no_line_items(limit: int = 50) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Analytics query helpers — read-only, AI-consumption endpoints
+# ---------------------------------------------------------------------------
+
+def query_jobs_by_location(search: str, year: int | None = None, limit: int = 50) -> dict:
+    """
+    Search estimates by customer name or job name (no address field exists in schema).
+
+    Striven does not expose a free-text address field via the API.  We search on
+    customer_name (case-insensitive ilike) and estimate_number as the closest
+    available proxies.  If year is provided, created_date is filtered to that
+    calendar year.
+
+    Args:
+        search: Partial/full string to match against customer_name.
+        year:   Optional calendar year to restrict results (filters created_date).
+        limit:  Maximum rows to return (default 50, max 200).
+
+    Returns:
+        {"count": N, "note": "...", "jobs": [...]}
+    """
+    q = (
+        _get_client()
+        .table("estimates")
+        .select(
+            "estimate_id, estimate_number, customer_name, "
+            "status_normalized, total_amount, created_date, sales_rep_name",
+            count="exact",
+        )
+        .ilike("customer_name", f"%{search}%")
+    )
+
+    if year:
+        q = (
+            q
+            .gte("created_date", f"{year}-01-01T00:00:00+00:00")
+            .lt("created_date",  f"{year + 1}-01-01T00:00:00+00:00")
+        )
+
+    res = q.order("created_date", desc=True).limit(limit).execute()
+    return {
+        "count": res.count or len(res.data or []),
+        "note":  "Searched on customer_name — no address field is available in the data layer.",
+        "jobs":  [
+            {
+                "estimate_id": r["estimate_id"],
+                "customer":    r["customer_name"],
+                "address":     None,   # not stored — field does not exist in Striven API response
+                "status":      r["status_normalized"],
+                "amount":      r["total_amount"],
+                "sales_rep":   r["sales_rep_name"],
+                "created":     r["created_date"],
+            }
+            for r in (res.data or [])
+        ],
+    }
+
+
+def query_jobs_past_install_date(limit: int = 100) -> dict:
+    """
+    Active estimates whose target_date has already passed today's date.
+
+    "Active" = status_normalized = 'ACTIVE', which covers Striven statuses
+    Quoted (19), Pending Approval (20), Approved (22), and In Progress (25).
+    Only estimates with a non-null target_date are included.
+
+    days_overdue is calculated in Python (today − target_date in days).
+
+    Returns:
+        {"count": N, "jobs": [...]}
+    """
+    from datetime import date, datetime, timezone
+
+    today_str = date.today().isoformat()
+
+    res = (
+        _get_client()
+        .table("estimates")
+        .select(
+            "estimate_id, estimate_number, customer_name, "
+            "target_date, sales_rep_name, status_normalized, total_amount",
+        )
+        .eq("status_normalized", "ACTIVE")
+        .not_.is_("target_date", "null")
+        .lt("target_date", today_str)
+        .order("target_date")           # oldest overdue first
+        .limit(limit)
+        .execute()
+    )
+
+    today = date.today()
+    jobs  = []
+    for r in (res.data or []):
+        raw = r["target_date"]
+        try:
+            # target_date comes back as ISO string; strip timezone for date math
+            td = datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
+            overdue = (today - td).days
+        except Exception:
+            overdue = None
+        jobs.append({
+            "estimate_id":        r["estimate_id"],
+            "customer":           r["customer_name"],
+            "target_install_date": r["target_date"],
+            "days_overdue":       overdue,
+            "sales_rep":          r["sales_rep_name"],
+            "amount":             r["total_amount"],
+        })
+
+    return {"count": len(jobs), "jobs": jobs}
+
+
+def query_sales_rep_backlog() -> dict:
+    """
+    Aggregate active estimate counts per sales rep with three dimensions:
+      - total_jobs:       all ACTIVE estimates for this rep
+      - unscheduled_jobs: ACTIVE estimates with no target_date set
+      - overdue_jobs:     ACTIVE estimates where target_date < today
+
+    Aggregation happens in Python (supabase-py does not support GROUP BY).
+    Only ACTIVE estimates are included; completed/cancelled jobs are excluded.
+
+    Returns:
+        {"reps": [...], "total_active": N}  sorted descending by total_jobs
+    """
+    from datetime import date
+    from collections import defaultdict
+
+    today_str = date.today().isoformat()
+
+    # Fetch all active estimates — only the three columns we need
+    res = (
+        _get_client()
+        .table("estimates")
+        .select("sales_rep_name, target_date, status_normalized")
+        .eq("status_normalized", "ACTIVE")
+        .execute()
+    )
+    records = res.data or []
+
+    backlog: dict[str, dict] = defaultdict(
+        lambda: {"total_jobs": 0, "unscheduled_jobs": 0, "overdue_jobs": 0}
+    )
+
+    for r in records:
+        rep = r.get("sales_rep_name") or "Unassigned"
+        td  = r.get("target_date")
+
+        backlog[rep]["total_jobs"] += 1
+
+        if not td:
+            # No install date set at all
+            backlog[rep]["unscheduled_jobs"] += 1
+        elif td[:10] < today_str:
+            # Has a date but it has already passed
+            backlog[rep]["overdue_jobs"] += 1
+
+    reps = [
+        {"rep": rep, **counts}
+        for rep, counts in sorted(
+            backlog.items(), key=lambda x: -x[1]["total_jobs"]
+        )
+    ]
+    return {"total_active": len(records), "reps": reps}
+
+
+def query_time_to_target() -> dict:
+    """
+    Calculates days from estimate creation to scheduled install (target_date).
+
+    IMPORTANT — data limitation:
+      The Striven API does not return an approved_date or preview task date.
+      This function uses created_date → target_date as the nearest available
+      proxy for "time from estimate to scheduled install".
+
+    Only estimates with BOTH created_date and target_date are included.
+    Estimates where target_date < created_date are excluded as data anomalies.
+
+    Returns:
+        {
+          "average_days": float,
+          "median_days":  float,
+          "sample_size":  int,
+          "data_note":    str,
+          "samples":      [{"estimate_id": ..., "days_to_target": ...}, ...]
+        }
+    """
+    from datetime import datetime
+    import statistics
+
+    res = (
+        _get_client()
+        .table("estimates")
+        .select("estimate_id, estimate_number, customer_name, created_date, target_date")
+        .not_.is_("target_date",  "null")
+        .not_.is_("created_date", "null")
+        .limit(500)           # large sample for statistical reliability
+        .execute()
+    )
+
+    deltas = []
+    samples = []
+    for r in (res.data or []):
+        try:
+            created = datetime.fromisoformat(r["created_date"].replace("Z", "+00:00"))
+            target  = datetime.fromisoformat(r["target_date"].replace("Z",  "+00:00"))
+            days    = (target - created).days
+            if days < 0:
+                continue   # skip anomalies where target precedes creation
+            deltas.append(days)
+            samples.append({
+                "estimate_id":    r["estimate_id"],
+                "estimate_number": r["estimate_number"],
+                "customer":       r["customer_name"],
+                "days_to_target": days,
+            })
+        except Exception:
+            continue
+
+    if not deltas:
+        return {
+            "average_days": None,
+            "median_days":  None,
+            "sample_size":  0,
+            "data_note":    "No records with both created_date and target_date found.",
+            "samples":      [],
+        }
+
+    # Sort samples by days ascending so fastest jobs appear first
+    samples.sort(key=lambda x: x["days_to_target"])
+
+    return {
+        "average_days": round(statistics.mean(deltas),   1),
+        "median_days":  round(statistics.median(deltas), 1),
+        "sample_size":  len(deltas),
+        "data_note": (
+            "Days measured from estimate created_date to target_date "
+            "(Striven API does not expose approved_date or preview task dates)."
+        ),
+        "samples": samples[:25],   # top-25 fastest for brevity
+    }
+
+
+# ---------------------------------------------------------------------------
 # Chat log helpers — record every WilliamSmith conversation turn
 # ---------------------------------------------------------------------------
 

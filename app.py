@@ -59,6 +59,10 @@ from services.supabase_client import (
     query_gas_log_missing,
     query_unassigned_reps,
     query_no_line_items,
+    query_jobs_by_location,
+    query_jobs_past_install_date,
+    query_sales_rep_backlog,
+    query_time_to_target,
 )
 from services import knowledge as _knowledge
 
@@ -1094,6 +1098,120 @@ def no_line_items():
     limit = min(int(request.args.get("limit", 50)), 200)
     try:
         return _run_query(query_no_line_items(limit=limit))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Analytics endpoints — read-only, AI-consumption, no LLM
+# ---------------------------------------------------------------------------
+
+@app.route("/queries/jobs-by-location", methods=["GET"])
+def jobs_by_location():
+    """
+    Search estimates by customer name (no address field exists in schema).
+
+    Striven's API does not return a free-text address.  The search runs
+    against customer_name using a case-insensitive partial match (ilike).
+
+    Query params:
+        search  (required) — partial customer name to match
+        year    (optional) — restrict to a calendar year (e.g. 2024)
+        limit   (optional) — max rows returned (default 50, max 200)
+
+    Example:
+        GET /queries/jobs-by-location?search=charleston&year=2024
+    """
+    search = request.args.get("search", "").strip()
+    if not search:
+        return jsonify({"error": "Query param 'search' is required."}), 400
+
+    year_raw = request.args.get("year")
+    year = None
+    if year_raw:
+        try:
+            year = int(year_raw)
+        except ValueError:
+            return jsonify({"error": f"Invalid year value: {year_raw!r}. Must be an integer."}), 400
+
+    limit = min(int(request.args.get("limit", 50)), 200)
+
+    try:
+        result = query_jobs_by_location(search=search, year=year, limit=limit)
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/jobs-past-install-date", methods=["GET"])
+def jobs_past_install_date():
+    """
+    Active estimates where today's date has passed the target install date.
+
+    'Active' covers Striven statuses: Quoted, Pending Approval, Approved,
+    In Progress (status_normalized = 'ACTIVE').  Estimates with no target
+    date set are excluded.  Results are ordered oldest-overdue first.
+
+    Query params:
+        limit (optional) — max rows (default 100, max 500)
+
+    Example:
+        GET /queries/jobs-past-install-date
+        GET /queries/jobs-past-install-date?limit=200
+    """
+    limit = min(int(request.args.get("limit", 100)), 500)
+    try:
+        result = query_jobs_past_install_date(limit=limit)
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/sales-rep-backlog", methods=["GET"])
+def sales_rep_backlog():
+    """
+    Active estimate counts grouped by sales rep with three dimensions:
+        total_jobs       — all active estimates for this rep
+        unscheduled_jobs — active estimates with no target_date set
+        overdue_jobs     — active estimates where target_date < today
+
+    Covers all reps with at least one active estimate.  Sorted descending
+    by total_jobs so the most loaded reps appear first.
+
+    No query params.  Aggregation happens in Python (PostgREST / supabase-py
+    does not support GROUP BY server-side).
+
+    Example:
+        GET /queries/sales-rep-backlog
+    """
+    try:
+        result = query_sales_rep_backlog()
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/time-to-preview", methods=["GET"])
+def time_to_preview():
+    """
+    Distribution of days from estimate creation to scheduled install date.
+
+    DATA LIMITATION: Striven's API does not expose an approved_date or a
+    preview task created_date.  This endpoint measures created_date →
+    target_date (the target install date) as the nearest available proxy.
+    A 'data_note' field in the response documents this.
+
+    Returns average, median, sample size, and up to 25 sample records
+    sorted fastest-to-slowest (shortest lead time first).
+
+    No query params.
+
+    Example:
+        GET /queries/time-to-preview
+    """
+    try:
+        result = query_time_to_target()
+        return jsonify(result)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
