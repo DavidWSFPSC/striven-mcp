@@ -145,6 +145,12 @@
       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
     }
 
+    .intel-card-impact {
+      font-size: 11px; color: #9ca3af; margin-top: 3px;
+      font-weight: 500; min-height: 14px;
+    }
+    .intel-card-impact.has-value { color: #dc2626; }
+
     .intel-card-arrow {
       font-size: 15px; color: #93c5fd; flex-shrink: 0;
       transition: transform 0.15s, color 0.15s;
@@ -419,6 +425,7 @@
             <span class="intel-badge state-loading" id="badge-stuck">...</span>
           </div>
           <div class="intel-card-desc">Quoted, approved &amp; in-progress jobs not moving</div>
+          <div class="intel-card-impact" id="impact-stuck"></div>
         </div>
         <div class="intel-card-arrow">→</div>
       </button>
@@ -431,6 +438,7 @@
             <span class="intel-badge state-loading" id="badge-install">...</span>
           </div>
           <div class="intel-card-desc">Approved jobs with no install task scheduled</div>
+          <div class="intel-card-impact" id="impact-install"></div>
         </div>
         <div class="intel-card-arrow">→</div>
       </button>
@@ -443,6 +451,18 @@
             <span class="intel-badge state-loading" id="badge-rep">...</span>
           </div>
           <div class="intel-card-desc">Pipeline health grouped by sales rep</div>
+        </div>
+        <div class="intel-card-arrow">→</div>
+      </button>
+
+      <button class="intel-card" id="card-pipeline" onclick="runModule('weekly_pipeline')">
+        <div class="intel-card-icon">📈</div>
+        <div class="intel-card-body">
+          <div class="intel-card-name-row">
+            <span class="intel-card-name">Weekly Pipeline</span>
+            <span class="intel-badge state-loading" id="badge-pipeline">...</span>
+          </div>
+          <div class="intel-card-desc">Full pipeline review — replaces the Excel report</div>
         </div>
         <div class="intel-card-arrow">→</div>
       </button>
@@ -513,21 +533,23 @@
   let activeModule = null;  // which card is currently highlighted
 
   // Snapshot data — populated on load, used to drive badge counts + preview
-  const SNAPSHOTS = { stuck_jobs: null, install_gaps: null, rep_pipeline: null };
+  const SNAPSHOTS = { stuck_jobs: null, install_gaps: null, rep_pipeline: null, weekly_pipeline: null };
 
   const messagesEl = document.getElementById("messages");
   const inputEl    = document.getElementById("input");
   const sendBtn    = document.getElementById("sendBtn");
 
   const CARDS = {
-    stuck_jobs:   document.getElementById("card-stuck"),
-    install_gaps: document.getElementById("card-install"),
-    rep_pipeline: document.getElementById("card-rep"),
+    stuck_jobs:      document.getElementById("card-stuck"),
+    install_gaps:    document.getElementById("card-install"),
+    rep_pipeline:    document.getElementById("card-rep"),
+    weekly_pipeline: document.getElementById("card-pipeline"),
   };
   const BADGES = {
-    stuck_jobs:   document.getElementById("badge-stuck"),
-    install_gaps: document.getElementById("badge-install"),
-    rep_pipeline: document.getElementById("badge-rep"),
+    stuck_jobs:      document.getElementById("badge-stuck"),
+    install_gaps:    document.getElementById("badge-install"),
+    rep_pipeline:    document.getElementById("badge-rep"),
+    weekly_pipeline: document.getElementById("badge-pipeline"),
   };
 
   marked.setOptions({ breaks: true, gfm: true });
@@ -551,6 +573,12 @@
       icon:     "📊",
       query:    "Show me sales rep pipeline performance — which reps have the most stuck jobs or missing installs?",
       preview_header: "📊 Top reps by open jobs — click any to drill in",
+    },
+    weekly_pipeline: {
+      label:    "Weekly Pipeline Review",
+      icon:     "📈",
+      query:    "Weekly pipeline review — give me the full pipeline report with rep breakdown and top risks.",
+      preview_header: "📈 Top risks this week — click any to drill in",
     },
   };
 
@@ -588,12 +616,13 @@
   // ── Snapshot loading ───────────────────────────────────────────────────────
   async function loadSnapshots() {
     const endpoints = {
-      stuck_jobs:   "/snapshot/stuck_jobs",
-      install_gaps: "/snapshot/install_gaps",
-      rep_pipeline: "/snapshot/rep_pipeline",
+      stuck_jobs:      "/snapshot/stuck_jobs",
+      install_gaps:    "/snapshot/install_gaps",
+      rep_pipeline:    "/snapshot/rep_pipeline",
+      weekly_pipeline: "/snapshot/pipeline",
     };
 
-    // Fire all three in parallel — independent, no dependency
+    // Fire all four in parallel — independent, no dependency
     await Promise.all(
       Object.entries(endpoints).map(async ([key, url]) => {
         try {
@@ -601,7 +630,7 @@
           const data = await res.json();
           if (data && typeof data.count === "number") {
             SNAPSHOTS[key] = data;
-            applyBadge(key, data.count);
+            applyBadge(key, data.count, data);
           } else {
             setBadgeError(key);
           }
@@ -612,16 +641,33 @@
     );
   }
 
-  function applyBadge(key, count) {
+  function applyBadge(key, count, data) {
     const badge = BADGES[key];
     if (!badge) return;
     const labels = {
-      stuck_jobs:   count === 1 ? "1 job"  : `${count} jobs`,
-      install_gaps: count === 1 ? "1 job"  : `${count} jobs`,
-      rep_pipeline: count === 1 ? "1 rep"  : `${count} reps`,
+      stuck_jobs:      count === 1 ? "1 job"    : `${count} jobs`,
+      install_gaps:    count === 1 ? "1 job"    : `${count} jobs`,
+      rep_pipeline:    count === 1 ? "1 rep"    : `${count} reps`,
+      weekly_pipeline: count === 1 ? "1 active" : `${count} active`,
     };
     badge.textContent = labels[key] || `${count}`;
     badge.className = "intel-badge state-ready";
+
+    // Dollar impact subline (stuck_jobs + install_gaps only)
+    if (data && data.impact && typeof data.impact.total_value === "number") {
+      const impactId = key === "stuck_jobs" ? "impact-stuck" : "impact-install";
+      const impactEl = document.getElementById(impactId);
+      if (impactEl) {
+        const val = data.impact.total_value;
+        const fmt = val >= 1_000_000
+          ? `$${(val / 1_000_000).toFixed(1)}M`
+          : val >= 1_000
+            ? `$${Math.round(val / 1_000)}K`
+            : `$${val}`;
+        impactEl.textContent = `${fmt} at risk`;
+        impactEl.classList.add("has-value");
+      }
+    }
   }
 
   function setBadgeError(key) {
