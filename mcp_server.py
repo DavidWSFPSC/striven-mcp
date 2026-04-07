@@ -63,24 +63,30 @@ Status codes:
 
 TOOLS AVAILABLE
 ---------------
-- count_estimates          → total records in database
-- high_value_estimates     → jobs over $10,000 (sorted highest first)
+- count_estimates              → total records in database
+- high_value_estimates         → jobs over $10,000 (sorted highest first)
 - search_estimates_by_customer → find all estimates for a specific customer
-- search_estimates         → flexible search by status, date range, keyword
-- get_estimate_by_id       → full detail on a single estimate
-- portal_flag_audit        → find estimates missing the Customer Portal flag
-- sync_estimates           → refresh the database from Striven (use sparingly)
-- api_health               → check if the system is online
+- search_estimates             → flexible search by status, date range, keyword
+- get_estimate_by_id           → full detail on a single estimate
+- portal_flag_audit            → find estimates missing the Customer Portal flag
+- sync_estimates               → refresh the database from Striven (use sparingly)
+- api_health                   → check if the system is online
+- backlog_by_rep               → active job count + revenue grouped by sales rep
+- jobs_by_location             → job count + revenue for a specific location/area
+- time_to_preview              → average days from estimate creation to site preview
 
 WHEN TO USE EACH TOOL
 ---------------------
-- "How many estimates do we have?"           → count_estimates
-- "Show me our biggest jobs"                 → high_value_estimates
-- "What estimates do we have for Acme?"      → search_estimates_by_customer
-- "Show me approved estimates this month"    → search_estimates with status=22
-- "Tell me about estimate #4521"             → get_estimate_by_id
-- "Which estimates are missing the portal flag?" → portal_flag_audit
-- "The data seems outdated"                  → sync_estimates
+- "How many estimates do we have?"                → count_estimates
+- "Show me our biggest jobs"                      → high_value_estimates
+- "What estimates do we have for Acme?"           → search_estimates_by_customer
+- "Show me approved estimates this month"         → search_estimates with status=22
+- "Tell me about estimate #4521"                  → get_estimate_by_id
+- "Which estimates are missing the portal flag?"  → portal_flag_audit
+- "The data seems outdated"                       → sync_estimates
+- "Who has the most active jobs?"                 → backlog_by_rep
+- "How much work do we have in Kiawah?"           → jobs_by_location
+- "How long does it take to schedule a preview?"  → time_to_preview
 
 TONE & FORMAT
 -------------
@@ -278,6 +284,105 @@ def sync_estimates(limit: int = 50) -> dict:
                and takes several minutes — only use when explicitly requested.
     """
     return _call("get", "/sync-estimates", params={"limit": limit})
+
+
+# ---------------------------------------------------------------------------
+# Tools — Business Intelligence
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def backlog_by_rep(limit: int = 50) -> dict:
+    """
+    Get workload by sales rep: active job count and total revenue, grouped by rep.
+
+    Pulls all Approved and In-Progress estimates live from Striven, looks up
+    the sales rep on each one (via the detail endpoint), then groups the results
+    so you can see which rep has the most active work and how much revenue they
+    are carrying.
+
+    Use when asked:
+      'Who has the most active jobs right now?'
+      'Show me the backlog by rep'
+      'Which sales rep is carrying the most work?'
+      'What is each rep's open pipeline?'
+
+    Args:
+        limit: Number of estimates to enrich with rep detail (default 50, max 100).
+               Higher values are more complete but slower — each estimate requires
+               one extra API call to retrieve the sales rep name.
+
+    Returns:
+        count         — total active estimates found
+        enriched_count — how many were enriched with rep data
+        data          — list of {rep, total_jobs, total_revenue}, sorted by job count
+    """
+    params: dict = {}
+    if limit != 50:
+        params["limit"] = limit
+    return _call("get", "/queries/backlog-by-rep", params=params or None)
+
+
+@mcp.tool()
+def jobs_by_location(location: str, year: int | None = None) -> dict:
+    """
+    Get job counts and total revenue for a specific location or area name.
+
+    Searches Striven for customers whose name matches the location keyword,
+    then pulls all their estimates and aggregates by customer. Use this to
+    answer questions about a specific neighborhood, island, city, or development.
+
+    Use when asked:
+      'How much work do we have in Kiawah?'
+      'Show me jobs in Mount Pleasant'
+      'What is our revenue from Isle of Palms customers?'
+      'How many jobs have we done in Daniel Island?'
+
+    Args:
+        location: Location keyword to search — can be a neighborhood, city, or
+                  partial name (e.g. 'Kiawah', 'Mount Pleasant', 'Daniel Island').
+                  Matched against customer names — not a geographic address search.
+        year:     Optional calendar year to filter results (e.g. 2024 or 2025).
+                  Omit to return all years.
+
+    Returns:
+        count   — total estimates found for matching customers
+        filters — echo of the search parameters used
+        data    — per-customer summary: {customer_name, total_jobs, total_revenue,
+                  active_jobs, completed_jobs}
+        sample  — up to 25 most-recent individual estimates
+    """
+    params: dict = {"location": location}
+    if year is not None:
+        params["year"] = year
+    return _call("get", "/queries/jobs-by-location", params=params)
+
+
+@mcp.tool()
+def time_to_preview() -> dict:
+    """
+    Get the average and median number of days from estimate creation to the
+    first site preview / inspection task being scheduled.
+
+    Measures the gap between when an estimate is created in Striven and when
+    a Site Inspections/Preview task (task type 15) is logged against it.
+    This is a key operational metric for understanding how quickly the team
+    moves from quote to site visit.
+
+    Use when asked:
+      'How long does it take to schedule a preview?'
+      'What is our average time from estimate to site visit?'
+      'How fast do we move from quote to inspection?'
+      'Show me our preview scheduling speed'
+
+    Returns:
+        average_days — mean days from estimate creation to preview task
+        median_days  — median days (less sensitive to outliers)
+        sample_size  — number of estimates included in the calculation
+        data_note    — explanation of exactly what is being measured
+        data         — up to 25 sample records sorted fastest-to-slowest,
+                       each with estimate number, customer, and days_to_preview
+    """
+    return _call("get", "/queries/time-to-preview")
 
 
 # ---------------------------------------------------------------------------
