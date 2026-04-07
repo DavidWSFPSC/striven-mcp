@@ -4066,6 +4066,19 @@ def chat_api():
             user_question = content if isinstance(content, str) else str(content)
             break
 
+    # ── Hard-coded fast returns — no Claude call, no token cost ──────────────
+    # Questions that are too broad or expensive are intercepted here and answered
+    # with deterministic guidance before any tool or LLM work begins.
+    _q_lower = user_question.lower()
+    if "what should i be working on today" in _q_lower:
+        print("[chat_api] fast-return: 'working on today' intercepted", flush=True)
+        return jsonify({
+            "response": (
+                "Start with **Stuck Jobs** and **Install Gaps** — "
+                "these highlight approved jobs that are not moving and need immediate attention."
+            )
+        })
+
     tools_used: list[str] = []
 
     # ── System prompt ─────────────────────────────────────────────────────────
