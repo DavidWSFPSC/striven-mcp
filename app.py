@@ -63,6 +63,7 @@ from services.supabase_client import (
     query_jobs_past_install_date,
     query_sales_rep_backlog,
     query_time_to_target,
+    _get_client as _sb_client,
 )
 from services import knowledge as _knowledge
 
@@ -1042,6 +1043,36 @@ def _run_query(records: list[dict]) -> "Response":
     return jsonify({"count": len(records), "records": records})
 
 
+def _enrich_sales_rep(orders: list[dict], limit: int = 20) -> list[dict]:
+    """
+    Attach sales_rep to a subset of search-stub orders by fetching full detail.
+
+    salesRep is NOT present on POST /v1/sales-orders/search stubs.
+    It only appears on GET /v1/sales-orders/{id}.  Each enrichment costs
+    one Striven API call, so we cap at `limit` to keep response times
+    acceptable.  Orders beyond the limit are returned with sales_rep=None.
+
+    Args:
+        orders: List of dicts from _fmt() (search stubs).  Must have an "id" key.
+        limit:  Maximum number of orders to enrich (default 20).
+
+    Returns:
+        Same list with sales_rep field populated for the first `limit` items.
+    """
+    enriched = []
+    for order in orders[:limit]:
+        try:
+            raw    = striven.get_estimate(order.get("id") or order.get("estimate_id"))
+            detail = _fmt_detail(raw)
+            order["sales_rep"] = detail.get("sales_rep_name") or "Unassigned"
+        except Exception:
+            order["sales_rep"] = None
+        enriched.append(order)
+    # Orders past the limit pass through unchanged (sales_rep remains None)
+    enriched.extend(orders[limit:])
+    return enriched
+
+
 @app.route("/queries/gas-log-missing", methods=["GET"])
 def gas_log_missing():
     """
@@ -1109,22 +1140,28 @@ def no_line_items():
 @app.route("/queries/jobs-by-location", methods=["GET"])
 def jobs_by_location():
     """
-    Search estimates by customer name (no address field exists in schema).
+    Live Striven pipeline: search customers by name → join their estimates.
 
-    Striven's API does not return a free-text address.  The search runs
-    against customer_name using a case-insensitive partial match (ilike).
+    Accepts a location/name keyword, searches Striven for matching customers,
+    then pulls every estimate for those customers from Supabase and aggregates.
 
     Query params:
-        search  (required) — partial customer name to match
-        year    (optional) — restrict to a calendar year (e.g. 2024)
-        limit   (optional) — max rows returned (default 50, max 200)
+        location  (required) — partial customer or city name to match
+        year      (optional) — restrict to a calendar year (e.g. 2024)
+        limit     (optional) — max customers to inspect (default 15, max 30)
 
     Example:
-        GET /queries/jobs-by-location?search=charleston&year=2024
+        GET /queries/jobs-by-location?location=charleston&year=2024
     """
-    search = request.args.get("search", "").strip()
-    if not search:
-        return jsonify({"error": "Query param 'search' is required."}), 400
+    from collections import defaultdict
+
+    location = (
+        request.args.get("location")
+        or request.args.get("search")
+        or ""
+    ).strip()
+    if not location:
+        return jsonify({"error": "Query param 'location' is required."}), 400
 
     year_raw = request.args.get("year")
     year = None
@@ -1132,13 +1169,89 @@ def jobs_by_location():
         try:
             year = int(year_raw)
         except ValueError:
-            return jsonify({"error": f"Invalid year value: {year_raw!r}. Must be an integer."}), 400
+            return jsonify({"error": f"Invalid year: {year_raw!r}"}), 400
 
-    limit = min(int(request.args.get("limit", 50)), 200)
+    cust_limit = min(int(request.args.get("limit", 15)), 30)
 
     try:
-        result = query_jobs_by_location(search=search, year=year, limit=limit)
-        return jsonify(result)
+        # ── Step 1: search Striven for customers whose name contains the keyword
+        cust_resp = striven.search_customers(location, page_size=cust_limit)
+        _, cust_data = _striven_page(cust_resp)
+        if not cust_data:
+            return jsonify({
+                "count": 0,
+                "filters": {"location": location, "year": year},
+                "data": [],
+                "note": "No matching customers found in Striven.",
+            })
+
+        customer_ids = [
+            c.get("Id") or c.get("id")
+            for c in cust_data
+            if c.get("Id") or c.get("id")
+        ]
+
+        # ── Step 2: pull estimates for these customers from Supabase
+        q = (
+            _sb_client().table("estimates")
+            .select(
+                "estimate_id, estimate_number, customer_id, customer_name, "
+                "status_normalized, total_amount, created_date, sales_rep_name, target_date"
+            )
+            .in_("customer_id", customer_ids)
+        )
+        if year:
+            q = (
+                q
+                .gte("created_date", f"{year}-01-01T00:00:00+00:00")
+                .lt("created_date",  f"{year + 1}-01-01T00:00:00+00:00")
+            )
+        res = q.order("created_date", desc=True).limit(500).execute()
+        rows = res.data or []
+
+        # ── Step 3: aggregate per customer, collect sample
+        agg: dict[int, dict] = defaultdict(lambda: {
+            "total_jobs": 0,
+            "total_revenue": 0.0,
+            "active_jobs": 0,
+            "completed_jobs": 0,
+        })
+        for r in rows:
+            cid = r["customer_id"]
+            agg[cid]["customer_name"]  = r["customer_name"]
+            agg[cid]["total_jobs"]    += 1
+            agg[cid]["total_revenue"] += float(r["total_amount"] or 0)
+            if r["status_normalized"] == "ACTIVE":
+                agg[cid]["active_jobs"] += 1
+            elif r["status_normalized"] == "COMPLETE":
+                agg[cid]["completed_jobs"] += 1
+
+        summary = sorted(
+            [{"customer_id": cid, **vals} for cid, vals in agg.items()],
+            key=lambda x: -x["total_revenue"],
+        )
+
+        # Sample: up to 25 most-recent individual estimates
+        sample = [
+            {
+                "estimate_id":     r["estimate_id"],
+                "estimate_number": r["estimate_number"],
+                "customer":        r["customer_name"],
+                "status":          r["status_normalized"],
+                "amount":          r["total_amount"],
+                "sales_rep":       r["sales_rep_name"],
+                "created":         r["created_date"],
+            }
+            for r in rows[:25]
+        ]
+
+        return jsonify({
+            "count":   len(rows),
+            "filters": {"location": location, "year": year, "customers_searched": len(customer_ids)},
+            "data":    summary,
+            "sample":  sample,
+        })
+
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -1191,27 +1304,224 @@ def sales_rep_backlog():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/queries/backlog-by-rep", methods=["GET"])
+def backlog_by_rep():
+    """
+    Live Striven backlog grouped by sales rep.
+
+    Pulls active estimates (Approved=22, In Progress=25) from Striven,
+    enriches the first 50 with real salesRep data (GET detail), then
+    groups by rep returning total_jobs and total_revenue.
+
+    Query params:
+        limit  (optional) — max estimates to enrich with rep detail (default 50, max 100)
+
+    Example:
+        GET /queries/backlog-by-rep
+        GET /queries/backlog-by-rep?limit=80
+    """
+    from collections import defaultdict
+
+    enrich_limit = min(int(request.args.get("limit", 50)), 100)
+
+    try:
+        # ── Pull active orders: Approved (22) + In Progress (25)
+        all_orders: list[dict] = []
+        for status_id in (22, 25):
+            page = 0
+            while True:
+                resp  = striven.search_sales_orders({
+                    "PageIndex":       page,
+                    "PageSize":        100,
+                    "StatusChangedTo": status_id,
+                })
+                total, data = _striven_page(resp)
+                if not data:
+                    break
+                all_orders.extend([_fmt(o) for o in data])
+                if (page + 1) * 100 >= total:
+                    break
+                page += 1
+
+        if not all_orders:
+            return jsonify({
+                "count":   0,
+                "filters": {"statuses": [22, 25]},
+                "data":    [],
+            })
+
+        # ── Enrich first `enrich_limit` stubs with real salesRep from GET detail
+        enriched = _enrich_sales_rep(all_orders, limit=enrich_limit)
+
+        # ── Group by rep
+        backlog: dict[str, dict] = defaultdict(lambda: {
+            "total_jobs":    0,
+            "total_revenue": 0.0,
+        })
+        for o in enriched:
+            rep = o.get("sales_rep") or o.get("sales_rep_name") or "Unassigned"
+            backlog[rep]["total_jobs"]    += 1
+            backlog[rep]["total_revenue"] += float(o.get("total") or 0)
+
+        reps = [
+            {
+                "rep":           rep,
+                "total_jobs":    vals["total_jobs"],
+                "total_revenue": round(vals["total_revenue"], 2),
+            }
+            for rep, vals in sorted(
+                backlog.items(), key=lambda x: -x[1]["total_jobs"]
+            )
+        ]
+
+        return jsonify({
+            "count":          len(all_orders),
+            "enriched_count": min(enrich_limit, len(all_orders)),
+            "filters":        {"statuses": ["Approved (22)", "In Progress (25)"]},
+            "data":           reps,
+        })
+
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/queries/time-to-preview", methods=["GET"])
 def time_to_preview():
     """
-    Distribution of days from estimate creation to scheduled install date.
+    Days from estimate creation to first preview/site-inspection task (task type 15).
 
-    DATA LIMITATION: Striven's API does not expose an approved_date or a
-    preview task created_date.  This endpoint measures created_date →
-    target_date (the target install date) as the nearest available proxy.
-    A 'data_note' field in the response documents this.
+    Uses live Striven task data (POST /v2/tasks/search, TaskTypeId=15) to find
+    the date each "Site Inspections/Preview" task was created.  Then looks up the
+    parent estimate's created_date from Supabase and computes the delta in days.
 
     Returns average, median, sample size, and up to 25 sample records
-    sorted fastest-to-slowest (shortest lead time first).
+    sorted fastest-to-slowest.
 
-    No query params.
+    Query params:
+        limit  (optional) — max tasks to sample (default 200, max 500)
 
     Example:
         GET /queries/time-to-preview
+        GET /queries/time-to-preview?limit=300
     """
+    import statistics
+    from datetime import datetime
+
+    task_limit = min(int(request.args.get("limit", 200)), 500)
+
     try:
-        result = query_time_to_target()
-        return jsonify(result)
+        # ── Step 1: pull Site Inspection / Preview tasks (type 15) from Striven
+        tasks_raw: list[dict] = []
+        page = 0
+        while len(tasks_raw) < task_limit:
+            resp  = striven.search_tasks({
+                "PageIndex":  page,
+                "PageSize":   100,
+                "TaskTypeId": 15,
+            })
+            total, data = _striven_page(resp)
+            if not data:
+                break
+            tasks_raw.extend(data)
+            if (page + 1) * 100 >= total or len(tasks_raw) >= task_limit:
+                break
+            page += 1
+
+        tasks_raw = tasks_raw[:task_limit]
+
+        if not tasks_raw:
+            return jsonify({
+                "average_days": None,
+                "median_days":  None,
+                "sample_size":  0,
+                "data_note":    "No preview tasks (type 15) found in Striven.",
+                "data":         [],
+            })
+
+        # ── Step 2: extract (estimate_id, task_created_date) pairs
+        # RelatedEntity on task stubs contains the linked sales-order id
+        task_pairs: list[tuple[int, str]] = []
+        for t in tasks_raw:
+            related = t.get("RelatedEntity") or t.get("relatedEntity") or {}
+            est_id  = related.get("Id") or related.get("id")
+            t_created = t.get("DateCreated") or t.get("dateCreated")
+            if est_id and t_created:
+                task_pairs.append((int(est_id), t_created))
+
+        if not task_pairs:
+            return jsonify({
+                "average_days": None,
+                "median_days":  None,
+                "sample_size":  0,
+                "data_note":    "Tasks found but none linked to an estimate with a created date.",
+                "data":         [],
+            })
+
+        # ── Step 3: batch-lookup estimate created_dates from Supabase
+        est_ids = list({p[0] for p in task_pairs})
+        sb_res  = (
+            _sb_client()
+            .table("estimates")
+            .select("estimate_id, estimate_number, customer_name, created_date")
+            .in_("estimate_id", est_ids)
+            .execute()
+        )
+        est_map = {
+            r["estimate_id"]: r
+            for r in (sb_res.data or [])
+        }
+
+        # ── Step 4: compute delta for each task
+        deltas:  list[float] = []
+        samples: list[dict]  = []
+
+        for est_id, task_created_str in task_pairs:
+            est = est_map.get(est_id)
+            if not est or not est.get("created_date"):
+                continue
+            try:
+                est_dt   = datetime.fromisoformat(
+                    est["created_date"].replace("Z", "+00:00")
+                )
+                task_dt  = datetime.fromisoformat(
+                    task_created_str.replace("Z", "+00:00")
+                )
+                days = (task_dt - est_dt).days
+                if days < 0:
+                    continue   # data anomaly: task predates estimate
+                deltas.append(days)
+                samples.append({
+                    "estimate_id":     est_id,
+                    "estimate_number": est.get("estimate_number"),
+                    "customer":        est.get("customer_name"),
+                    "days_to_preview": days,
+                    "preview_task_date": task_created_str,
+                })
+            except Exception:
+                continue
+
+        if not deltas:
+            return jsonify({
+                "average_days": None,
+                "median_days":  None,
+                "sample_size":  0,
+                "data_note":    "Could not calculate deltas for any tasks.",
+                "data":         [],
+            })
+
+        samples.sort(key=lambda x: x["days_to_preview"])
+
+        return jsonify({
+            "average_days": round(statistics.mean(deltas), 1),
+            "median_days":  round(statistics.median(deltas), 1),
+            "sample_size":  len(deltas),
+            "data_note":    (
+                "Measures days from estimate creation to when the "
+                "Site Inspections/Preview task (type 15) was created in Striven."
+            ),
+            "data":         samples[:25],
+        })
+
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
