@@ -1021,9 +1021,31 @@ def snapshot_stuck_jobs():
                 })
 
     stuck.sort(key=lambda x: x["days"], reverse=True)
-    result = {"count": len(stuck), "top": stuck[:3]}
+
+    # Dollar impact — sum OrderTotal across all stuck estimates
+    # The total field is populated when available on search stubs.
+    total_value = 0
+    for sid, data in fetched:
+        for r in data:
+            est = _fmt(r)
+            ref_str = est.get("date_approved") if sid == 22 else est.get("date_created")
+            ref     = _parse_date_str(ref_str)
+            if ref is None:
+                continue
+            days = (today - ref).days
+            if days > THRESH[sid] and est.get("total"):
+                try:
+                    total_value += float(est["total"])
+                except (TypeError, ValueError):
+                    pass
+
+    result = {
+        "count": len(stuck),
+        "top":   stuck[:3],
+        "impact": {"total_value": round(total_value), "currency": "USD"},
+    }
     _cache_set("snap:stuck_jobs", result)
-    print(f"[snap:stuck] count={result['count']}", flush=True)
+    print(f"[snap:stuck] count={result['count']} impact=${result['impact']['total_value']:,}", flush=True)
     return jsonify(result)
 
 
@@ -1076,16 +1098,29 @@ def snapshot_install_gaps():
                 "rep":      est.get("sales_rep") or "Unassigned",
                 "days":     days,
                 "issue":    f"{label}, install not yet confirmed",
+                "_total":   est.get("total"),   # internal — stripped before returning
             })
 
     all_ests.sort(key=lambda x: x["days"], reverse=True)
+
+    # Dollar impact — sum totals; strip internal _total key from all items
+    impact_value = 0
+    for e in all_ests:
+        raw_total = e.pop("_total", None)
+        if raw_total:
+            try:
+                impact_value += float(raw_total)
+            except (TypeError, ValueError):
+                pass
+
     result = {
         "count": len(all_ests),
         "top":   all_ests[:3],
+        "impact": {"total_value": round(impact_value), "currency": "USD"},
         "note":  "Upper bound — full analysis confirms which have no install task",
     }
     _cache_set("snap:install_gaps", result)
-    print(f"[snap:install] count={result['count']}", flush=True)
+    print(f"[snap:install] count={result['count']} impact=${result['impact']['total_value']:,}", flush=True)
     return jsonify(result)
 
 
@@ -1137,6 +1172,92 @@ def snapshot_rep_pipeline():
     result = {"count": len(rep_counts), "top": top3}
     _cache_set("snap:rep_pipeline", result)
     print(f"[snap:rep] reps={result['count']}", flush=True)
+    return jsonify(result)
+
+
+@app.get("/snapshot/pipeline")
+def snapshot_pipeline():
+    """
+    Return a live summary of the full active sales pipeline.
+
+    Fetches Quoted (19), Approved (22), and In Progress (25) in parallel.
+    Returns total job count, per-stage counts, and the top-3 highest-risk
+    jobs (oldest by days in stage) for the preview panel.
+
+    60-second cache. No Claude. No task API calls.
+    """
+    cached = _cache_get("snap:pipeline")
+    if cached is not None:
+        return jsonify(cached)
+
+    from datetime import datetime
+    from concurrent.futures import ThreadPoolExecutor
+
+    today = datetime.utcnow()
+    THRESH      = {19: 7, 22: 5, 25: 10}
+    STATUS_NAMES = {19: "Quoted", 22: "Approved", 25: "In Progress"}
+
+    def _fetch(sid):
+        try:
+            raw = striven.search_sales_orders({
+                "PageIndex": 0, "PageSize": 25, "StatusChangedTo": sid,
+            })
+            return sid, raw.get("data") or []
+        except Exception as exc:
+            print(f"[snap:pipeline] WARNING status={sid}: {exc}", flush=True)
+            return sid, []
+
+    try:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            fetched = list(pool.map(_fetch, [19, 22, 25]))
+    except Exception as exc:
+        print(f"[snap:pipeline] ERROR: {exc}", flush=True)
+        return jsonify({"count": 0, "top": [], "totals": {}, "error": str(exc)})
+
+    all_jobs: list[dict] = []
+    stage_counts = {"quoted": 0, "approved": 0, "in_progress": 0}
+    SKEY = {19: "quoted", 22: "approved", 25: "in_progress"}
+
+    for sid, data in fetched:
+        status_name = STATUS_NAMES[sid]
+        stage_counts[SKEY[sid]] += len(data)
+        for r in data:
+            est     = _fmt(r)
+            ref_str = est.get("date_approved") if sid == 22 else est.get("date_created")
+            ref     = _parse_date_str(ref_str)
+            days    = (today - ref).days if ref else 0
+            all_jobs.append({
+                "id":       str(est.get("estimate_number") or est.get("id") or ""),
+                "customer": est.get("customer_name") or "Unknown",
+                "days":     days,
+                "is_stuck": days > THRESH[sid],
+                "status":   status_name,
+                "issue":    f"{status_name}, {days} days",
+            })
+
+    # Top 3: prioritise stuck jobs, then sort by days desc
+    stuck = [j for j in all_jobs if j["is_stuck"]]
+    stuck.sort(key=lambda x: -x["days"])
+    top3  = [{"id": j["id"], "customer": j["customer"],
+               "days": j["days"], "issue": j["issue"]}
+              for j in stuck[:3]]
+
+    result = {
+        "count":  len(all_jobs),
+        "top":    top3,
+        "totals": {
+            "quoted":      stage_counts["quoted"],
+            "approved":    stage_counts["approved"],
+            "in_progress": stage_counts["in_progress"],
+            "stuck":       len(stuck),
+        },
+    }
+    _cache_set("snap:pipeline", result)
+    print(
+        f"[snap:pipeline] total={result['count']} "
+        f"stuck={result['totals']['stuck']}",
+        flush=True,
+    )
     return jsonify(result)
 
 
@@ -1227,6 +1348,9 @@ INTELLIGENCE MODULES (structured analysis — Claude interprets, not computes)
   sales rep health / rep performance      → analyze_rep_pipeline
   which rep has most problems             → analyze_rep_pipeline
   what jobs need to be scheduled          → analyze_install_gaps
+  weekly pipeline / pipeline review       → analyze_weekly_pipeline
+  sales pipeline / pipeline report        → analyze_weekly_pipeline
+  full pipeline / pipeline by rep         → analyze_weekly_pipeline
 
 FINANCIAL
   unpaid invoices / AR / who owes us      → search_invoices
@@ -1495,6 +1619,44 @@ RULES:
   ✓ Percentages where useful: "7 of 15 approved jobs (47%) have no install"
   ✗ Never show raw JSON field names in the response
   ✗ Never say "the data shows" or "based on the analysis"
+════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════
+WEEKLY PIPELINE — FORMAT WHEN analyze_weekly_pipeline RETURNS
+════════════════════════════════════════════════════════
+ALWAYS respond in this exact order when analyze_weekly_pipeline returns:
+
+1. SUMMARY — one bold sentence: total pipeline + single biggest risk.
+   "**83 jobs in pipeline ($1.2M) — 34 (41%) are stuck or delayed.**"
+   Include total_pipeline_value if non-zero. Include stuck_pct.
+
+2. KEY FINDINGS — 3–5 bullets covering each stage and the overall health.
+   • Quoted: [N] jobs, [X] sitting >[threshold] days — needs follow-up
+   • Approved: [N] jobs, [X] over threshold — scheduling not initiated
+   • In Progress: [N] jobs, [X] without confirmed install task
+   • Install task check: confirmed for [N] jobs (sample — full check via Install Gaps module)
+
+3. REP BREAKDOWN — table sorted by Stuck (worst first), max 8 reps.
+   | Rep | Total | Quoted | Approved | In Progress | Stuck | No Install |
+   ✓ Skip reps with zero stuck and zero missing install
+   ✓ Bold the worst rep's row mentally — call them out in ACTIONS
+
+4. TOP RISKS — table of up to 10 jobs, sorted by days-in-stage desc.
+   | Job # | Customer | Rep | Status | Days | Risk |
+   Translate risk codes to plain English.
+
+5. ACTIONS — 3–5 specific, role-appropriate next steps. Be direct.
+   ✓ "Rep [Name] has [N] stuck jobs — schedule a pipeline review with them today."
+   ✓ "Contact [Customer] — their quote has been sitting [N] days with no response."
+   ✓ "Book install tasks for the [N] approved jobs before end of week."
+
+RULES:
+  ✓ Dollar amounts: $1,200,000 → "$1.2M"; $45,000 → "$45K"; $8,500 → "$8,500"
+  ✓ Show total_pipeline_value in SUMMARY if > 0
+  ✓ Stuck percentage always shown: "34 of 83 jobs (41%)"
+  ✓ install_checked note: "Install confirmed for X of Y checked — run Install Gaps for full picture"
+  ✗ Never show raw field names (no "over_threshold", "status_id", etc.)
+  ✗ Do not repeat the same job in both KEY FINDINGS and TOP RISKS tables
 ════════════════════════════════════════════════════════
 
 ════════════════════════════════════════════════════════
@@ -1953,6 +2115,31 @@ _CHAT_TOOLS = [
                 "limit": {
                     "type": "integer",
                     "description": "Max estimates to analyse across all reps (default 30, max 50).",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "analyze_weekly_pipeline",
+        "description": (
+            "Full weekly sales pipeline review — replaces the Excel pipeline report. "
+            "Fetches Quoted, Approved, and In Progress estimates, computes days in stage, "
+            "checks install tasks, groups by sales rep, and returns: "
+            "(1) pipeline_summary — count/avg-days/over-threshold per stage, "
+            "(2) rep_summary — per-rep breakdown with stuck and missing-install counts, "
+            "(3) top_risks — up to 10 highest-urgency jobs, "
+            "(4) totals — total pipeline jobs, value, and stuck percentage. "
+            "Use for: 'weekly pipeline', 'pipeline review', 'sales pipeline report', "
+            "'pipeline meeting', 'pipeline status', 'how is the pipeline', "
+            "'weekly report', 'pipeline by rep', 'full pipeline review'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max estimates per status group (default 40, max 75).",
                 },
             },
             "required": [],
@@ -3082,6 +3269,210 @@ def _analyze_rep_pipeline(limit: int = 30) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Intelligence Module 4 — Weekly Pipeline Review
+# ---------------------------------------------------------------------------
+
+def _analyze_weekly_pipeline(limit: int = 40) -> dict:
+    """
+    Full weekly sales pipeline review — replaces the Excel macro report.
+
+    Fetches Quoted (19), Approved (22), and In Progress (25) estimates in
+    parallel, computes days in stage, identifies stuck jobs, checks install
+    tasks for approved/in-progress jobs (capped to control latency), groups
+    everything by sales rep, and surfaces the top 10 highest-risk jobs.
+
+    Returns a structured dict with four top-level sections:
+      pipeline_summary — counts, averages, and threshold-breach counts per stage
+      rep_summary      — per-rep breakdown (total, quoted, approved, in_progress,
+                         stuck_jobs, missing_install)
+      top_risks        — up to 10 jobs sorted by urgency (days over threshold)
+      totals           — headline numbers (total jobs, value, stuck %, etc.)
+    """
+    import time as _time
+    from datetime import datetime
+    from concurrent.futures import ThreadPoolExecutor
+
+    t_start = _time.monotonic()
+    today   = datetime.utcnow()
+
+    THRESHOLDS  = {19: 7, 22: 5, 25: 10}
+    STATUS_NAMES = {19: "Quoted", 22: "Approved", 25: "In Progress"}
+
+    # ── Step 1: Fetch all three status groups in parallel ─────────────────────
+    page = min(limit // 3, 25)
+
+    def _fetch(sid):
+        try:
+            raw = striven.search_sales_orders({
+                "PageIndex": 0, "PageSize": page, "StatusChangedTo": sid,
+            })
+            return sid, raw.get("data") or []
+        except Exception as exc:
+            print(f"[weekly_pipeline] WARNING status={sid}: {exc}", flush=True)
+            return sid, []
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        fetched = list(pool.map(_fetch, [19, 22, 25]))
+
+    # ── Step 2: Normalise estimates ───────────────────────────────────────────
+    all_jobs: list[dict] = []
+    for sid, data in fetched:
+        status_name = STATUS_NAMES[sid]
+        for r in data:
+            est     = _fmt(r)
+            ref_str = est.get("date_approved") if sid == 22 else est.get("date_created")
+            ref     = _parse_date_str(ref_str)
+            days    = (today - ref).days if ref else 0
+            all_jobs.append({
+                "id":           str(est.get("estimate_number") or est.get("id") or ""),
+                "estimate_id":  est.get("id"),
+                "customer":     est.get("customer_name") or "Unknown",
+                "rep":          est.get("sales_rep") or "Unassigned",
+                "status":       status_name,
+                "status_id":    sid,
+                "days_in_stage": days,
+                "threshold":    THRESHOLDS[sid],
+                "is_stuck":     days > THRESHOLDS[sid],
+                "total":        est.get("total") or 0,
+                "has_install":  None,   # filled below for approved/in-progress
+            })
+
+    # ── Step 3: Install-task check (approved + in-progress, capped at 20) ─────
+    # Each task check costs one Striven API call.  Cap at 20 to keep the
+    # total latency acceptable; remaining jobs show has_install=None (unknown).
+    INSTALL_CAP = 20
+    to_check = [j for j in all_jobs if j["status_id"] in (22, 25)][:INSTALL_CAP]
+
+    for job in to_check:
+        est_id = job["estimate_id"]
+        if est_id is None:
+            job["has_install"] = False
+            continue
+        try:
+            task_raw  = striven.search_tasks({"RelatedEntityId": est_id, "PageSize": 25})
+            tasks     = [_fmt_task(t) for t in (task_raw.get("data") or [])]
+            job["has_install"] = any(
+                "install" in (t.get("name")      or "").lower() or
+                "install" in (t.get("task_type") or "").lower()
+                for t in tasks
+            )
+        except Exception:
+            job["has_install"] = False  # conservative
+
+    # ── Step 4: Pipeline summary per stage ────────────────────────────────────
+    pipeline_summary: dict = {}
+    for sname, skey in [
+        ("Quoted",      "quoted"),
+        ("Approved",    "approved"),
+        ("In Progress", "in_progress"),
+    ]:
+        group   = [j for j in all_jobs if j["status"] == sname]
+        d_list  = [j["days_in_stage"] for j in group]
+        v_list  = [j["total"] for j in group if j["total"]]
+        pipeline_summary[skey] = {
+            "count":          len(group),
+            "avg_days":       round(sum(d_list) / len(d_list), 1) if d_list else 0,
+            "over_threshold": sum(1 for j in group if j["is_stuck"]),
+            "total_value":    sum(v_list),
+        }
+
+    # ── Step 5: Rep summary ───────────────────────────────────────────────────
+    rep_data: dict[str, dict] = {}
+    for j in all_jobs:
+        rep = j["rep"]
+        if rep not in rep_data:
+            rep_data[rep] = {
+                "rep":             rep,
+                "total_pipeline":  0,
+                "quoted":          0,
+                "approved":        0,
+                "in_progress":     0,
+                "stuck_jobs":      0,
+                "missing_install": 0,
+            }
+        rd = rep_data[rep]
+        rd["total_pipeline"] += 1
+        if   j["status"] == "Quoted":       rd["quoted"]      += 1
+        elif j["status"] == "Approved":     rd["approved"]    += 1
+        elif j["status"] == "In Progress":  rd["in_progress"] += 1
+        if   j["is_stuck"]:                 rd["stuck_jobs"]  += 1
+        if   j["has_install"] is False:     rd["missing_install"] += 1
+
+    rep_summary = sorted(
+        rep_data.values(),
+        key=lambda r: (-r["stuck_jobs"], -r["total_pipeline"]),
+    )
+
+    # ── Step 6: Top risks ─────────────────────────────────────────────────────
+    # Stuck jobs sorted by days-over-threshold (worst first)
+    stuck_jobs      = [j for j in all_jobs if j["is_stuck"]]
+    missing_install = [j for j in all_jobs if j["has_install"] is False
+                       and j["status_id"] in (22, 25)]
+
+    RISK_LABEL = {
+        "Quoted":      "Quote {days}d old — {over}d over threshold, needs follow-up",
+        "Approved":    "Approved {days}d ago — no scheduling action taken",
+        "In Progress": "In progress {days}d — no install task confirmed",
+    }
+    risk_list: list[dict] = []
+    seen_ids: set = set()
+
+    for j in sorted(stuck_jobs, key=lambda x: -x["days_in_stage"])[:7]:
+        seen_ids.add(j["id"])
+        over = j["days_in_stage"] - j["threshold"]
+        risk_list.append({
+            "id":           j["id"],
+            "customer":     j["customer"],
+            "rep":          j["rep"],
+            "status":       j["status"],
+            "days_in_stage": j["days_in_stage"],
+            "total":        j["total"],
+            "risk":         RISK_LABEL[j["status"]].format(
+                                days=j["days_in_stage"], over=over),
+        })
+
+    for j in sorted(missing_install, key=lambda x: -x["days_in_stage"])[:5]:
+        if j["id"] not in seen_ids:
+            risk_list.append({
+                "id":           j["id"],
+                "customer":     j["customer"],
+                "rep":          j["rep"],
+                "status":       j["status"],
+                "days_in_stage": j["days_in_stage"],
+                "total":        j["total"],
+                "risk":         "No install task scheduled",
+            })
+
+    # ── Step 7: Totals ────────────────────────────────────────────────────────
+    all_values = [j["total"] for j in all_jobs if j["total"]]
+    totals = {
+        "total_jobs":            len(all_jobs),
+        "total_pipeline_value":  sum(all_values),
+        "stuck_count":           len(stuck_jobs),
+        "stuck_pct":             round(len(stuck_jobs) / len(all_jobs) * 100) if all_jobs else 0,
+        "missing_install_count": len(missing_install),
+        "install_checked":       len(to_check),
+    }
+
+    elapsed = round(_time.monotonic() - t_start, 2)
+    print(
+        f"[weekly_pipeline] complete — {len(all_jobs)} jobs, "
+        f"{len(stuck_jobs)} stuck ({totals['stuck_pct']}%), "
+        f"{len(missing_install)} missing install, {elapsed}s",
+        flush=True,
+    )
+
+    return {
+        "analysis_type":    "weekly_pipeline",
+        "pipeline_summary": pipeline_summary,
+        "rep_summary":      rep_summary,
+        "top_risks":        risk_list[:10],
+        "totals":           totals,
+        "elapsed_seconds":  elapsed,
+    }
+
+
 def _execute_tool(name: str, tool_input: dict) -> dict:
     """Map a Claude tool call to the live Striven API. All operations are read-only."""
     try:
@@ -3484,6 +3875,12 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
             print(f"[analyze_rep_pipeline] limit={limit}", flush=True)
             return _analyze_rep_pipeline(limit=limit)
 
+        # ── analyze_weekly_pipeline ───────────────────────────────────────────
+        if name == "analyze_weekly_pipeline":
+            limit = min(tool_input.get("limit", 40), 75)
+            print(f"[analyze_weekly_pipeline] limit={limit}", flush=True)
+            return _analyze_weekly_pipeline(limit=limit)
+
         # ── search_knowledge ──────────────────────────────────────────────────
         # Searches the structured knowledge base (markdown files in /knowledge/).
         # Returns the most relevant sections for the query.
@@ -3707,6 +4104,16 @@ def chat_api():
             q,
         ):
             return "analyze_rep_pipeline", _execute_tool("analyze_rep_pipeline", {})
+
+        # ── Weekly pipeline review (intelligence module) ──────────────────────
+        if _re.search(
+            r'\bweekly\s+pipeline\b|\bpipeline\s+review\b|\bpipeline\s+report\b'
+            r'|\bsales\s+pipeline\b|\bpipeline\s+meeting\b|\bpipeline\s+status\b'
+            r'|\bhow\s+is\s+(?:the\s+)?pipeline\b|\bfull\s+pipeline\b'
+            r'|\bweekly\s+report\b|\bpipeline\s+by\s+rep\b',
+            q,
+        ):
+            return "analyze_weekly_pipeline", _execute_tool("analyze_weekly_pipeline", {})
 
         # ── Knowledge-only questions (no live data needed) ────────────────────
         if _re.search(
