@@ -915,20 +915,26 @@ def sync_estimates():
     into the `estimates` table in Supabase. Safe to call repeatedly —
     upsert logic means no duplicates are created.
 
+    Returns 202 immediately and runs the sync in a background thread so
+    Render's proxy timeout never kills a long-running full sync.
+    Progress and errors are written to stdout (Render logs).
+
     Query params (optional):
-        limit — max records to sync this run (default 50 for safety).
-                Pass limit=all to sync every record (use with caution on
-                large datasets — ~9 300 records = ~94 Striven API calls).
+        limit — max records to sync this run (default: all records).
+                Pass limit=all or omit for a full sync.
+                Pass limit=200 etc. for a partial sync.
 
     Example:
-        GET /sync-estimates           → syncs first 50 records
-        GET /sync-estimates?limit=200 → syncs first 200 records
-        GET /sync-estimates?limit=all → full sync (all records)
+        GET /sync-estimates           → full sync (all records, background)
+        GET /sync-estimates?limit=200 → sync first 200 records, background
+        GET /sync-estimates?limit=all → full sync (all records, background)
 
     SAFETY: This endpoint never writes to Striven.
     """
+    import threading
+
     # Parse optional limit param
-    raw_limit = request.args.get("limit", "50")
+    raw_limit = request.args.get("limit", "all")
 
     if raw_limit.lower() == "all":
         limit = None           # sync everything
@@ -938,17 +944,20 @@ def sync_estimates():
         except ValueError:
             return jsonify({"error": f"Invalid limit value: {raw_limit!r}. Use an integer or 'all'."}), 400
 
-    try:
-        records_synced = sync_estimates_to_supabase(limit=limit)
-        return jsonify({
-            "status": "success",
-            "records_synced": records_synced,
-        })
-    except HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else 502
-        return jsonify({"error": str(exc)}), status
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+    def _run():
+        try:
+            n = sync_estimates_to_supabase(limit=limit)
+            print(f"[sync-estimates] Background sync complete — {n} records.", flush=True)
+        except Exception as exc:
+            print(f"[sync-estimates] Background sync ERROR: {exc}", flush=True)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    return jsonify({
+        "status":  "started",
+        "message": f"Sync running in background. limit={'all' if limit is None else limit}. Check Render logs for progress.",
+    }), 202
 
 
 # ---------------------------------------------------------------------------
