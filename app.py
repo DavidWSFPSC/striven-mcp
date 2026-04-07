@@ -3636,7 +3636,12 @@ def striven_employees():
 
     try:
         resp = striven.get_employees(page_index=page, page_size=page_size)
-        total, data = _striven_page(resp)
+        # GET /v1/employees returns a raw list, not the standard paginated dict
+        if isinstance(resp, list):
+            data  = resp
+            total = len(data)
+        else:
+            total, data = _striven_page(resp)
         return jsonify({
             "total_count": total,
             "page":        page,
