@@ -78,7 +78,7 @@
     .intel-inner {
       max-width: 820px;
       margin: 0 auto;
-      padding: 14px 16px;
+      padding: 10px 16px;
     }
 
     /* Panel title row */
@@ -86,7 +86,7 @@
       display: flex;
       align-items: baseline;
       gap: 10px;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
     .intel-title {
       display: flex; align-items: center; gap: 7px;
@@ -96,7 +96,7 @@
     .intel-sub { font-size: 12px; color: #9ca3af; }
 
     /* Cards row */
-    .intel-cards { display: flex; gap: 10px; }
+    .intel-cards { display: flex; gap: 8px; }
 
     /* Individual card */
     .intel-card {
@@ -347,17 +347,17 @@
     /* ── Welcome card ─────────────────────────────────────────────────────────── */
     .welcome {
       background: #fff; border: 1px solid #e5e7eb;
-      border-radius: 16px; padding: 22px 24px;
+      border-radius: 16px; padding: 16px 20px;
       text-align: center; color: #374151;
       box-shadow: 0 1px 3px rgba(0,0,0,0.06);
     }
-    .welcome h2 { font-size: 18px; font-weight: 700; margin-bottom: 6px; color: #1a1a2e; }
-    .welcome p  { font-size: 14px; color: #6b7280; margin-bottom: 16px; }
-    .suggestions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+    .welcome h2 { font-size: 16px; font-weight: 700; margin-bottom: 4px; color: #1a1a2e; }
+    .welcome p  { font-size: 12.5px; color: #9ca3af; margin-bottom: 12px; }
+    .suggestions { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; }
     .suggestion-btn {
-      background: #f3f4f6; border: 1px solid #e5e7eb;
-      border-radius: 20px; padding: 7px 14px;
-      font-size: 13px; cursor: pointer; color: #374151;
+      background: #f8fafc; border: 1px solid #e2e8f0;
+      border-radius: 20px; padding: 5px 12px;
+      font-size: 12px; cursor: pointer; color: #64748b;
       transition: all 0.15s;
     }
     .suggestion-btn:hover { background: #1a1a2e; color: #fff; border-color: #1a1a2e; }
@@ -365,7 +365,7 @@
     /* ── Input bar ───────────────────────────────────────────────────────────── */
     .input-bar {
       width: 100%; max-width: 820px;
-      padding: 12px 16px 16px;
+      padding: 8px 16px 12px;
       background: #f0f2f5;
     }
     .input-row {
@@ -457,7 +457,7 @@
 
     <div class="intel-header">
       <div class="intel-title">⚡ Straude Intelligence</div>
-      <p class="intel-sub">Quick insights into operations</p>
+      <p class="intel-sub">Operations Overview</p>
     </div>
 
     <div class="intel-cards">
@@ -529,14 +529,12 @@
 <div class="chat-window">
   <div class="messages" id="messages">
     <div class="welcome">
-      <h2>Ask me anything about jobs, customers, installs, or your pipeline.</h2>
-      <p>Click a module above for instant analysis, or type a question below.</p>
+      <h2>Get instant insight into your jobs, installs, and pipeline.</h2>
+      <p>Click a module above or choose a question below.</p>
       <div class="suggestions">
-        <button class="suggestion-btn" onclick="ask(this)">What should I be working on today?</button>
-        <button class="suggestion-btn" onclick="ask(this)">Show me my jobs</button>
         <button class="suggestion-btn" onclick="ask(this)">What's stuck right now?</button>
         <button class="suggestion-btn" onclick="ask(this)">Which installs are coming up?</button>
-        <button class="suggestion-btn" onclick="ask(this)">Do any jobs need attention?</button>
+        <button class="suggestion-btn" onclick="ask(this)">Which jobs have no install scheduled?</button>
         <button class="suggestion-btn" onclick="ask(this)">Which gas log installs are missing the removal fee?</button>
       </div>
     </div>
