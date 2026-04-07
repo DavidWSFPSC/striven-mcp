@@ -106,6 +106,32 @@ _anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", "
 # The goal is to avoid hitting Striven 3 times in 10 seconds for the
 # same count query when a user asks the same question twice.
 # ---------------------------------------------------------------------------
+# Server-side request throttle — prevents Claude API rate-limit bursts
+# ---------------------------------------------------------------------------
+import threading as _threading
+
+_REQUEST_GATE_LOCK  = _threading.Lock()
+_LAST_CLAUDE_TS: float = 0.0
+_MIN_CLAUDE_INTERVAL   = 3.0  # seconds — max ~20 Claude calls/min
+
+
+def _check_and_claim_request() -> bool:
+    """
+    Atomically checks whether enough time has passed since the last Claude call.
+    If yes, records the current timestamp and returns True (caller may proceed).
+    If no, returns False (caller must reject with 429).
+    Thread-safe via lock.
+    """
+    global _LAST_CLAUDE_TS
+    now = _time_mod.time()
+    with _REQUEST_GATE_LOCK:
+        if now - _LAST_CLAUDE_TS < _MIN_CLAUDE_INTERVAL:
+            return False
+        _LAST_CLAUDE_TS = now
+        return True
+
+
+# ---------------------------------------------------------------------------
 _RESP_CACHE: dict[str, tuple[object, float]] = {}
 _CACHE_TTL   = 60  # seconds
 
@@ -4024,6 +4050,13 @@ def chat_api():
 
     if not os.getenv("ANTHROPIC_API_KEY"):
         return jsonify({"error": "ANTHROPIC_API_KEY not configured on server."}), 500
+
+    # ── Server-side throttle — block burst requests ───────────────────────────
+    if not _check_and_claim_request():
+        print("[chat_api] rate-limited — too soon since last request", flush=True)
+        return jsonify({
+            "error": "System is processing another request — please wait a moment and try again."
+        }), 429
 
     # Capture the user's question for logging
     user_question = ""
