@@ -238,6 +238,41 @@
       color: #3b82f6; transform: translateX(2px);
     }
 
+    /* ── Weekly Pipeline split card ─────────────────────────────────────────── */
+    .intel-card.pipeline-split {
+      cursor: default;
+      align-items: flex-start;
+    }
+    /* Suppress outer-card hover since it's no longer the click target */
+    .intel-card.pipeline-split:hover {
+      transform: none;
+      box-shadow: none;
+      background: #f0f7ff;
+      border-color: #dbeafe;
+    }
+    .pipeline-actions { display: flex; flex-direction: column; }
+
+    /* Top button — triggers analysis */
+    .pipeline-top-btn {
+      display: block; width: 100%; text-align: left;
+      background: none; border: none;
+      border-bottom: 1px solid #e2e8f0;
+      padding: 0 0 8px; margin-bottom: 7px;
+      cursor: pointer; font-family: inherit;
+      transition: none;
+    }
+    .pipeline-top-btn:hover .intel-card-name { color: #2563eb; }
+
+    /* Bottom link — opens Excel */
+    .pipeline-excel-btn {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 11.5px; font-weight: 500;
+      color: #64748b; text-decoration: none;
+      transition: color 0.15s;
+    }
+    .pipeline-excel-btn:hover { color: #15803d; }
+    .pipeline-excel-btn svg { flex-shrink: 0; }
+
     /* Responsive */
     @media (max-width: 560px) {
       .intel-cards { flex-direction: column; }
@@ -500,17 +535,31 @@
         <div class="intel-card-arrow">→</div>
       </button>
 
-      <button class="intel-card" id="card-pipeline" onclick="runModule('weekly_pipeline')">
+      <div class="intel-card pipeline-split" id="card-pipeline">
         <div class="intel-card-icon">📈</div>
-        <div class="intel-card-body">
-          <div class="intel-card-name-row">
-            <span class="intel-card-name">Weekly Pipeline</span>
-            <span class="intel-badge state-loading" id="badge-pipeline">...</span>
-          </div>
-          <div class="intel-card-desc">Full pipeline review — replaces the Excel report</div>
+        <div class="intel-card-body pipeline-actions">
+
+          <!-- Top: run full analysis (same behavior as before) -->
+          <button class="pipeline-top-btn" onclick="runModule('weekly_pipeline')">
+            <div class="intel-card-name-row">
+              <span class="intel-card-name">Weekly Pipeline</span>
+              <span class="intel-badge state-loading" id="badge-pipeline">...</span>
+            </div>
+            <div class="intel-card-desc">Full pipeline review — analysis &amp; rep breakdown</div>
+          </button>
+
+          <!-- Bottom: direct Excel download (same URL as footer button) -->
+          <a class="pipeline-excel-btn"
+             href="https://striven-mcp-v2.onrender.com/gas-log-audit-export"
+             target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM8 11h8v1.5H8V11zm0 3h8v1.5H8V14zm0 3h5v1.5H8V17z"/>
+            </svg>
+            Open Excel Report
+          </a>
+
         </div>
-        <div class="intel-card-arrow">→</div>
-      </button>
+      </div>
 
     </div>
 
