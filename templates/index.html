@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Ask WilliamSmith</title>
+  <title>Straude</title>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -17,7 +17,7 @@
       align-items: center;
     }
 
-    /* ── Header ── */
+    /* ── Header ─────────────────────────────────────────────────────────────── */
     .header {
       width: 100%;
       background: #1a1a2e;
@@ -43,10 +43,13 @@
       display: flex; align-items: center; gap: 6px;
       font-size: 12px; color: #6ee7b7;
     }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: #6ee7b7; animation: pulse 2s infinite; }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #6ee7b7; animation: pulse 2s infinite;
+    }
     @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 
-    /* ── Intelligence Panel ── */
+    /* ── Intelligence Panel ──────────────────────────────────────────────────── */
     .intel-panel {
       width: 100%;
       background: #fff;
@@ -59,6 +62,8 @@
       margin: 0 auto;
       padding: 14px 16px;
     }
+
+    /* Panel title row */
     .intel-header {
       display: flex;
       align-items: baseline;
@@ -66,124 +71,174 @@
       margin-bottom: 10px;
     }
     .intel-title {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      font-size: 13px;
-      font-weight: 700;
-      color: #1a1a2e;
-      letter-spacing: 0.2px;
+      display: flex; align-items: center; gap: 7px;
+      font-size: 13px; font-weight: 700;
+      color: #1a1a2e; letter-spacing: 0.2px;
     }
-    .intel-title-icon {
-      font-size: 14px;
-    }
-    .intel-sub {
-      font-size: 12px;
-      color: #9ca3af;
-    }
-    .intel-cards {
-      display: flex;
-      gap: 10px;
-    }
+    .intel-sub { font-size: 12px; color: #9ca3af; }
+
+    /* Cards row */
+    .intel-cards { display: flex; gap: 10px; }
+
+    /* Individual card */
     .intel-card {
       flex: 1;
-      display: flex;
-      align-items: center;
-      gap: 10px;
+      display: flex; align-items: center; gap: 10px;
       padding: 11px 14px;
       background: #f0f7ff;
       border: 1.5px solid #dbeafe;
       border-radius: 12px;
-      cursor: pointer;
-      text-align: left;
-      transition: all 0.18s ease;
+      cursor: pointer; text-align: left;
+      transition: background 0.18s, border-color 0.18s,
+                  box-shadow 0.18s, transform 0.18s;
       position: relative;
-      overflow: hidden;
     }
     .intel-card:hover {
       background: #e0f0ff;
       border-color: #93c5fd;
-      box-shadow: 0 3px 12px rgba(37, 99, 235, 0.12);
-      transform: translateY(-1px);
+      box-shadow: 0 4px 14px rgba(37,99,235,0.13);
+      transform: translateY(-2px);
     }
-    .intel-card:active {
-      transform: translateY(0);
-      box-shadow: none;
+    .intel-card:active { transform: translateY(0); box-shadow: none; }
+    .intel-card.loading,
+    .intel-card:disabled {
+      opacity: 0.55; cursor: not-allowed;
+      pointer-events: none; transform: none;
     }
-    .intel-card:disabled,
-    .intel-card.loading {
-      opacity: 0.6;
-      cursor: not-allowed;
-      transform: none;
-      pointer-events: none;
-    }
-    .intel-card-icon {
-      font-size: 20px;
-      flex-shrink: 0;
-      line-height: 1;
-    }
-    .intel-card-body {
-      flex: 1;
-      min-width: 0;
-    }
-    .intel-card-name {
-      font-size: 13px;
-      font-weight: 700;
-      color: #1e3a5f;
-      margin-bottom: 2px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .intel-card-desc {
-      font-size: 11.5px;
-      color: #64748b;
-      line-height: 1.4;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-    .intel-card-arrow {
-      font-size: 15px;
-      color: #93c5fd;
-      flex-shrink: 0;
-      transition: transform 0.15s;
-    }
-    .intel-card:hover .intel-card-arrow {
-      transform: translateX(3px);
-      color: #3b82f6;
+    /* Highlight the active card */
+    .intel-card.active-card {
+      background: #dbeafe;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
     }
 
-    /* Responsive: stack cards vertically on small screens */
+    .intel-card-icon { font-size: 20px; flex-shrink: 0; line-height: 1; }
+    .intel-card-body { flex: 1; min-width: 0; }
+
+    /* Name + badge row */
+    .intel-card-name-row {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 3px;
+    }
+    .intel-card-name {
+      font-size: 13px; font-weight: 700; color: #1e3a5f;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* Count badge */
+    .intel-badge {
+      display: inline-flex; align-items: center;
+      background: #dbeafe; color: #1d4ed8;
+      font-size: 11px; font-weight: 700;
+      padding: 2px 9px; border-radius: 10px;
+      white-space: nowrap; flex-shrink: 0;
+      transition: background 0.2s, color 0.2s;
+      min-width: 34px; justify-content: center;
+    }
+    .intel-badge.state-loading { background: #f3f4f6; color: #9ca3af; }
+    .intel-badge.state-error   { background: #fef2f2; color: #dc2626; }
+    .intel-badge.state-ready   { background: #dbeafe; color: #1d4ed8; }
+
+    .intel-card-desc {
+      font-size: 11.5px; color: #64748b; line-height: 1.4;
+      overflow: hidden;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    }
+
+    .intel-card-arrow {
+      font-size: 15px; color: #93c5fd; flex-shrink: 0;
+      transition: transform 0.15s, color 0.15s;
+    }
+    .intel-card:hover .intel-card-arrow { transform: translateX(3px); color: #3b82f6; }
+
+    /* ── Preview Panel ───────────────────────────────────────────────────────── */
+    .intel-preview {
+      overflow: hidden;
+      max-height: 0;
+      transition: max-height 0.28s ease, margin-top 0.28s ease, opacity 0.2s ease;
+      margin-top: 0;
+      opacity: 0;
+    }
+    .intel-preview.open {
+      max-height: 220px;
+      margin-top: 10px;
+      opacity: 1;
+    }
+    .intel-preview-inner {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .intel-preview-header {
+      padding: 7px 14px;
+      font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
+      text-transform: uppercase; color: #64748b;
+      background: #f1f5f9;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .intel-preview-empty {
+      padding: 14px;
+      font-size: 13px; color: #9ca3af; text-align: center;
+    }
+    .intel-preview-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 14px;
+      border-top: 1px solid #e9eef4;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .intel-preview-item:first-child { border-top: none; }
+    .intel-preview-item:hover { background: #eff6ff; }
+
+    .preview-item-id {
+      font-size: 12.5px; font-weight: 700;
+      color: #1e3a5f; white-space: nowrap; min-width: 72px;
+    }
+    .preview-item-days {
+      font-size: 12px; font-weight: 700;
+      color: #dc2626; white-space: nowrap;
+      min-width: 44px;
+    }
+    .preview-item-days.count { color: #2563eb; }
+    .preview-item-detail {
+      font-size: 12px; color: #64748b;
+      flex: 1; overflow: hidden;
+      white-space: nowrap; text-overflow: ellipsis;
+    }
+    .preview-item-arrow {
+      font-size: 13px; color: #bfdbfe; flex-shrink: 0;
+      transition: color 0.12s, transform 0.12s;
+    }
+    .intel-preview-item:hover .preview-item-arrow {
+      color: #3b82f6; transform: translateX(2px);
+    }
+
+    /* Responsive */
     @media (max-width: 560px) {
       .intel-cards { flex-direction: column; }
       .intel-card-desc { display: none; }
     }
 
-    /* ── Chat window ── */
+    /* ── Chat window ─────────────────────────────────────────────────────────── */
     .chat-window {
       width: 100%; max-width: 820px;
-      flex: 1;
-      display: flex; flex-direction: column;
+      flex: 1; display: flex; flex-direction: column;
       overflow: hidden;
     }
-
     .messages {
-      flex: 1;
-      overflow-y: auto;
+      flex: 1; overflow-y: auto;
       padding: 20px 16px;
       display: flex; flex-direction: column; gap: 16px;
       scroll-behavior: smooth;
     }
 
-    /* ── Message bubbles ── */
+    /* ── Message bubbles ─────────────────────────────────────────────────────── */
     .msg { display: flex; gap: 10px; max-width: 100%; }
     .msg.user { flex-direction: row-reverse; }
 
     .avatar {
-      width: 34px; height: 34px; border-radius: 50%;
-      flex-shrink: 0;
+      width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
       font-size: 15px; font-weight: 700;
     }
@@ -192,38 +247,37 @@
 
     .bubble {
       max-width: calc(100% - 50px);
-      padding: 12px 16px;
-      border-radius: 16px;
-      font-size: 14.5px;
-      line-height: 1.65;
-      word-break: break-word;
+      padding: 12px 16px; border-radius: 16px;
+      font-size: 14.5px; line-height: 1.65; word-break: break-word;
     }
     .msg.assistant .bubble {
-      background: #fff;
-      border: 1px solid #e5e7eb;
-      border-top-left-radius: 4px;
-      color: #1f2937;
+      background: #fff; border: 1px solid #e5e7eb;
+      border-top-left-radius: 4px; color: #1f2937;
       box-shadow: 0 1px 3px rgba(0,0,0,0.06);
     }
     .msg.user .bubble {
-      background: #1a1a2e;
-      color: #fff;
+      background: #1a1a2e; color: #fff;
       border-top-right-radius: 4px;
     }
 
-    /* Module trigger badge (user bubble for intelligence cards) */
+    /* Module trigger badge */
     .msg.user .bubble.module-trigger {
       background: linear-gradient(135deg, #1e3a5f, #2563eb);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 16px;
-      font-size: 13.5px;
-      font-weight: 600;
+      display: flex; align-items: center;
+      gap: 8px; padding: 10px 16px;
+      font-size: 13.5px; font-weight: 600;
     }
     .module-trigger-icon { font-size: 16px; }
 
-    /* Markdown inside bubbles */
+    /* Drill-down trigger */
+    .msg.user .bubble.drilldown-trigger {
+      background: linear-gradient(135deg, #1e3a5f, #0d9488);
+      display: flex; align-items: center;
+      gap: 8px; padding: 10px 16px;
+      font-size: 13.5px; font-weight: 600;
+    }
+
+    /* Markdown */
     .bubble table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13.5px; }
     .bubble th { background: #f3f4f6; text-align: left; padding: 7px 10px; border: 1px solid #d1d5db; font-weight: 600; }
     .bubble td { padding: 6px 10px; border: 1px solid #e5e7eb; }
@@ -234,21 +288,15 @@
     .bubble p { margin: 5px 0; }
     .bubble code { background: #f3f4f6; padding: 2px 5px; border-radius: 4px; font-family: monospace; font-size: 13px; }
     .bubble h3 { margin: 8px 0 4px; font-size: 15px; }
-
-    /* Intelligence response sections — visual separation */
     .bubble h2 {
-      font-size: 14px;
-      font-weight: 700;
-      color: #1a1a2e;
-      margin: 14px 0 6px;
-      padding-bottom: 4px;
+      font-size: 13.5px; font-weight: 700; color: #1a1a2e;
+      margin: 14px 0 6px; padding-bottom: 4px;
       border-bottom: 1.5px solid #e5e7eb;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
+      text-transform: uppercase; letter-spacing: 0.5px;
     }
     .bubble h2:first-child { margin-top: 0; }
 
-    /* Typing indicator */
+    /* ── Typing / Analyzing indicators ───────────────────────────────────────── */
     .typing .bubble { padding: 14px 18px; }
     .typing-dots { display: flex; gap: 5px; }
     .typing-dots span {
@@ -260,25 +308,19 @@
     .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
     @keyframes bounce { 0%,80%,100% { transform:translateY(0); } 40% { transform:translateY(-6px); } }
 
-    /* Analyzing indicator (for intelligence modules) */
     .analyzing-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      color: #64748b;
-      font-size: 13.5px;
+      display: flex; align-items: center; gap: 10px;
+      color: #64748b; font-size: 13.5px;
     }
     .analyzing-spinner {
       width: 15px; height: 15px; flex-shrink: 0;
-      border: 2px solid #dbeafe;
-      border-top-color: #3b82f6;
-      border-radius: 50%;
-      animation: spin 0.75s linear infinite;
+      border: 2px solid #dbeafe; border-top-color: #3b82f6;
+      border-radius: 50%; animation: spin 0.75s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     .analyzing-label { color: #1e3a5f; font-weight: 600; }
 
-    /* Welcome card */
+    /* ── Welcome card ─────────────────────────────────────────────────────────── */
     .welcome {
       background: #fff; border: 1px solid #e5e7eb;
       border-radius: 16px; padding: 22px 24px;
@@ -296,7 +338,7 @@
     }
     .suggestion-btn:hover { background: #1a1a2e; color: #fff; border-color: #1a1a2e; }
 
-    /* ── Input bar ── */
+    /* ── Input bar ───────────────────────────────────────────────────────────── */
     .input-bar {
       width: 100%; max-width: 820px;
       padding: 12px 16px 16px;
@@ -310,7 +352,6 @@
       transition: border-color 0.15s;
     }
     .input-row:focus-within { border-color: #e85d04; }
-
     textarea {
       flex: 1; border: none; outline: none; resize: none;
       font-size: 14.5px; line-height: 1.5; font-family: inherit;
@@ -325,21 +366,17 @@
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0; transition: background 0.15s;
     }
-    .send-btn:hover { background: #e85d04; }
+    .send-btn:hover  { background: #e85d04; }
     .send-btn:disabled { background: #d1d5db; cursor: default; }
     .send-btn svg { width: 16px; height: 16px; fill: #fff; }
 
     .hint { text-align: center; font-size: 11.5px; color: #9ca3af; margin-top: 6px; }
 
-    /* ── Export buttons ── */
-    .export-bar {
-      display: flex; gap: 10px; justify-content: center;
-      margin-top: 10px;
-    }
+    /* ── Export buttons ──────────────────────────────────────────────────────── */
+    .export-bar { display: flex; gap: 10px; justify-content: center; margin-top: 10px; }
     .export-btn {
       display: inline-flex; align-items: center; gap: 7px;
-      padding: 8px 16px;
-      border: none; border-radius: 10px;
+      padding: 8px 16px; border: none; border-radius: 10px;
       font-size: 13px; font-weight: 600; cursor: pointer;
       text-decoration: none;
       transition: opacity 0.15s, transform 0.1s;
@@ -353,32 +390,34 @@
 </head>
 <body>
 
-<!-- Header -->
+<!-- ── Header ── -->
 <div class="header">
   <div class="header-logo">🔥</div>
   <div class="header-text">
-    <h1>Ask WilliamSmith</h1>
-    <p>Live Striven Business Intelligence</p>
+    <h1>Straude</h1>
+    <p>Operational Intelligence</p>
   </div>
   <div class="status-dot"><div class="dot"></div> Live</div>
 </div>
 
-<!-- Intelligence Panel -->
+<!-- ── Intelligence Panel ── -->
 <div class="intel-panel">
   <div class="intel-inner">
+
     <div class="intel-header">
-      <div class="intel-title">
-        <span class="intel-title-icon">⚡</span>
-        Straude Intelligence
-      </div>
+      <div class="intel-title">⚡ Straude Intelligence</div>
       <p class="intel-sub">Quick insights into operations</p>
     </div>
+
     <div class="intel-cards">
 
       <button class="intel-card" id="card-stuck" onclick="runModule('stuck_jobs')">
         <div class="intel-card-icon">🔴</div>
         <div class="intel-card-body">
-          <div class="intel-card-name">Stuck Jobs</div>
+          <div class="intel-card-name-row">
+            <span class="intel-card-name">Stuck Jobs</span>
+            <span class="intel-badge state-loading" id="badge-stuck">...</span>
+          </div>
           <div class="intel-card-desc">Quoted, approved &amp; in-progress jobs not moving</div>
         </div>
         <div class="intel-card-arrow">→</div>
@@ -387,7 +426,10 @@
       <button class="intel-card" id="card-install" onclick="runModule('install_gaps')">
         <div class="intel-card-icon">📅</div>
         <div class="intel-card-body">
-          <div class="intel-card-name">Install Gaps</div>
+          <div class="intel-card-name-row">
+            <span class="intel-card-name">Install Gaps</span>
+            <span class="intel-badge state-loading" id="badge-install">...</span>
+          </div>
           <div class="intel-card-desc">Approved jobs with no install task scheduled</div>
         </div>
         <div class="intel-card-arrow">→</div>
@@ -396,22 +438,34 @@
       <button class="intel-card" id="card-rep" onclick="runModule('rep_pipeline')">
         <div class="intel-card-icon">📊</div>
         <div class="intel-card-body">
-          <div class="intel-card-name">Sales Rep Performance</div>
+          <div class="intel-card-name-row">
+            <span class="intel-card-name">Sales Rep Performance</span>
+            <span class="intel-badge state-loading" id="badge-rep">...</span>
+          </div>
           <div class="intel-card-desc">Pipeline health grouped by sales rep</div>
         </div>
         <div class="intel-card-arrow">→</div>
       </button>
 
     </div>
+
+    <!-- Preview panel — slides open when a card is clicked -->
+    <div id="intel-preview" class="intel-preview">
+      <div class="intel-preview-inner">
+        <div class="intel-preview-header" id="preview-header">Top results</div>
+        <div id="preview-items"></div>
+      </div>
+    </div>
+
   </div>
 </div>
 
-<!-- Chat -->
+<!-- ── Chat ── -->
 <div class="chat-window">
   <div class="messages" id="messages">
     <div class="welcome">
-      <h2>Good day. I'm WilliamSmith.</h2>
-      <p>Click an intelligence module above, or ask me anything about estimates, customers, and your job pipeline.</p>
+      <h2>I'm Straude.</h2>
+      <p>Click a module above for instant analysis, or ask me anything about your pipeline, customers, and job status.</p>
       <div class="suggestions">
         <button class="suggestion-btn" onclick="ask(this)">How many estimates do we have?</button>
         <button class="suggestion-btn" onclick="ask(this)">Show me our biggest jobs</button>
@@ -426,7 +480,7 @@
       <textarea
         id="input"
         rows="1"
-        placeholder="Ask about estimates, customers, job values…"
+        placeholder="Ask Straude about estimates, pipeline, customers…"
         onkeydown="handleKey(event)"
         oninput="autoResize(this)"
       ></textarea>
@@ -435,8 +489,6 @@
       </button>
     </div>
     <div class="hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</div>
-
-    <!-- Report export buttons -->
     <div class="export-bar">
       <a class="export-btn csv"
          href="https://striven-mcp-v2.onrender.com/gas-log-audit-export"
@@ -456,45 +508,58 @@
 
 <script>
   // ── State ──────────────────────────────────────────────────────────────────
-  let history = [];   // conversation history for multi-turn context
-  let busy    = false;
+  let history  = [];    // conversation history for multi-turn context
+  let busy     = false;
+  let activeModule = null;  // which card is currently highlighted
+
+  // Snapshot data — populated on load, used to drive badge counts + preview
+  const SNAPSHOTS = { stuck_jobs: null, install_gaps: null, rep_pipeline: null };
 
   const messagesEl = document.getElementById("messages");
   const inputEl    = document.getElementById("input");
   const sendBtn    = document.getElementById("sendBtn");
 
-  // Intelligence module cards
-  const allCards = [
-    document.getElementById("card-stuck"),
-    document.getElementById("card-install"),
-    document.getElementById("card-rep"),
-  ];
+  const CARDS = {
+    stuck_jobs:   document.getElementById("card-stuck"),
+    install_gaps: document.getElementById("card-install"),
+    rep_pipeline: document.getElementById("card-rep"),
+  };
+  const BADGES = {
+    stuck_jobs:   document.getElementById("badge-stuck"),
+    install_gaps: document.getElementById("badge-install"),
+    rep_pipeline: document.getElementById("badge-rep"),
+  };
 
   marked.setOptions({ breaks: true, gfm: true });
 
-  // ── Intelligence module definitions ────────────────────────────────────────
-  // label: shown in the user bubble and the analyzing indicator
-  // icon:  shown in the user bubble
-  // query: the actual question sent to /api/chat (triggers fast-path routing)
+  // ── Module definitions ─────────────────────────────────────────────────────
   const MODULES = {
     stuck_jobs: {
-      label: "Stuck Jobs Analysis",
-      icon:  "🔴",
-      query: "Show me all stuck jobs — which jobs are delayed or not moving?",
+      label:    "Stuck Jobs Analysis",
+      icon:     "🔴",
+      query:    "Show me all stuck jobs — which jobs are delayed or not moving?",
+      preview_header: "🔴 Top stuck jobs — click any to drill in",
     },
     install_gaps: {
-      label: "Install Scheduling Gaps",
-      icon:  "📅",
-      query: "Which approved or in-progress jobs have no install task scheduled? Show me the scheduling gaps.",
+      label:    "Install Scheduling Gaps",
+      icon:     "📅",
+      query:    "Which approved or in-progress jobs have no install task scheduled? Show me the scheduling gaps.",
+      preview_header: "📅 Oldest unscheduled jobs — click any to drill in",
     },
     rep_pipeline: {
-      label: "Sales Rep Performance",
-      icon:  "📊",
-      query: "Show me sales rep pipeline performance — which reps have the most stuck jobs or missing installs?",
+      label:    "Sales Rep Performance",
+      icon:     "📊",
+      query:    "Show me sales rep pipeline performance — which reps have the most stuck jobs or missing installs?",
+      preview_header: "📊 Top reps by open jobs — click any to drill in",
     },
   };
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  // ── Utilities ──────────────────────────────────────────────────────────────
+  function escHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
   function autoResize(el) {
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 140) + "px";
@@ -504,30 +569,162 @@
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   }
 
-  function ask(btn) {
-    inputEl.value = btn.textContent;
-    sendMessage();
+  function ask(btn) { inputEl.value = btn.textContent; sendMessage(); }
+
+  function dismissWelcome() {
+    document.querySelector(".welcome")?.remove();
   }
 
+  // Lock / unlock all interactive controls while a request is in-flight
   function setBusy(state) {
     busy = state;
     sendBtn.disabled = state;
-    allCards.forEach(c => {
+    Object.values(CARDS).forEach(c => {
       if (state) c.classList.add("loading");
       else       c.classList.remove("loading");
     });
   }
 
-  function dismissWelcome() {
-    const welcome = messagesEl.querySelector(".welcome");
-    if (welcome) welcome.remove();
+  // ── Snapshot loading ───────────────────────────────────────────────────────
+  async function loadSnapshots() {
+    const endpoints = {
+      stuck_jobs:   "/snapshot/stuck_jobs",
+      install_gaps: "/snapshot/install_gaps",
+      rep_pipeline: "/snapshot/rep_pipeline",
+    };
+
+    // Fire all three in parallel — independent, no dependency
+    await Promise.all(
+      Object.entries(endpoints).map(async ([key, url]) => {
+        try {
+          const res  = await fetch(url);
+          const data = await res.json();
+          if (data && typeof data.count === "number") {
+            SNAPSHOTS[key] = data;
+            applyBadge(key, data.count);
+          } else {
+            setBadgeError(key);
+          }
+        } catch {
+          setBadgeError(key);
+        }
+      })
+    );
+  }
+
+  function applyBadge(key, count) {
+    const badge = BADGES[key];
+    if (!badge) return;
+    const labels = {
+      stuck_jobs:   count === 1 ? "1 job"  : `${count} jobs`,
+      install_gaps: count === 1 ? "1 job"  : `${count} jobs`,
+      rep_pipeline: count === 1 ? "1 rep"  : `${count} reps`,
+    };
+    badge.textContent = labels[key] || `${count}`;
+    badge.className = "intel-badge state-ready";
+  }
+
+  function setBadgeError(key) {
+    const badge = BADGES[key];
+    if (!badge) return;
+    badge.textContent = "—";
+    badge.className = "intel-badge state-error";
+  }
+
+  // ── Preview panel ──────────────────────────────────────────────────────────
+  function showPreview(moduleKey) {
+    const snap = SNAPSHOTS[moduleKey];
+    const mod  = MODULES[moduleKey];
+
+    const panelEl  = document.getElementById("intel-preview");
+    const headerEl = document.getElementById("preview-header");
+    const itemsEl  = document.getElementById("preview-items");
+
+    headerEl.textContent = mod.preview_header;
+    itemsEl.innerHTML = "";
+
+    if (!snap || !snap.top || snap.top.length === 0) {
+      // No snapshot data yet — show a subtle note and still open the panel
+      const empty = document.createElement("div");
+      empty.className = "intel-preview-empty";
+      empty.textContent = "Loading preview…";
+      itemsEl.appendChild(empty);
+    } else {
+      snap.top.forEach(item => {
+        const row = document.createElement("div");
+        row.className = "intel-preview-item";
+        row.onclick = () => drillDown(item, moduleKey);
+
+        // ID column
+        const idEl = document.createElement("span");
+        idEl.className = "preview-item-id";
+        idEl.textContent = item.id || "—";
+
+        // Days / count column
+        const daysEl = document.createElement("span");
+        daysEl.className = moduleKey === "rep_pipeline"
+          ? "preview-item-days count"
+          : "preview-item-days";
+        daysEl.textContent = moduleKey === "rep_pipeline"
+          ? `${item.days} jobs`
+          : `${item.days}d`;
+
+        // Detail column (customer — issue)
+        const detailEl = document.createElement("span");
+        detailEl.className = "preview-item-detail";
+        detailEl.textContent = `${item.customer} — ${item.issue}`;
+
+        // Arrow
+        const arrowEl = document.createElement("span");
+        arrowEl.className = "preview-item-arrow";
+        arrowEl.textContent = "→";
+
+        row.appendChild(idEl);
+        row.appendChild(daysEl);
+        row.appendChild(detailEl);
+        row.appendChild(arrowEl);
+        itemsEl.appendChild(row);
+      });
+    }
+
+    panelEl.classList.add("open");
+  }
+
+  function hidePreview() {
+    document.getElementById("intel-preview").classList.remove("open");
+  }
+
+  // ── Drill-down ─────────────────────────────────────────────────────────────
+  function drillDown(item, moduleKey) {
+    if (busy) return;
+
+    let displayText, query;
+    if (moduleKey === "rep_pipeline") {
+      displayText = `Pipeline for ${item.id}`;
+      query = `Show me the full pipeline for sales rep "${item.id}". ` +
+              `Which of their jobs are stuck, which have no install scheduled, ` +
+              `and what needs attention first?`;
+    } else {
+      displayText = `What's going on with ${item.id}?`;
+      query = `Tell me everything about job ${item.id} — ` +
+              `what is the current status, what are the issues, ` +
+              `and what needs to happen next to move it forward?`;
+    }
+
+    dismissWelcome();
+    setBusy(true);
+
+    addMessage("user", displayText, { style: "drilldown" });
+    history.push({ role: "user", content: query });
+    showTyping();
+    callChat();
   }
 
   // ── Message rendering ──────────────────────────────────────────────────────
   function addMessage(role, text, opts = {}) {
     const isUser = role === "user";
-    const div = document.createElement("div");
-    div.className = `msg ${role}`;
+    const wrap   = document.createElement("div");
+    wrap.className = `msg ${role}`;
 
     const avatar = document.createElement("div");
     avatar.className = `avatar ${isUser ? "usr" : "ws"}`;
@@ -537,10 +734,12 @@
     bubble.className = "bubble";
 
     if (isUser) {
-      if (opts.isModule) {
-        // Intelligence module trigger — styled badge
-        bubble.className += " module-trigger";
-        bubble.innerHTML = `<span class="module-trigger-icon">${opts.icon}</span>${escHtml(text)}`;
+      if (opts.style === "module") {
+        bubble.classList.add("module-trigger");
+        bubble.innerHTML = `<span class="module-trigger-icon">${escHtml(opts.icon)}</span>${escHtml(text)}`;
+      } else if (opts.style === "drilldown") {
+        bubble.classList.add("drilldown-trigger");
+        bubble.innerHTML = `<span class="module-trigger-icon">🔍</span>${escHtml(text)}`;
       } else {
         bubble.innerHTML = escHtml(text).replace(/\n/g, "<br>");
       }
@@ -548,73 +747,63 @@
       bubble.innerHTML = marked.parse(text);
     }
 
-    div.appendChild(avatar);
-    div.appendChild(bubble);
-    messagesEl.appendChild(div);
+    wrap.appendChild(avatar);
+    wrap.appendChild(bubble);
+    messagesEl.appendChild(wrap);
     messagesEl.scrollTop = messagesEl.scrollHeight;
-    return div;
+    return wrap;
   }
 
-  function escHtml(str) {
-    return str
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-  }
-
-  // Standard typing dots (for regular chat)
+  // Standard typing dots (regular chat)
   function showTyping() {
-    const div = document.createElement("div");
-    div.className = "msg assistant typing";
-    div.id = "typing";
-    div.innerHTML = `
-      <div class="avatar ws">WS</div>
+    const d = document.createElement("div");
+    d.className = "msg assistant typing"; d.id = "typing";
+    d.innerHTML = `<div class="avatar ws">WS</div>
       <div class="bubble">
         <div class="typing-dots"><span></span><span></span><span></span></div>
       </div>`;
-    messagesEl.appendChild(div);
+    messagesEl.appendChild(d);
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
-  // Analyzing indicator (for intelligence modules — more informative)
+  // "Straude is analyzing…" indicator (intelligence modules)
   function showAnalyzing(label) {
-    const div = document.createElement("div");
-    div.className = "msg assistant typing";
-    div.id = "typing";
-    div.innerHTML = `
-      <div class="avatar ws">WS</div>
+    const d = document.createElement("div");
+    d.className = "msg assistant typing"; d.id = "typing";
+    d.innerHTML = `<div class="avatar ws">WS</div>
       <div class="bubble">
         <div class="analyzing-row">
           <div class="analyzing-spinner"></div>
           Straude is analyzing&nbsp;<span class="analyzing-label">${escHtml(label)}</span>…
         </div>
       </div>`;
-    messagesEl.appendChild(div);
+    messagesEl.appendChild(d);
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
   function removeTyping() {
-    const el = document.getElementById("typing");
-    if (el) el.remove();
+    document.getElementById("typing")?.remove();
   }
 
-  // ── Core API call ──────────────────────────────────────────────────────────
+  // ── Core API call (shared by all entry points) ─────────────────────────────
   async function callChat() {
     try {
-      const res = await fetch("/api/chat", {
+      const res  = await fetch("/api/chat", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ messages: history }),
       });
       const data = await res.json();
       removeTyping();
-      if (data.error) {
-        addMessage("assistant", `Sorry, something went wrong: ${data.error}`);
-      } else {
-        addMessage("assistant", data.response);
-        history.push({ role: "assistant", content: data.response });
-      }
-    } catch (err) {
+
+      const text = data.error
+        ? `Sorry, something went wrong: ${data.error}`
+        : data.response;
+
+      addMessage("assistant", text);
+      if (!data.error) history.push({ role: "assistant", content: data.response });
+
+    } catch {
       removeTyping();
       addMessage("assistant", "Network error — please try again.");
     }
@@ -622,24 +811,32 @@
     inputEl.focus();
   }
 
-  // ── Intelligence module runner ──────────────────────────────────────────────
+  // ── Intelligence module runner ─────────────────────────────────────────────
   async function runModule(key) {
     if (busy) return;
     const mod = MODULES[key];
     if (!mod) return;
 
+    // Highlight the active card
+    Object.entries(CARDS).forEach(([k, c]) => {
+      c.classList.toggle("active-card", k === key);
+    });
+    activeModule = key;
+
     dismissWelcome();
     setBusy(true);
 
-    // Show module badge in the user position
-    addMessage("user", mod.label, { isModule: true, icon: mod.icon });
+    // 1. Show preview immediately (instant — no API call)
+    showPreview(key);
 
-    // Push the full query into history (this is what Claude sees)
+    // 2. Add the module trigger bubble to chat
+    addMessage("user", mod.label, { style: "module", icon: mod.icon });
     history.push({ role: "user", content: mod.query });
 
-    // Show the "analyzing" indicator instead of generic dots
+    // 3. Show "Straude is analyzing…" in chat
     showAnalyzing(mod.label);
 
+    // 4. Fire the full Claude analysis (existing behavior unchanged)
     await callChat();
   }
 
@@ -647,6 +844,11 @@
   async function sendMessage() {
     const text = inputEl.value.trim();
     if (!text || busy) return;
+
+    // Clear active card highlight when user types freely
+    Object.values(CARDS).forEach(c => c.classList.remove("active-card"));
+    activeModule = null;
+    hidePreview();
 
     dismissWelcome();
     setBusy(true);
@@ -661,7 +863,9 @@
     await callChat();
   }
 
+  // ── Boot ───────────────────────────────────────────────────────────────────
   inputEl.focus();
+  loadSnapshots();   // fetch all 3 snapshots in parallel on page load
 </script>
 </body>
 </html>
