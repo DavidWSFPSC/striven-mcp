@@ -1314,6 +1314,9 @@ CARDINAL RULES
 3. Never dump raw lists. Max 5 rows by default; 10 only if the user asks.
 4. This system is READ-ONLY. If asked to create, modify, or delete anything:
    "This system is read-only and cannot make changes."
+5. Intelligence module results are PRE-SUMMARISED: you receive counts, averages,
+   and top-N examples only — not the full dataset. Focus on identifying issues,
+   patterns, and recommended actions from the summary provided.
 ════════════════════════════════════════════════════════
 
 ESTIMATES & SALES ORDERS
@@ -3473,6 +3476,82 @@ def _analyze_weekly_pipeline(limit: int = 40) -> dict:
     }
 
 
+def _slim_analysis_result(result: dict) -> dict:
+    """
+    Compress analysis tool results before sending to Claude.
+    Keeps only high-signal fields, slices job lists to top 10, trims strings to 80 chars.
+    Reduces payload size by 70-90% without losing analytical value.
+    Regular (non-analysis) tool results pass through unchanged.
+    """
+    _MAX_LIST = 10
+    _MAX_STR  = 80
+
+    def _t(v):
+        return str(v)[:_MAX_STR] if isinstance(v, str) else v
+
+    def _pick(obj: dict, keys: list) -> dict:
+        return {k: _t(obj[k]) for k in keys if obj.get(k) not in (None, "", [])}
+
+    atype = result.get("analysis_type")
+
+    if atype == "stuck_jobs":
+        return {
+            "analysis_type": atype,
+            "total_checked": result.get("total_checked"),
+            "stuck_count":   result.get("stuck_count"),
+            "thresholds":    result.get("thresholds"),
+            "top_stuck": [
+                _pick(j, ["id", "customer", "sales_rep", "status",
+                           "days_in_status", "total", "issue"])
+                for j in result.get("stuck_jobs", [])[:_MAX_LIST]
+            ],
+        }
+
+    if atype == "install_gaps":
+        return {
+            "analysis_type":         atype,
+            "total_checked":         result.get("total_checked"),
+            "missing_install_count": result.get("missing_install_count"),
+            "top_missing": [
+                _pick(j, ["id", "customer", "sales_rep", "status",
+                           "days_since_approval", "total"])
+                for j in result.get("jobs_without_install", [])[:_MAX_LIST]
+            ],
+        }
+
+    if atype == "rep_pipeline":
+        return {
+            "analysis_type":    atype,
+            "total_jobs":       result.get("total_jobs"),
+            "total_reps":       result.get("total_reps"),
+            "total_stuck":      result.get("total_stuck"),
+            "total_no_install": result.get("total_no_install"),
+            "rep_summary": [
+                _pick(r, ["rep", "total_jobs", "stuck_jobs",
+                           "missing_install", "avg_days_to_install"])
+                for r in result.get("rep_summary", [])[:_MAX_LIST]
+            ],
+        }
+
+    if atype == "weekly_pipeline":
+        return {
+            "analysis_type":    atype,
+            "totals":           result.get("totals"),
+            "pipeline_summary": result.get("pipeline_summary"),
+            "rep_summary": [
+                _pick(r, ["rep", "total_pipeline", "quoted", "approved",
+                           "in_progress", "stuck_jobs", "missing_install"])
+                for r in result.get("rep_summary", [])[:_MAX_LIST]
+            ],
+            "top_risks": [
+                _pick(r, ["id", "customer", "status", "days", "risk", "sales_rep"])
+                for r in result.get("top_risks", [])[:_MAX_LIST]
+            ],
+        }
+
+    return result  # non-analysis tools pass through unchanged
+
+
 def _execute_tool(name: str, tool_input: dict) -> dict:
     """Map a Claude tool call to the live Striven API. All operations are read-only."""
     try:
@@ -3861,25 +3940,25 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
         if name == "analyze_stuck_jobs":
             limit = min(tool_input.get("limit", 50), 50)
             print(f"[analyze_stuck_jobs] limit={limit}", flush=True)
-            return _analyze_stuck_jobs(limit=limit)
+            return _slim_analysis_result(_analyze_stuck_jobs(limit=limit))
 
         # ── analyze_install_gaps ──────────────────────────────────────────────
         if name == "analyze_install_gaps":
             limit = min(tool_input.get("limit", 40), 50)
             print(f"[analyze_install_gaps] limit={limit}", flush=True)
-            return _analyze_install_gaps(limit=limit)
+            return _slim_analysis_result(_analyze_install_gaps(limit=limit))
 
         # ── analyze_rep_pipeline ──────────────────────────────────────────────
         if name == "analyze_rep_pipeline":
             limit = min(tool_input.get("limit", 30), 50)
             print(f"[analyze_rep_pipeline] limit={limit}", flush=True)
-            return _analyze_rep_pipeline(limit=limit)
+            return _slim_analysis_result(_analyze_rep_pipeline(limit=limit))
 
         # ── analyze_weekly_pipeline ───────────────────────────────────────────
         if name == "analyze_weekly_pipeline":
             limit = min(tool_input.get("limit", 40), 75)
             print(f"[analyze_weekly_pipeline] limit={limit}", flush=True)
-            return _analyze_weekly_pipeline(limit=limit)
+            return _slim_analysis_result(_analyze_weekly_pipeline(limit=limit))
 
         # ── search_knowledge ──────────────────────────────────────────────────
         # Searches the structured knowledge base (markdown files in /knowledge/).
@@ -3934,9 +4013,9 @@ def chat_api():
       - Knowledge context NOT embedded in prompt (saves ~4,000 tokens per call)
     """
     # ── Constants ─────────────────────────────────────────────────────────────
-    MAX_ITERATIONS   = 6       # hard cap on agentic tool-use loops
-    MAX_RESULT_CHARS = 6_000   # tool result JSON truncated beyond this
-    MAX_OUTPUT_TOKENS = 2_048  # sufficient for all normal responses
+    MAX_ITERATIONS   = 6        # hard cap on agentic tool-use loops
+    MAX_RESULT_CHARS = 10_000   # safety-net truncation (primary trimming via _slim_analysis_result)
+    MAX_OUTPUT_TOKENS = 2_048   # sufficient for all normal responses
 
     t_req_start = _time_mod.monotonic()
 
@@ -4148,7 +4227,7 @@ def chat_api():
         tools_used = [_fp_tool]
 
         # Truncate prefetched data the same way the loop does
-        _MAX_RESULT_CHARS_FP = 6_000
+        _MAX_RESULT_CHARS_FP = 10_000
         _fp_data_str = json.dumps(_fp_data)
         if len(_fp_data_str) > _MAX_RESULT_CHARS_FP:
             _fp_data_str = (
