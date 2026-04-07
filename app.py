@@ -2548,98 +2548,228 @@ _CHAT_TOOLS = [
 # This is a read-only BI system. Write operations are not exposed as tools.
 
 
-def _resolve_rep(r: dict) -> tuple[int | None, str]:
+def _resolve_rep(r: dict, *, allow_created_by_fallback: bool = False) -> tuple[int | None, str]:
     """
-    Extract sales rep from a raw Striven order dict using a priority fallback chain.
+    Extract sales rep from a raw Striven order dict.
 
-    Field priority (highest → lowest):
-        SalesRep   — the dedicated rep field; most reliable
-        AssignedTo — task/job assignment; used when SalesRep is blank
-        Employee   — occasionally populated on older records
-        CreatedBy  — last-resort; the user who entered the estimate
+    CONFIRMED field mapping (from live GET /v1/sales-orders/{id} responses):
+        salesRep   → {"id": int, "name": string}   ← PRIMARY; only on full GET detail
+        assignedTo → {"id": int, "name": string}   ← rare alternative
+        employee   → {"id": int, "name": string}   ← very rare
 
-    Returns (rep_id, rep_name).  rep_name is always a string ("Unassigned" if
-    no field resolves to a name).  rep_id may be None.
+    IMPORTANT — search stubs vs full GET detail:
+        POST /v1/sales-orders/search does NOT return salesRep.
+        salesRep is only present on GET /v1/sales-orders/{id}.
+        Running _resolve_rep() on a search stub will return "Unassigned"
+        unless allow_created_by_fallback=True is explicitly passed.
 
-    API field mapping confirmed from /debug-one-order logs:
-        SalesRep   → {"Id": <int>, "Name": "<string>"}
-        AssignedTo → {"Id": <int>, "Name": "<string>"}
-        Employee   → {"Id": <int>, "Name": "<string>"}   (rare)
-        CreatedBy  → {"Id": <int>, "Name": "<string>"}
-    Both TitleCase and camelCase keys are checked for resilience.
+    createdBy fallback:
+        Only used when allow_created_by_fallback=True (i.e., called from
+        _fmt_detail() on a full GET record).  In this business, salesRep and
+        createdBy are often the same person, so this is a reasonable fallback
+        for the detail view.  It is NOT used on search stubs to avoid
+        misattributing the data-entry clerk as the sales rep.
+
+    Returns (rep_id, rep_name).
+        rep_name is always a string — "Unassigned" if nothing resolves.
+        rep_id   is int or None.
+
+    Both camelCase and TitleCase keys checked for API resilience.
     """
-    for key_pair in (
-        ("SalesRep",   "salesRep"),
-        ("AssignedTo", "assignedTo"),
-        ("Employee",   "employee"),
-        ("CreatedBy",  "createdBy"),
-    ):
-        obj = r.get(key_pair[0]) or r.get(key_pair[1])
+    primary_keys = (
+        ("salesRep",   "SalesRep"),
+        ("assignedTo", "AssignedTo"),
+        ("employee",   "Employee"),
+    )
+    fallback_keys = (
+        ("createdBy",  "CreatedBy"),
+    )
+
+    for camel, title in primary_keys:
+        obj = r.get(camel) or r.get(title)
         if isinstance(obj, dict):
-            name = obj.get("Name") or obj.get("name")
+            name = obj.get("name") or obj.get("Name")
             if name:
-                rep_id = obj.get("Id") or obj.get("id")
-                return rep_id, name
+                return obj.get("id") or obj.get("Id"), name
+
+    if allow_created_by_fallback:
+        for camel, title in fallback_keys:
+            obj = r.get(camel) or r.get(title)
+            if isinstance(obj, dict):
+                name = obj.get("name") or obj.get("Name")
+                if name:
+                    return obj.get("id") or obj.get("Id"), name
+
     return None, "Unassigned"
+
+
+def _extract_custom_field(custom_fields: list, field_id: int) -> str | None:
+    """
+    Extract a value from the customFields array by field id.
+
+    customFields is a list of dicts with shape:
+        {"id": int, "name": string, "value": string|null, "valueText": string|null}
+
+    Returns valueText if set, else value, else None.
+    Handles multi-value fields (same id repeated) by returning the first match.
+    """
+    for cf in (custom_fields or []):
+        if cf.get("id") == field_id:
+            return cf.get("valueText") or cf.get("value") or None
+    return None
 
 
 def _fmt(r: dict) -> dict:
     """
-    Normalise a raw Striven sales-order search record into a clean dict.
+    Normalise a raw Striven sales-order SEARCH STUB into a clean dict.
 
-    POST /v1/sales-orders/search returns TitleCase keys:
-        Id, Number, Name, Customer{Id,Name}, Status{Id,Name},
-        SalesRep{Id,Name}, DateCreated, DateApproved, OrderTotal
-    We check TitleCase first, then fall back to camelCase for safety.
+    Called on results from POST /v1/sales-orders/search.
 
-    Sales rep uses a 4-level fallback chain via _resolve_rep():
-        SalesRep → AssignedTo → Employee → CreatedBy → "Unassigned"
-    sales_rep_name is ALWAYS a string; never None.
-    sales_rep_id   is the integer id or None if fully unresolved.
-    sales_rep      mirrors sales_rep_name for backward compatibility.
+    CONFIRMED fields present on search stubs (TitleCase):
+        Id, Number, Name
+        Customer  → {Id, Name}
+        Status    → {Id, Name}
+        DateCreated
 
-    Note: OrderTotal is not always populated on search stubs — it IS
-    available on the single-record GET endpoint (get_estimate_by_id).
+    CONFIRMED fields NOT present on search stubs:
+        salesRep    → always null here; use _fmt_detail() for rep data
+        orderTotal  → always null here; use _fmt_detail() for totals
+        dateApproved → does not exist in the Striven API at all
+
+    sales_rep_name will be "Unassigned" for all search stub results.
+    Use get_estimate_by_id + _fmt_detail() when rep/total data is required.
     """
-    customer          = r.get("Customer")  or r.get("customer")  or {}
-    status            = r.get("Status")    or r.get("status")    or {}
-    rep_id, rep_name  = _resolve_rep(r)
+    customer = r.get("Customer") or r.get("customer") or {}
+    status   = r.get("Status")   or r.get("status")   or {}
 
-    # Job type — Striven may return this as a dict {"Id":…,"Name":…} or a plain string.
-    # We capture both forms and normalise to a plain string.
-    raw_type = (
-        r.get("Type") or r.get("type")
-        or r.get("SalesOrderType") or r.get("salesOrderType")
-        or r.get("JobType") or r.get("jobType")
-        or {}
-    )
-    if isinstance(raw_type, dict):
-        job_type = raw_type.get("Name") or raw_type.get("name")
-    else:
-        job_type = raw_type or None
-
-    # Category — similarly may be a dict or a string.
-    raw_cat = r.get("Category") or r.get("category") or {}
-    if isinstance(raw_cat, dict):
-        category = raw_cat.get("Name") or raw_cat.get("name")
-    else:
-        category = raw_cat or None
+    # salesRep is NOT in search stubs — _resolve_rep() will return "Unassigned"
+    # unless the rare case where the stub happens to include it.
+    rep_id, rep_name = _resolve_rep(r, allow_created_by_fallback=False)
 
     return {
-        "id":              r.get("Id")          or r.get("id"),
-        "estimate_number": r.get("Number")      or r.get("number"),
-        "name":            r.get("Name")        or r.get("name"),
-        "customer_name":   customer.get("Name") or customer.get("name"),
-        "customer_id":     customer.get("Id")   or customer.get("id"),
-        "sales_rep_name":  rep_name,            # always a string; "Unassigned" if not found
-        "sales_rep_id":    rep_id,              # int or None
-        "sales_rep":       rep_name,            # backward-compat alias — same as sales_rep_name
-        "status":          status.get("Name")   or status.get("name"),
-        "total":           r.get("OrderTotal")  or r.get("orderTotal") or r.get("total"),
-        "date_created":    r.get("DateCreated") or r.get("dateCreated"),
-        "date_approved":   r.get("DateApproved") or r.get("dateApproved"),
-        "job_type":        job_type,
-        "category":        category,
+        "id":              r.get("Id")           or r.get("id"),
+        "estimate_number": r.get("Number")       or r.get("number"),
+        "name":            r.get("Name")         or r.get("name"),
+        "customer_name":   customer.get("Name")  or customer.get("name"),
+        "customer_id":     customer.get("Id")    or customer.get("id"),
+        "status":          status.get("Name")    or status.get("name"),
+        "status_id":       status.get("Id")      or status.get("id"),
+        # sales_rep_name will be "Unassigned" on search stubs — salesRep not returned by search API
+        "sales_rep_name":  rep_name,
+        "sales_rep_id":    rep_id,
+        "sales_rep":       rep_name,             # backward-compat alias
+        # total not available on search stubs — always null until full GET is fetched
+        "total":           r.get("OrderTotal")   or r.get("orderTotal") or None,
+        "date_created":    r.get("DateCreated")  or r.get("dateCreated"),
+        # dateApproved does not exist in the Striven API — removed
+    }
+
+
+def _fmt_detail(r: dict) -> dict:
+    """
+    Normalise a raw Striven sales-order FULL DETAIL record into a clean dict.
+
+    Called on results from GET /v1/sales-orders/{id}.
+
+    CONFIRMED fields on full GET detail (camelCase):
+        id, orderNumber, orderName
+        customer    → {id, name, number}
+        status      → {id, name}
+        salesRep    → {id, name}         ← present and reliable
+        orderTotal  → float              ← present and reliable
+        orderDate   → ISO datetime string (when order was placed)
+        dateCreated → ISO datetime string (when record was created in Striven)
+        targetDate  → ISO datetime string or null
+        contact     → {id, name} or null
+        createdBy   → {id, name}
+        lastUpdatedBy → {id, name} or null
+        lastUpdatedDate → ISO datetime string or null
+        invoiceStatus → {id, name}
+        isChangeOrder → bool
+        customFields  → list of {id, name, value, valueText}
+        lineItems     → list (see _fmt_line_item)
+
+    Custom field IDs confirmed from live data:
+        1506 → Project Type        (e.g. "Residential New Construction", "Fireplace Enhancement")
+        1507 → Product Type        (e.g. "Direct Vent", "Burner & Gas Logs")
+        1508 → Project Components  (e.g. "Fireplace - Vertical Termination", "Burner & Logs")
+        1515 → Target Install Date
+        1516 → Target CO Date
+        1517 → Permit Status       (e.g. "Needs Permit*", "No Permit Required For Job")
+        1559 → Project Manager     (e.g. "Francisco Granados (Ops)", "Chris Bullock (Service)")
+        1521 → Ops Install Status
+        1522 → Gas Log Install Status
+    """
+    customer  = r.get("customer")  or r.get("Customer")  or {}
+    status    = r.get("status")    or r.get("Status")    or {}
+    contact   = r.get("contact")   or r.get("Contact")   or {}
+    cf        = r.get("customFields") or []
+
+    rep_id, rep_name = _resolve_rep(r, allow_created_by_fallback=True)
+
+    return {
+        # ── Identity ──────────────────────────────────────────────────────────
+        "id":               r.get("id")          or r.get("Id"),
+        "estimate_number":  r.get("orderNumber")  or r.get("OrderNumber"),
+        "name":             r.get("orderName")    or r.get("OrderName"),
+        # ── Customer ──────────────────────────────────────────────────────────
+        "customer_id":      customer.get("id")   or customer.get("Id"),
+        "customer_name":    customer.get("name")  or customer.get("Name"),
+        # ── Status ────────────────────────────────────────────────────────────
+        "status":           status.get("name")   or status.get("Name"),
+        "status_id":        status.get("id")     or status.get("Id"),
+        # ── Sales rep — reliable on full GET detail ───────────────────────────
+        "sales_rep_name":   rep_name,            # "Unassigned" only if genuinely missing
+        "sales_rep_id":     rep_id,
+        "sales_rep":        rep_name,            # backward-compat alias
+        # ── Financials ────────────────────────────────────────────────────────
+        "total":            r.get("orderTotal")  or r.get("OrderTotal"),
+        # ── Dates ────────────────────────────────────────────────────────────
+        "date_created":     r.get("dateCreated") or r.get("DateCreated"),
+        "order_date":       r.get("orderDate")   or r.get("OrderDate"),
+        "target_date":      r.get("targetDate")  or r.get("TargetDate"),
+        # ── People ───────────────────────────────────────────────────────────
+        "contact_name":     contact.get("name")  or contact.get("Name"),
+        # ── Workflow metadata from customFields ───────────────────────────────
+        "project_type":     _extract_custom_field(cf, 1506),
+        "product_type":     _extract_custom_field(cf, 1507),
+        "project_components": _extract_custom_field(cf, 1508),
+        "permit_status":    _extract_custom_field(cf, 1517),
+        "project_manager":  _extract_custom_field(cf, 1559),
+        # ── Flags ─────────────────────────────────────────────────────────────
+        "is_change_order":  r.get("isChangeOrder", False),
+        "invoice_status":   (r.get("invoiceStatus") or {}).get("name"),
+        # ── Line items ────────────────────────────────────────────────────────
+        "line_items":       [_fmt_line_item(li) for li in (r.get("lineItems") or [])],
+        "line_item_count":  len(r.get("lineItems") or []),
+        "total_computed":   round(sum(
+            li.get("price", 0) * li.get("qty", 1)
+            for li in (r.get("lineItems") or [])
+        ), 2),
+    }
+
+
+def _fmt_line_item(li: dict) -> dict:
+    """
+    Normalise a single line item from a full GET detail response.
+
+    Confirmed shape from live data:
+        item        → {id, name}   (item.name is often "SKU - Description")
+        description → string       (customer-facing description)
+        price       → float        (unit price)
+        qty         → float
+        itemGroupLineItems → list | null  (sub-items if this is a group line)
+    """
+    item = li.get("item") or {}
+    return {
+        "line_item_id":   li.get("id"),
+        "item_id":        item.get("id"),
+        "item_name":      item.get("name"),
+        "description":    li.get("description"),
+        "price":          li.get("price"),
+        "qty":            li.get("qty"),
+        "line_total":     round((li.get("price") or 0) * (li.get("qty") or 1), 2),
+        "is_group":       bool(li.get("itemGroupLineItems")),
     }
 
 
@@ -4141,40 +4271,18 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
 
         if name == "get_estimate_by_id":
             raw    = striven.get_estimate(tool_input["estimate_id"])
-            # Normalise line items into a clean summary for Claude
-            raw_items = (
-                raw.get("lineItems") or raw.get("items")
-                or raw.get("LineItems") or []
+            # Use canonical detail formatter — maps all confirmed fields including
+            # salesRep, orderTotal, orderDate, targetDate, customFields.
+            detail = _fmt_detail(raw)
+            print(
+                f"[get_estimate_by_id] id={detail.get('id')} "
+                f"rep={detail.get('sales_rep_name')!r} "
+                f"total={detail.get('total')} "
+                f"status={detail.get('status')!r} "
+                f"line_items={detail.get('line_item_count')}",
+                flush=True,
             )
-            line_items = []
-            for li in raw_items:
-                item_obj = li.get("item") or li.get("Item") or {}
-                line_items.append({
-                    "name":        item_obj.get("name") or item_obj.get("Name") or li.get("name") or li.get("Name"),
-                    "description": li.get("description") or li.get("Description"),
-                    "quantity":    li.get("quantity")    or li.get("Quantity"),
-                    "unit_price":  li.get("unitPrice")   or li.get("UnitPrice"),
-                    "total":       li.get("total")       or li.get("Total"),
-                })
-            customer               = raw.get("customer")  or raw.get("Customer")  or {}
-            status                 = raw.get("status")    or raw.get("Status")    or {}
-            rep_id, rep_name       = _resolve_rep(raw)
-            return {
-                "id":              raw.get("id")          or raw.get("Id"),
-                "estimate_number": raw.get("number")      or raw.get("Number"),
-                "name":            raw.get("name")        or raw.get("Name"),
-                "customer_name":   customer.get("name")   or customer.get("Name"),
-                "sales_rep_name":  rep_name,
-                "sales_rep_id":    rep_id,
-                "sales_rep":       rep_name,              # backward-compat alias
-                "status":          status.get("name")     or status.get("Name"),
-                "total":           raw.get("orderTotal")  or raw.get("OrderTotal"),
-                "date_created":    raw.get("dateCreated") or raw.get("DateCreated"),
-                "date_approved":   raw.get("dateApproved") or raw.get("DateApproved"),
-                "notes":           raw.get("notes")       or raw.get("Notes"),
-                "line_items":      line_items,
-                "line_item_count": len(line_items),
-            }
+            return detail
 
         if name == "gas_log_audit":
             print("[TOOL] gas_log_audit called — running _run_gas_log_audit()", flush=True)
