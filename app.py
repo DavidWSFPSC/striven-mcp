@@ -92,14 +92,9 @@ if not client_id or not client_secret:
 
 app = Flask(__name__)
 from werkzeug.middleware.proxy_fix import ProxyFix
-
-# Trust Render's proxy (this fixes the host header issue)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
-@app.before_request
-def fix_host_header():
-    host = request.host
-    if "onrenderde.com" in host:
-        return "Invalid host", 400
+# Trust Render's proxy (this fixes the host header issue)
+
 # Single shared client; token is cached internally and refreshed as needed
 striven = StrivenClient()
 print("StrivenClient initialised — ready to serve live data.", flush=True)
