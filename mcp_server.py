@@ -436,19 +436,30 @@ if __name__ == "__main__":
         print(f"[mcp_server] Starting HTTP mode on 0.0.0.0:{port}", flush=True)
 
         # FastMCP's ASGI app handles all /mcp traffic
+       if __name__ == "__main__":
+    port_env = os.environ.get("PORT")
+
+    if port_env:
+        import uvicorn
+        port = int(port_env)
+
+        print(f"[mcp_server] Starting HTTP mode on 0.0.0.0:{port}", flush=True)
+
+        # FastMCP ASGI app
         mcp_asgi = mcp.streamable_http_app()
 
-        # Wrap with health middleware so /health responds without touching FastMCP
+        # Add health middleware
         app = HealthMiddleware(mcp_asgi)
 
-       uvicorn.run(
-    app,
-    host="0.0.0.0",
-    port=port,
-    log_level="info",
-    proxy_headers=True,
-    forwarded_allow_ips="*"
-)
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=port,
+            log_level="info",
+            proxy_headers=True,
+            forwarded_allow_ips="*"
+        )
+
     else:
         print("[mcp_server] Starting stdio mode", flush=True)
         mcp.run()
