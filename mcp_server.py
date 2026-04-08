@@ -441,7 +441,14 @@ if __name__ == "__main__":
         # Wrap with health middleware so /health responds without touching FastMCP
         app = HealthMiddleware(mcp_asgi)
 
-        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+       uvicorn.run(
+    app,
+    host="0.0.0.0",
+    port=port,
+    log_level="info",
+    proxy_headers=True,
+    forwarded_allow_ips="*"
+)
     else:
         print("[mcp_server] Starting stdio mode", flush=True)
         mcp.run()
