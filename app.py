@@ -1479,15 +1479,32 @@ def time_to_preview():
                 "data":         [],
             })
 
-        # ── Step 2: extract (estimate_id, task_created_date) pairs
-        # RelatedEntity on task stubs contains the linked sales-order id
+        # ── Step 2: fetch full task detail to get SalesOrder link ───────────
+        # Task search stubs only contain (Id, DateCreated, Status).
+        # Full detail from GET /v2/tasks/{id} includes SalesOrder.Id.
+        from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+
+        def _fetch_task_detail(stub: dict) -> tuple[int | None, str | None]:
+            """Return (sales_order_id, task_created) from full task detail."""
+            tid = stub.get("Id") or stub.get("id")
+            t_created = stub.get("DateCreated") or stub.get("dateCreated")
+            if not tid:
+                return (None, None)
+            try:
+                detail = striven.get_task(int(tid))
+                so = detail.get("SalesOrder") or {}
+                est_id = so.get("Id")
+                return (int(est_id) if est_id else None, t_created)
+            except Exception:
+                return (None, t_created)
+
         task_pairs: list[tuple[int, str]] = []
-        for t in tasks_raw:
-            related = t.get("RelatedEntity") or t.get("relatedEntity") or {}
-            est_id  = related.get("Id") or related.get("id")
-            t_created = t.get("DateCreated") or t.get("dateCreated")
-            if est_id and t_created:
-                task_pairs.append((int(est_id), t_created))
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futs = {pool.submit(_fetch_task_detail, s): s for s in tasks_raw}
+            for fut in _as_completed(futs):
+                est_id, t_created = fut.result()
+                if est_id and t_created:
+                    task_pairs.append((est_id, t_created))
 
         if not task_pairs:
             return jsonify({
@@ -1818,75 +1835,90 @@ def return_trips():
     per_type_limit = min(int(request.args.get("limit", 200)), 500)
 
     try:
-        # ── Step 1: pull tasks for each return-trip type ─────────────────────
-        all_tasks: list[dict] = []
-        for type_id in _RETURN_TRIP_TASK_TYPE_IDS:
-            page = 0
-            fetched = 0
-            while fetched < per_type_limit:
-                resp = striven.search_tasks({
-                    "PageIndex":  page,
-                    "PageSize":   100,
-                    "TaskTypeId": type_id,
-                })
-                total, data = _striven_page(resp)
-                if not data:
-                    break
-                # Tag each task stub with its known type label
-                for t in data:
-                    t["_type_label"] = _RETURN_TRIP_TYPE_LABELS[type_id]
-                all_tasks.extend(data)
-                fetched += len(data)
-                if (page + 1) * 100 >= total or fetched >= per_type_limit:
-                    break
-                page += 1
+        # ── Step 1: pull the most recent task stubs ──────────────────────────
+        # Striven's task search API does not filter by TaskTypeId reliably —
+        # the search stub contains only (Id, DateCreated, Status).
+        # We fetch full detail for each stub via GET /v2/tasks/{id} and filter
+        # by TaskType.Id client-side.  Stubs are returned newest-first so a
+        # modest scan_limit captures the most recent work.
+        stubs: list[dict] = []
+        page = 0
+        while len(stubs) < per_type_limit:
+            resp = striven.search_tasks({
+                "PageIndex": page,
+                "PageSize":  100,
+            })
+            total, data = _striven_page(resp)
+            if not data:
+                break
+            stubs.extend(data)
+            if (page + 1) * 100 >= total or len(stubs) >= per_type_limit:
+                break
+            page += 1
 
-        if not all_tasks:
+        stubs = stubs[:per_type_limit]
+
+        if not stubs:
             return jsonify({
                 "count":      0,
+                "scanned":    0,
                 "task_types": list(_RETURN_TRIP_TYPE_LABELS.values()),
                 "data":       [],
             })
 
-        # ── Step 2: fetch full task detail + estimate detail in parallel ─────
-        # The search stub is minimal; GET /v2/tasks/{id} returns the full record
-        # including RelatedEntity (linked estimate), AssignedTo, DueDate, etc.
+        # ── Step 2: fetch full task detail in parallel, filter by type ───────
         def _enrich(stub: dict) -> dict | None:
-            task_id    = stub.get("Id") or stub.get("id")
-            type_label = stub.get("_type_label", "Return Trip")
+            task_id = stub.get("Id") or stub.get("id")
             if not task_id:
                 return None
             try:
                 t = striven.get_task(int(task_id))
 
-                status   = t.get("Status")     or t.get("status")     or {}
-                assigned = t.get("AssignedTo") or t.get("assignedTo") or {}
-                related  = t.get("RelatedEntity") or t.get("relatedEntity") or {}
+                # v2 task detail fields (confirmed from API schema):
+                #   Type        → {Id, Name}   task type
+                #   SalesOrder  → {Id, Number} linked estimate
+                #   Assignments → [{Id, Name, Type}]
+                #   DueDateTime → ISO string
+                #   Title       → task title string
+                task_type   = t.get("Type")        or {}
+                sales_order = t.get("SalesOrder")  or {}
+                assignments = t.get("Assignments") or []
+                status      = t.get("Status")      or {}
 
-                status_name   = (status.get("Name")   or status.get("name"))   if isinstance(status, dict)   else str(status)
-                assigned_name = (assigned.get("Name")  or assigned.get("name")) if isinstance(assigned, dict) else str(assigned)
-                est_id        = (related.get("Id")     or related.get("id"))    if isinstance(related, dict)  else None
+                type_id   = task_type.get("Id")
+                type_name = task_type.get("Name") or ""
+
+                # Only keep return-trip / callback task types
+                if type_id not in _RETURN_TRIP_TASK_TYPE_IDS:
+                    return None
+
+                est_id        = sales_order.get("Id")
+                assigned_name = assignments[0].get("Name") if assignments else "Unassigned"
+                status_name   = status.get("Name") or "Unknown"
+
+                # Customer is available directly on the task detail
+                customer_name = (t.get("Customer") or {}).get("Name")
 
                 record: dict = {
-                    "task_type":       type_label,
-                    "task_status":     status_name   or "Unknown",
-                    "assigned_to":     assigned_name or "Unassigned",
-                    "due_date":        t.get("DueDate")    or t.get("dueDate"),
-                    "task_created":    t.get("DateCreated") or t.get("dateCreated"),
+                    "task_type":       _RETURN_TRIP_TYPE_LABELS.get(type_id, type_name),
+                    "title":           t.get("Title"),
+                    "task_status":     status_name,
+                    "assigned_to":     assigned_name,
+                    "due_date":        t.get("DueDateTime"),
+                    "task_created":    t.get("DateCreated"),
+                    "customer":        customer_name,
                     "estimate_id":     est_id,
-                    "estimate_number": None,
-                    "customer":        None,
+                    "estimate_number": sales_order.get("Number"),
                     "sales_rep":       None,
                     "estimate_total":  None,
                 }
 
+                # If we have a sales order, fetch the estimate for sales rep + total
                 if est_id:
                     raw    = striven.get_estimate(int(est_id))
                     detail = _fmt_detail(raw)
-                    record["estimate_number"] = detail.get("estimate_number")
-                    record["customer"]        = detail.get("customer_name")
-                    record["sales_rep"]       = _normalize_sales_rep(detail.get("sales_rep_name"))
-                    record["estimate_total"]  = detail.get("total")
+                    record["sales_rep"]      = _normalize_sales_rep(detail.get("sales_rep_name"))
+                    record["estimate_total"] = detail.get("total")
 
                 return record
             except Exception:
@@ -1894,17 +1926,17 @@ def return_trips():
 
         results: list[dict] = []
         with ThreadPoolExecutor(max_workers=10) as pool:
-            futures = {pool.submit(_enrich, s): s for s in all_tasks}
+            futures = {pool.submit(_enrich, s): s for s in stubs}
             for future in as_completed(futures):
                 r = future.result()
                 if r:
                     results.append(r)
 
-        # Sort by task_created descending (most recent first)
         results.sort(key=lambda x: x.get("task_created") or "", reverse=True)
 
         return jsonify({
             "count":      len(results),
+            "scanned":    len(stubs),
             "task_types": list(_RETURN_TRIP_TYPE_LABELS.values()),
             "data":       results,
         })
@@ -3791,27 +3823,37 @@ def extract_sales_rep(order: dict) -> str:
 
 def _fmt_task(t: dict) -> dict:
     """
-    Normalise a raw Striven task record into a clean dict.
+    Normalise a raw Striven v2 task record into a clean dict.
 
-    GET/POST /v2/tasks returns a mix of TitleCase and camelCase keys.
-    Normalised to snake_case for consistent Claude consumption.
+    Correct v2 field names per API schema:
+      Title       — task title (not Name)
+      Type        — task type object {Id, Name}
+      SalesOrder  — linked estimate/sales order {Id, Number, Name}
+      Assignments — array of assignees [{Id, Name, Type}]
+      DueDateTime — due date (not DueDate)
     """
-    assigned  = t.get("AssignedTo")    or t.get("assignedTo")    or {}
-    status    = t.get("Status")        or t.get("status")        or {}
-    task_type = t.get("TaskType")      or t.get("taskType")      or {}
-    related   = t.get("RelatedEntity") or t.get("relatedEntity") or {}
+    status      = t.get("Status")      or {}
+    task_type   = t.get("Type")        or {}
+    sales_order = t.get("SalesOrder")  or {}
+    assignments = t.get("Assignments") or []
+    # First assignee name (most tasks have one)
+    first_assignee = assignments[0].get("Name") if assignments else None
     return {
-        "id":                t.get("Id")          or t.get("id"),
-        "name":              t.get("Name")        or t.get("name"),
-        "description":       t.get("Description") or t.get("description"),
-        "status":            status.get("Name")   or status.get("name"),
-        "status_id":         status.get("Id")     or status.get("id"),
-        "task_type":         task_type.get("Name") or task_type.get("name"),
-        "assigned_to":       assigned.get("Name") or assigned.get("name"),
-        "due_date":          t.get("DueDate")     or t.get("dueDate"),
-        "date_created":      t.get("DateCreated") or t.get("dateCreated"),
-        "related_entity":    related.get("Name")  or related.get("name"),
-        "related_entity_id": related.get("Id")    or related.get("id"),
+        "id":             t.get("Id"),
+        "title":          t.get("Title"),
+        "description":    t.get("Description"),
+        "status":         status.get("Name"),
+        "status_id":      status.get("Id"),
+        "task_type":      task_type.get("Name"),
+        "task_type_id":   task_type.get("Id"),
+        "assigned_to":    first_assignee,
+        "start_date":     t.get("StartDateTime"),
+        "due_date":       t.get("DueDateTime"),
+        "date_created":   t.get("DateCreated"),
+        "sales_order_id": sales_order.get("Id"),
+        "sales_order_number": sales_order.get("Number"),
+        "customer":       (t.get("Customer") or {}).get("Name"),
+        "customer_id":    (t.get("Customer") or {}).get("Id"),
     }
 
 
