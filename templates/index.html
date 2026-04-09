@@ -59,6 +59,20 @@
     }
     .home-btn:hover  { background: #dbeafe; }
     .home-btn:active { transform: scale(0.96); opacity: 0.85; }
+    .logs-btn {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 16px;
+      background: #f0fdf4;
+      border: none;
+      border-radius: 8px;
+      color: #166534; font-size: 13px; font-weight: 600;
+      cursor: pointer; font-family: inherit; white-space: nowrap;
+      transition: background 0.15s, transform 0.1s, opacity 0.1s;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+      text-decoration: none;
+    }
+    .logs-btn:hover  { background: #dcfce7; }
+    .logs-btn:active { transform: scale(0.96); opacity: 0.85; }
     .header-logo { cursor: pointer; }
     .header-text { cursor: pointer; }
     .dot {
@@ -487,6 +501,7 @@
   <div class="header-right">
     <div class="status-dot"><div class="dot"></div> Live</div>
     <button class="home-btn" onclick="resetHome()">← Back to Home</button>
+    <a class="logs-btn" href="/logs" target="_blank">Recent Searches</a>
   </div>
 </div>
 
