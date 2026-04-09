@@ -403,6 +403,26 @@ def api_health() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Claude Enterprise compatibility — patch tool schemas to allow extra fields
+#
+# Claude Enterprise injects internal metadata fields (e.g. paprika_mode) into
+# MCP tool call arguments.  Without additionalProperties: true in the input
+# schema, the Enterprise MCP client validates that injected field against the
+# schema, finds it undeclared, and raises:
+#
+#     paprika_mode: Extra inputs are not permitted
+#
+# Patching additionalProperties: true on every tool schema tells the client
+# validator that extra fields are explicitly allowed, so the injection proceeds
+# and the call reaches our server.  FastMCP already ignores unknown args at
+# runtime (Pydantic V2 default: extra='ignore'), so this is safe.
+# ---------------------------------------------------------------------------
+for _t in mcp._tool_manager.list_tools():
+    if isinstance(_t.parameters, dict):
+        _t.parameters["additionalProperties"] = True
+
+
+# ---------------------------------------------------------------------------
 # Health middleware — intercepts /health before FastMCP sees it.
 # This lets UptimeRobot ping us every 5 min and keep Render warm.
 # ---------------------------------------------------------------------------
