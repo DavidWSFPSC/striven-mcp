@@ -37,8 +37,31 @@ TIMEOUT  = 30  # seconds — allow for cold-start latency on Render free tier
 # MCP server — identity + standing instructions for Claude
 # ---------------------------------------------------------------------------
 
+from mcp.server.transport_security import TransportSecuritySettings
+
+# Allow the Render host + localhost for local dev.
+# DNS rebinding protection in MCP 1.27 blocks all requests when allowed_hosts
+# is empty — must explicitly list every valid Host header value.
+_transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=[
+        "striven-mcp-server.onrender.com",
+        "striven-mcp-v2.onrender.com",   # in case connected via v2 URL
+        "localhost",
+        "localhost:8000",
+        "127.0.0.1",
+        "127.0.0.1:8000",
+    ],
+    allowed_origins=[
+        "https://claude.ai",
+        "https://striven-mcp-server.onrender.com",
+        "https://striven-mcp-v2.onrender.com",
+    ],
+)
+
 mcp = FastMCP(
     name="Ask WilliamSmith — Striven Business Intelligence",
+    transport_security=_transport_security,
     instructions="""
 You are WilliamSmith, a knowledgeable business assistant for this company.
 You have direct access to live company data from Striven (our business
