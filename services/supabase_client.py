@@ -677,6 +677,136 @@ def upsert_customer_locations(records: list[dict]) -> int:
     return len(res.data) if res.data else 0
 
 
+# ---------------------------------------------------------------------------
+# callback_tasks — query helpers for callback / return-trip intelligence
+#
+# Table schema (see callback_audit.py for DDL):
+#   task_id, task_type_id, task_type, task_status, assigned_to,
+#   customer_id, customer_name, estimate_id, estimate_number,
+#   created_date, due_date, synced_at
+# ---------------------------------------------------------------------------
+
+def query_callback_insights(
+    by:       str        = "summary",
+    assignee: str | None = None,
+    year:     int | None = None,
+    status:   str | None = None,
+    limit:    int        = 500,
+) -> dict:
+    """
+    Query the callback_tasks Supabase table and return aggregated insights.
+
+    Args:
+        by:       "summary" | "assignee" | "type" | "year" | "customer"
+                  Controls which breakdown is returned.
+        assignee: Filter to a specific technician / assignee (partial match).
+        year:     Filter to a specific calendar year (based on created_date).
+        status:   Filter to a specific task status (e.g. "Open", "Done").
+        limit:    Max raw rows to fetch before aggregation (default 500).
+
+    Returns:
+        Dict with summary stats, optional breakdown, and a sample of recent tasks.
+    """
+    from collections import defaultdict
+
+    # ── Build query ────────────────────────────────────────────────────────
+    q = (
+        _get_client()
+        .table("callback_tasks")
+        .select(
+            "task_id, task_type, task_status, assigned_to, "
+            "customer_name, estimate_id, estimate_number, created_date"
+        )
+        .order("created_date", desc=True)
+        .limit(limit)
+    )
+
+    if assignee:
+        q = q.ilike("assigned_to", f"%{assignee}%")
+    if status:
+        q = q.ilike("task_status", f"%{status}%")
+    if year:
+        q = (
+            q
+            .gte("created_date", f"{year}-01-01T00:00:00+00:00")
+            .lt("created_date",  f"{year + 1}-01-01T00:00:00+00:00")
+        )
+
+    res  = q.execute()
+    rows = res.data or []
+
+    if not rows:
+        return {
+            "total":       0,
+            "filters":     {"by": by, "assignee": assignee, "year": year, "status": status},
+            "breakdown":   {},
+            "open_count":  0,
+            "sample":      [],
+            "note":        "No callback tasks found matching the given filters.",
+        }
+
+    # ── Aggregate ──────────────────────────────────────────────────────────
+    total      = len(rows)
+    open_count = sum(1 for r in rows if (r.get("task_status") or "").lower() == "open")
+    linked     = sum(1 for r in rows if r.get("estimate_id"))
+
+    by_type:     dict[str, int] = defaultdict(int)
+    by_status:   dict[str, int] = defaultdict(int)
+    by_year:     dict[str, int] = defaultdict(int)
+    by_assignee: dict[str, int] = defaultdict(int)
+    by_customer: dict[str, int] = defaultdict(int)
+
+    for r in rows:
+        by_type[r.get("task_type") or "Unknown"]    += 1
+        by_status[r.get("task_status") or "Unknown"] += 1
+        yr = (r.get("created_date") or "")[:4] or "Unknown"
+        by_year[yr] += 1
+        by_assignee[r.get("assigned_to") or "Unassigned"] += 1
+        by_customer[r.get("customer_name") or "Unknown"]  += 1
+
+    # Choose breakdown based on `by` param
+    breakdown_map = {
+        "assignee": dict(sorted(by_assignee.items(), key=lambda x: -x[1])),
+        "type":     dict(sorted(by_type.items(),     key=lambda x: -x[1])),
+        "year":     dict(sorted(by_year.items())),
+        "customer": dict(sorted(by_customer.items(), key=lambda x: -x[1])[:25]),
+        "summary":  {
+            "by_type":     dict(sorted(by_type.items(),   key=lambda x: -x[1])),
+            "by_status":   dict(sorted(by_status.items(), key=lambda x: -x[1])),
+            "by_year":     dict(sorted(by_year.items())),
+            "top_assignees": dict(sorted(by_assignee.items(), key=lambda x: -x[1])[:10]),
+        },
+    }
+    breakdown = breakdown_map.get(by, breakdown_map["summary"])
+
+    # Recent sample (up to 20)
+    sample = [
+        {
+            "task_type":       r.get("task_type"),
+            "task_status":     r.get("task_status"),
+            "assigned_to":     r.get("assigned_to"),
+            "customer":        r.get("customer_name"),
+            "estimate_number": r.get("estimate_number"),
+            "created_date":    r.get("created_date"),
+        }
+        for r in rows[:20]
+    ]
+
+    return {
+        "total":       total,
+        "open_count":  open_count,
+        "linked_to_estimate": linked,
+        "filters":     {
+            "by":       by,
+            "assignee": assignee,
+            "year":     year,
+            "status":   status,
+        },
+        "breakdown":   breakdown,
+        "sample":      sample,
+    }
+
+
 def query_jobs_by_area(city: str, limit: int = 500) -> dict:
     """
     Find all estimates whose job site city matches the given area name.

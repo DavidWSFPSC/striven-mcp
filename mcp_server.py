@@ -98,7 +98,8 @@ TOOLS AVAILABLE
 - jobs_by_location             → job count + revenue for a specific location/area
 - time_to_preview              → average days from estimate creation to site preview
 - search_by_pipeline_status   → find active jobs by operational status (ready to schedule, waiting on product, etc.)
-- search_return_trips         → find return trip / callback tasks on estimates
+- search_return_trips         → find return trip / callback tasks on estimates (live Striven scan)
+- search_callback_insights    → callback intelligence from historical database (fast, aggregated)
 
 WHEN TO USE EACH TOOL
 ---------------------
@@ -117,6 +118,11 @@ WHEN TO USE EACH TOOL
 - "Which jobs need review before invoicing?"      → search_by_pipeline_status
 - "Show me all return trips"                      → search_return_trips
 - "Which jobs have callbacks?"                    → search_return_trips
+- "Who has the most callbacks?"                   → search_callback_insights(by="assignee")
+- "What's our callback rate by year?"             → search_callback_insights(by="year")
+- "Show me open return trips"                     → search_callback_insights(status="Open")
+- "How many callbacks did Steven have?"           → search_callback_insights(assignee="Steven")
+- "Show callback breakdown by type"               → search_callback_insights(by="type")
 
 TONE & FORMAT
 -------------
@@ -512,6 +518,84 @@ def search_return_trips(limit: int = 300, days: int = 180) -> dict:
     if days != 180:
         params["days"] = days
     return _call("get", "/queries/return-trips", params=params or None)
+
+
+# ---------------------------------------------------------------------------
+# Tools — Callback / Return-trip intelligence
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def search_callback_insights(
+    by:       str = "summary",
+    assignee: str = "",
+    year:     int = 0,
+    status:   str = "",
+    limit:    int = 500,
+) -> dict:
+    """
+    Query the callback and return-trip task database to surface operational
+    intelligence about rework, callbacks, and return visits.
+
+    Data covers 1,395+ tasks of these types:
+      - Installer: Return Trip (Unplanned) / Punch Work
+      - Service: Return Trip (Unplanned)
+      - Service Diagnostic Repair: Call Back
+
+    Use when asked:
+      'Who has the most return trips?'
+      'Which techs generate the most callbacks?'
+      'How many callbacks did we have in 2024?'
+      'Show me open return trips'
+      'What's our callback rate by technician?'
+      'Which customers have had the most return visits?'
+      'Show me Steven's callbacks'
+      'How many service call backs are still open?'
+      'What types of return trips do we have the most of?'
+
+    Args:
+        by:       Breakdown dimension for the results.
+                  Valid values:
+                    "summary"  — overall stats with top assignees, by type, by status, by year
+                    "assignee" — full ranked list of all assignees by callback count
+                    "type"     — breakdown by task type (Return Trip vs Call Back)
+                    "year"     — breakdown by year (trend over time)
+                    "customer" — top 25 customers with most callbacks
+                  Default: "summary"
+
+        assignee: Filter to a specific technician or rep (partial name, case-insensitive).
+                  Leave empty to include all assignees.
+                  Example: "Steven" matches "Steven Chesnul"
+
+        year:     Filter to a specific calendar year (e.g. 2024 or 2025).
+                  Use 0 to include all years (default).
+
+        status:   Filter to a specific task status.
+                  Valid values: "Open", "Done", "Canceled", "On Hold"
+                  Leave empty for all statuses.
+
+        limit:    Maximum number of raw records to aggregate (default 500).
+                  Increase to 2000 for complete historical analysis.
+
+    Returns:
+        total          — total callback tasks matching filters
+        open_count     — how many are still Open (not Done/Canceled)
+        linked_to_estimate — how many are tied to a specific estimate
+        filters        — echo of the parameters used
+        breakdown      — aggregated counts by the chosen dimension
+        sample         — 20 most recent matching tasks
+    """
+    params: dict = {}
+    if by != "summary":
+        params["by"] = by
+    if assignee:
+        params["assignee"] = assignee
+    if year and year > 0:
+        params["year"] = year
+    if status:
+        params["status"] = status
+    if limit != 500:
+        params["limit"] = limit
+    return _call("get", "/queries/callback-insights", params=params or None)
 
 
 # ---------------------------------------------------------------------------

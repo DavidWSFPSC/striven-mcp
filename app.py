@@ -1888,6 +1888,54 @@ def return_trips():
 
 
 # ---------------------------------------------------------------------------
+# Callback / return-trip insights — reads from Supabase callback_tasks table
+# ---------------------------------------------------------------------------
+
+@app.route("/queries/callback-insights", methods=["GET"])
+def callback_insights():
+    """
+    Return aggregated callback / return-trip intelligence from Supabase.
+
+    Data source: `callback_tasks` table populated by callback_audit.py.
+    Task types: 71 (Installer Return Trip), 72 (Service Return Trip),
+                124 (Service Call Back).
+
+    Query params:
+        by        — breakdown dimension: summary | assignee | type | year | customer
+                    (default: summary)
+        assignee  — filter to a specific tech/rep (partial match, case-insensitive)
+        year      — filter to a specific year (e.g. 2024)
+        status    — filter to task status: Open | Done | Canceled | On Hold
+        limit     — max raw rows to aggregate (default 500, max 2000)
+
+    Examples:
+        GET /queries/callback-insights
+        GET /queries/callback-insights?by=assignee
+        GET /queries/callback-insights?by=year
+        GET /queries/callback-insights?assignee=Steven&by=type
+        GET /queries/callback-insights?status=Open
+        GET /queries/callback-insights?year=2024&by=assignee
+    """
+    from services.supabase_client import query_callback_insights
+
+    by       = request.args.get("by",       "summary")
+    assignee = request.args.get("assignee") or None
+    status   = request.args.get("status")   or None
+    limit    = min(int(request.args.get("limit", 500)), 2000)
+
+    year_raw = request.args.get("year")
+    year: int | None = int(year_raw) if year_raw and year_raw.isdigit() else None
+
+    try:
+        result = query_callback_insights(
+            by=by, assignee=assignee, year=year, status=status, limit=limit
+        )
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
 # /ask — keyword router: routes known questions to direct endpoints, falls
 #         through to the Claude agentic loop only for unknown questions.
 # ---------------------------------------------------------------------------
