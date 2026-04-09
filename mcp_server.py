@@ -98,6 +98,7 @@ TOOLS AVAILABLE
 - jobs_by_location             → job count + revenue for a specific location/area
 - time_to_preview              → average days from estimate creation to site preview
 - search_by_pipeline_status   → find active jobs by operational status (ready to schedule, waiting on product, etc.)
+- search_return_trips         → find return trip / callback tasks on estimates
 
 WHEN TO USE EACH TOOL
 ---------------------
@@ -114,6 +115,8 @@ WHEN TO USE EACH TOOL
 - "Show me jobs ready to schedule"                → search_by_pipeline_status
 - "What jobs are waiting on product?"             → search_by_pipeline_status
 - "Which jobs need review before invoicing?"      → search_by_pipeline_status
+- "Show me all return trips"                      → search_return_trips
+- "Which jobs have callbacks?"                    → search_return_trips
 
 TONE & FORMAT
 -------------
@@ -468,6 +471,47 @@ def search_by_pipeline_status(status: str, limit: int = 200) -> dict:
     if limit != 200:
         params["limit"] = limit
     return _call("get", "/queries/pipeline-status", params=params)
+
+
+@mcp.tool()
+def search_return_trips(limit: int = 300, days: int = 180) -> dict:
+    """
+    Find tasks on estimates that represent return trips or callbacks.
+
+    Scans recent Striven tasks and identifies any whose name contains
+    'return', 'callback', 'call back', or 'trip'. Each result is enriched
+    with the linked estimate's number, customer name, and sales rep.
+
+    Return trips and callbacks are tracked as tasks on estimates (sales orders),
+    NOT as custom field values. Use this tool for operational follow-up questions.
+
+    Use when asked:
+      'Show me all return trips'
+      'Which jobs have callbacks scheduled?'
+      'What return trips do we have this month?'
+      'Are there any jobs that need a return visit?'
+      'Show me all callback tasks'
+
+    Args:
+        limit: Maximum number of tasks to scan (default 300, max 1000).
+               Higher values give more complete results but take longer.
+        days:  Scan tasks created in the last N days (default 180 = 6 months).
+               Use 30 for recent only, 365 for full year.
+
+    Returns:
+        count      — number of return trip / callback tasks found
+        scanned    — total tasks scanned before filtering
+        filters    — echo of search parameters
+        data       — list of matched tasks, each with:
+                     task_name, task_status, assigned_to, due_date,
+                     estimate_number, customer, sales_rep, estimate_total
+    """
+    params: dict = {}
+    if limit != 300:
+        params["limit"] = limit
+    if days != 180:
+        params["days"] = days
+    return _call("get", "/queries/return-trips", params=params or None)
 
 
 # ---------------------------------------------------------------------------

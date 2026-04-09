@@ -1583,29 +1583,47 @@ def time_to_preview():
 # from live Striven responses.
 # ---------------------------------------------------------------------------
 
-# Friendly alias → (field_id, value_id, canonical_label)
-_PIPELINE_STATUS_MAP: dict[str, tuple[int, str, str]] = {
+# Friendly alias → (field_id, valueText_search_phrase)
+#
+# Matching uses case-insensitive substring:
+#   search_phrase.lower() in actual_valueText.lower()
+#
+# Value IDs are NOT used — Striven's valueText is the source of truth.
+# New statuses are discovered automatically (no code change needed).
+#
+# Custom field IDs:
+#   1501 = Order Fulfillment Status
+#   1521 = Operations Installation Status
+#   1503 = Post Install Status
+_PIPELINE_STATUS_PHRASES: dict[str, tuple[int, str]] = {
     # Order Fulfillment Status (field 1501)
-    "ready to schedule":             (1501, "63", "All Product Received: Ready To Schedule"),
-    "all product received":          (1501, "63", "All Product Received: Ready To Schedule"),
-    "all product received ready to schedule": (1501, "63", "All Product Received: Ready To Schedule"),
-    "waiting on product":            (1501, "64", "Waiting On Product"),
-    "order placed":                  (1501, "65", "Order Placed"),
-    "product not ordered":           (1501, "66", "Product Not Ordered"),
-    "partial product received":      (1501, "67", "Partial Product Received"),
+    "ready to schedule":              (1501, "Ready To Schedule"),
+    "all product received":           (1501, "All Product Received"),
+    "waiting on product":             (1501, "Waiting On Product"),
+    "order placed":                   (1501, "Order Placed"),
+    "product not ordered":            (1501, "Product Not Ordered"),
+    "partial product received":       (1501, "Partial Product Received"),
+    "tag and check stock":            (1501, "Tag & Check Stock"),
+    "tag check stock":                (1501, "Tag & Check Stock"),
+    "ready for order fulfillment":    (1501, "Ready For Order Fulfillment"),
+    "order fulfillment complete":     (1501, "Order Fulfillment Complete"),
+    "received unit":                  (1501, "Received Unit"),
 
     # Operations Installation Status (field 1521)
-    "return trip required":          (1521, "96", "Installation Incomplete - Return Trip Required"),
-    "installation incomplete":       (1521, "96", "Installation Incomplete - Return Trip Required"),
-    "installation complete":         (1521, "97", "Installation Complete"),
-    "ops complete":                  (1521, "97", "Installation Complete"),
+    "tentatively scheduled":          (1521, "Tentatively Scheduled"),
+    "installation scheduled":         (1521, "Installation Scheduled"),
+    "installation complete":          (1521, "Installation Process Complete"),
+    "installation process complete":  (1521, "Installation Process Complete"),
+    "ops complete":                   (1521, "Installation Process Complete"),
+    "return trip needed":             (1521, "Return Trip Needed"),
 
     # Post Install Status (field 1503)
-    "needs review before invoicing": (1503, "35", "Needs Review Before Invoicing"),
-    "needs review":                  (1503, "35", "Needs Review Before Invoicing"),
-    "ready to invoice":              (1503, "36", "Ready To Invoice"),
-    "invoiced":                      (1503, "37", "Invoiced"),
-    "n/a":                           (1503, "38", "N/A"),
+    "needs review before invoicing":  (1503, "Needs Review Before Invoicing"),
+    "needs review":                   (1503, "Needs Review Before Invoicing"),
+    "final invoice":                  (1503, "Final Invoice"),
+    "partial invoice":                (1503, "Partial Invoice"),
+    "ready to invoice":               (1503, "Ready To Invoice"),
+    "invoiced":                       (1503, "Invoiced"),
 }
 
 
@@ -1649,13 +1667,13 @@ def pipeline_status():
     if not status_raw:
         return jsonify({
             "error": "Query param 'status' is required.",
-            "valid_values": list(_PIPELINE_STATUS_MAP.keys()),
+            "valid_values": list(_PIPELINE_STATUS_PHRASES.keys()),
         }), 400
 
-    mapping = _PIPELINE_STATUS_MAP.get(status_raw)
+    mapping = _PIPELINE_STATUS_PHRASES.get(status_raw)
     if not mapping:
-        # Try partial match
-        for key, val in _PIPELINE_STATUS_MAP.items():
+        # Partial match — "return trip" hits "return trip needed", etc.
+        for key, val in _PIPELINE_STATUS_PHRASES.items():
             if status_raw in key or key in status_raw:
                 mapping = val
                 break
@@ -1663,10 +1681,10 @@ def pipeline_status():
     if not mapping:
         return jsonify({
             "error": f"Unknown status: {status_raw!r}",
-            "valid_values": list(_PIPELINE_STATUS_MAP.keys()),
+            "valid_values": list(_PIPELINE_STATUS_PHRASES.keys()),
         }), 400
 
-    field_id, target_value_id, canonical_label = mapping
+    field_id, search_phrase = mapping
     scan_limit = min(int(request.args.get("limit", 200)), 500)
 
     try:
@@ -1695,8 +1713,8 @@ def pipeline_status():
         if not stubs:
             return jsonify({
                 "count":   0,
-                "status":  canonical_label,
-                "filters": {"field_id": field_id, "value_id": target_value_id},
+                "status":  search_phrase,
+                "filters": {"field_id": field_id, "search_phrase": search_phrase},
                 "data":    [],
             })
 
@@ -1708,17 +1726,12 @@ def pipeline_status():
             if not oid:
                 return None
             try:
-                raw    = striven.get_estimate(oid)
+                raw     = striven.get_estimate(oid)
                 cfields = raw.get("customFields") or raw.get("CustomFields") or []
-                val_id, val_text = _extract_custom_field_value(cfields, field_id)
+                _val_id, val_text = _extract_custom_field_value(cfields, field_id)
 
-                # Match on value ID or text label (case-insensitive)
-                matched = (
-                    val_id == target_value_id
-                    or (val_text and canonical_label.lower() in val_text.lower())
-                    or (val_text and val_text.lower() in canonical_label.lower())
-                )
-                if not matched:
+                # Match on valueText only — no fragile value ID dependency
+                if not val_text or search_phrase.lower() not in val_text.lower():
                     return None
 
                 detail = _fmt_detail(raw)
@@ -1731,8 +1744,7 @@ def pipeline_status():
                     "total":           detail.get("total"),
                     "created":         detail.get("date_created"),
                     "target_date":     detail.get("target_date"),
-                    "pipeline_status": canonical_label,
-                    "field_value_raw": val_text or val_id,
+                    "pipeline_status": val_text,   # actual label from Striven
                 }
             except Exception:
                 return None
@@ -1750,10 +1762,154 @@ def pipeline_status():
 
         return jsonify({
             "count":        len(matches),
-            "status":       canonical_label,
+            "status":       search_phrase,
             "scanned":      len(stubs),
-            "filters":      {"field_id": field_id, "value_id": target_value_id},
+            "filters":      {"field_id": field_id, "search_phrase": search_phrase},
             "data":         matches,
+        })
+
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Return-trip / callback task helper
+# ---------------------------------------------------------------------------
+
+# Keywords used to identify return-trip or callback tasks by name.
+# Matched case-insensitively against the task's Name field.
+_RETURN_TRIP_KEYWORDS = ("return", "callback", "call back", "trip")
+
+
+def _is_return_trip_task(task_name: str) -> bool:
+    """Return True if the task name suggests a return trip or callback."""
+    low = task_name.lower()
+    return any(kw in low for kw in _RETURN_TRIP_KEYWORDS)
+
+
+@app.route("/queries/return-trips", methods=["GET"])
+def return_trips():
+    """
+    Find tasks on active estimates that represent return trips or callbacks.
+
+    Pulls recent tasks from Striven and filters by name containing
+    'return', 'callback', 'call back', or 'trip'.  Each match is enriched
+    with its linked estimate's number and customer name.
+
+    Query params:
+        limit   (optional) — max tasks to scan (default 300, max 1000)
+        days    (optional) — scan tasks created in the last N days (default 180)
+
+    Examples:
+        GET /queries/return-trips
+        GET /queries/return-trips?limit=500&days=90
+    """
+    from datetime import datetime, timedelta
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    task_limit = min(int(request.args.get("limit", 300)), 1000)
+    days_back  = min(int(request.args.get("days", 180)), 730)
+
+    date_from = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%dT00:00:00")
+
+    try:
+        # ── Step 1: pull recent tasks in pages ──────────────────────────────
+        tasks_raw: list[dict] = []
+        page = 0
+        while len(tasks_raw) < task_limit:
+            resp = striven.search_tasks({
+                "PageIndex": page,
+                "PageSize":  100,
+                "DueDateRange": {"DateFrom": date_from},
+            })
+            total, data = _striven_page(resp)
+            if not data:
+                break
+            tasks_raw.extend(data)
+            if (page + 1) * 100 >= total or len(tasks_raw) >= task_limit:
+                break
+            page += 1
+
+        tasks_raw = tasks_raw[:task_limit]
+
+        # ── Step 2: filter by keyword match on task name ────────────────────
+        matched_tasks: list[dict] = []
+        for t in tasks_raw:
+            name = t.get("Name") or t.get("name") or ""
+            if _is_return_trip_task(name):
+                matched_tasks.append(t)
+
+        if not matched_tasks:
+            return jsonify({
+                "count":   0,
+                "scanned": len(tasks_raw),
+                "filters": {"days": days_back, "keywords": list(_RETURN_TRIP_KEYWORDS)},
+                "data":    [],
+            })
+
+        # ── Step 3: enrich with estimate detail from Striven ─────────────────
+        # RelatedEntity on task stubs holds the linked estimate ID
+        def _enrich_task(t: dict) -> dict | None:
+            name    = t.get("Name") or t.get("name") or "Unknown"
+            status  = (t.get("Status") or t.get("status") or {})
+            status_name = (
+                status.get("Name") or status.get("name")
+                if isinstance(status, dict) else str(status)
+            ) or "Unknown"
+            assigned = t.get("AssignedTo") or t.get("assignedTo") or {}
+            assigned_name = (
+                assigned.get("Name") or assigned.get("name")
+                if isinstance(assigned, dict) else str(assigned)
+            ) or "Unassigned"
+            due_date  = t.get("DueDate")   or t.get("dueDate")
+            created   = t.get("DateCreated") or t.get("dateCreated")
+
+            related   = t.get("RelatedEntity") or t.get("relatedEntity") or {}
+            est_id    = related.get("Id") or related.get("id")
+
+            record = {
+                "task_name":       name,
+                "task_status":     status_name,
+                "assigned_to":     assigned_name,
+                "due_date":        due_date,
+                "task_created":    created,
+                "estimate_id":     est_id,
+                "estimate_number": None,
+                "customer":        None,
+                "sales_rep":       None,
+                "estimate_total":  None,
+            }
+
+            if est_id:
+                try:
+                    raw    = striven.get_estimate(int(est_id))
+                    detail = _fmt_detail(raw)
+                    record["estimate_number"] = detail.get("estimate_number")
+                    record["customer"]        = detail.get("customer_name")
+                    record["sales_rep"]       = _normalize_sales_rep(detail.get("sales_rep_name"))
+                    record["estimate_total"]  = detail.get("total")
+                except Exception:
+                    pass
+
+            return record
+
+        results: list[dict] = []
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(_enrich_task, t): t for t in matched_tasks}
+            for future in as_completed(futures):
+                r = future.result()
+                if r:
+                    results.append(r)
+
+        # Sort: tasks with linked estimates first, then by task_created desc
+        results.sort(key=lambda x: (x["estimate_id"] is None, x.get("task_created") or ""), reverse=False)
+        results.sort(key=lambda x: x.get("task_created") or "", reverse=True)
+
+        return jsonify({
+            "count":   len(results),
+            "scanned": len(tasks_raw),
+            "filters": {"days": days_back, "keywords": list(_RETURN_TRIP_KEYWORDS)},
+            "data":    results,
         })
 
     except Exception as exc:
