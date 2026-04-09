@@ -4243,6 +4243,15 @@ def striven_tasks():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/striven/tasks/<int:task_id>", methods=["GET"])
+def striven_task_detail(task_id: int):
+    """Return raw task detail from GET /v2/tasks/{id} for inspection."""
+    try:
+        return jsonify(striven.get_task(task_id))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/striven/invoices", methods=["GET"])
 def striven_invoices():
     """
