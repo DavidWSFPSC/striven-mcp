@@ -189,6 +189,21 @@ class StrivenClient:
         """
         return self._post("/sales-orders/search", body=filters)
 
+    def search_customer_locations(self, filters: dict | None = None) -> dict:
+        """
+        Search customer locations.
+
+        POST /v1/customer-locations/search
+
+        Useful filter keys (all optional):
+            PageIndex   int  — 0-based page
+            PageSize    int  — results per page
+            City        str  — filter by city name (partial match)
+            State       str  — filter by state abbreviation (e.g. "SC")
+            PostalCode  str  — filter by zip code
+        """
+        return self._post("/customer-locations/search", body=filters or {})
+
     def search_customers(self, name: str, page_size: int = 25) -> dict:
         """
         Search customers by name.

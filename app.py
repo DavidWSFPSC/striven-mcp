@@ -4247,6 +4247,34 @@ def striven_task_detail(task_id: int):
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/striven/customer-locations", methods=["GET"])
+def striven_customer_locations():
+    """
+    Search customer locations by city, state, or zip.
+
+    Query params:
+        city       str — partial city name match
+        state      str — state abbreviation (e.g. SC)
+        postal     str — zip code
+        pageSize   int — results per page (default 25, max 100)
+        page       int — 0-based page (default 0)
+    """
+    page      = max(0, int(request.args.get("page", 0)))
+    page_size = min(int(request.args.get("pageSize", 25)), 100)
+    body: dict = {"PageIndex": page, "PageSize": page_size}
+    if request.args.get("city"):
+        body["City"] = request.args["city"]
+    if request.args.get("state"):
+        body["State"] = request.args["state"]
+    if request.args.get("postal"):
+        body["PostalCode"] = request.args["postal"]
+    try:
+        resp = striven.search_customer_locations(body)
+        return jsonify(resp)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/striven/invoices", methods=["GET"])
 def striven_invoices():
     """
