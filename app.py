@@ -1492,8 +1492,8 @@ def time_to_preview():
                 return (None, None)
             try:
                 detail = striven.get_task(int(tid))
-                so = detail.get("SalesOrder") or {}
-                est_id = so.get("Id")
+                so = detail.get("salesOrder") or {}
+                est_id = so.get("id")
                 return (int(est_id) if est_id else None, t_created)
             except Exception:
                 return (None, t_created)
@@ -1874,41 +1874,36 @@ def return_trips():
             try:
                 t = striven.get_task(int(task_id))
 
-                # v2 task detail fields (confirmed from API schema):
-                #   Type        → {Id, Name}   task type
-                #   SalesOrder  → {Id, Number} linked estimate
-                #   Assignments → [{Id, Name, Type}]
-                #   DueDateTime → ISO string
-                #   Title       → task title string
-                task_type   = t.get("Type")        or {}
-                sales_order = t.get("SalesOrder")  or {}
-                assignments = t.get("Assignments") or []
-                status      = t.get("Status")      or {}
+                # v2 task GET returns camelCase (confirmed from live data)
+                task_type   = t.get("type")        or {}
+                sales_order = t.get("salesOrder")  or {}
+                assignments = t.get("assignments") or []
+                status      = t.get("status")      or {}
 
-                type_id   = task_type.get("Id")
-                type_name = task_type.get("Name") or ""
+                type_id   = task_type.get("id")
+                type_name = task_type.get("name") or ""
 
                 # Only keep return-trip / callback task types
                 if type_id not in _RETURN_TRIP_TASK_TYPE_IDS:
                     return None
 
-                est_id        = sales_order.get("Id")
-                assigned_name = assignments[0].get("Name") if assignments else "Unassigned"
-                status_name   = status.get("Name") or "Unknown"
+                est_id        = sales_order.get("id")
+                assigned_name = assignments[0].get("name") if assignments else "Unassigned"
+                status_name   = status.get("name") or "Unknown"
 
                 # Customer is available directly on the task detail
-                customer_name = (t.get("Customer") or {}).get("Name")
+                customer_name = (t.get("customer") or {}).get("name")
 
                 record: dict = {
                     "task_type":       _RETURN_TRIP_TYPE_LABELS.get(type_id, type_name),
-                    "title":           t.get("Title"),
+                    "title":           t.get("title"),
                     "task_status":     status_name,
                     "assigned_to":     assigned_name,
-                    "due_date":        t.get("DueDateTime"),
-                    "task_created":    t.get("DateCreated"),
+                    "due_date":        t.get("dueDateTime"),
+                    "task_created":    t.get("dateCreated"),
                     "customer":        customer_name,
                     "estimate_id":     est_id,
-                    "estimate_number": sales_order.get("Number"),
+                    "estimate_number": sales_order.get("number"),
                     "sales_rep":       None,
                     "estimate_total":  None,
                 }
@@ -3832,28 +3827,28 @@ def _fmt_task(t: dict) -> dict:
       Assignments — array of assignees [{Id, Name, Type}]
       DueDateTime — due date (not DueDate)
     """
-    status      = t.get("Status")      or {}
-    task_type   = t.get("Type")        or {}
-    sales_order = t.get("SalesOrder")  or {}
-    assignments = t.get("Assignments") or []
-    # First assignee name (most tasks have one)
-    first_assignee = assignments[0].get("Name") if assignments else None
+    # Striven v2 task GET returns camelCase (confirmed from live data)
+    status      = t.get("status")      or {}
+    task_type   = t.get("type")        or {}
+    sales_order = t.get("salesOrder")  or {}
+    assignments = t.get("assignments") or []
+    first_assignee = assignments[0].get("name") if assignments else None
     return {
-        "id":             t.get("Id"),
-        "title":          t.get("Title"),
-        "description":    t.get("Description"),
-        "status":         status.get("Name"),
-        "status_id":      status.get("Id"),
-        "task_type":      task_type.get("Name"),
-        "task_type_id":   task_type.get("Id"),
+        "id":             t.get("id"),
+        "title":          t.get("title"),
+        "description":    t.get("description"),
+        "status":         status.get("name"),
+        "status_id":      status.get("id"),
+        "task_type":      task_type.get("name"),
+        "task_type_id":   task_type.get("id"),
         "assigned_to":    first_assignee,
-        "start_date":     t.get("StartDateTime"),
-        "due_date":       t.get("DueDateTime"),
-        "date_created":   t.get("DateCreated"),
-        "sales_order_id": sales_order.get("Id"),
-        "sales_order_number": sales_order.get("Number"),
-        "customer":       (t.get("Customer") or {}).get("Name"),
-        "customer_id":    (t.get("Customer") or {}).get("Id"),
+        "start_date":     t.get("startDateTime"),
+        "due_date":       t.get("dueDateTime"),
+        "date_created":   t.get("dateCreated"),
+        "sales_order_id": sales_order.get("id"),
+        "sales_order_number": sales_order.get("number"),
+        "customer":       (t.get("customer") or {}).get("name"),
+        "customer_id":    (t.get("customer") or {}).get("id"),
     }
 
 
