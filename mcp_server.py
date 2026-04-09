@@ -97,7 +97,7 @@ TOOLS AVAILABLE
 - backlog_by_rep               → active job count + revenue grouped by sales rep
 - jobs_by_location             → job count + revenue by named area (zip-code accurate for tri-county)
 - time_to_preview              → average days from estimate creation to site preview
-- search_estimates             → search estimates by product/service keyword in line items (e.g. "isokern", "gas log")
+- search_by_product            → search estimates by product/service keyword in line items (e.g. "isokern", "gas log")
 - search_by_pipeline_status   → find active jobs by operational status (ready to schedule, waiting on product, etc.)
 - search_return_trips         → find return trip / callback tasks on estimates (live Striven scan)
 - search_callback_insights    → callback intelligence from historical database (fast, aggregated)
@@ -118,8 +118,8 @@ WHEN TO USE EACH TOOL
 - "Show me jobs ready to schedule"                → search_by_pipeline_status
 - "What jobs are waiting on product?"             → search_by_pipeline_status
 - "Which jobs need review before invoicing?"      → search_by_pipeline_status
-- "How many isokern jobs have we done?"            → search_estimates(keyword="isokern")
-- "Gas log installs in Kiawah?"                   → search_estimates(keyword="gas log", zip="29455")
+- "How many isokern jobs have we done?"            → search_by_product(keyword="isokern")
+- "Gas log installs in Kiawah?"                   → search_by_product(keyword="gas log", zip="29455")
 - "Show me all return trips"                      → search_return_trips
 - "Which jobs have callbacks?"                    → search_return_trips
 - "Who has the most callbacks?"                   → search_callback_insights(by="assignee")
@@ -452,7 +452,7 @@ def time_to_preview() -> dict:
 
 
 @mcp.tool()
-def search_estimates(
+def search_by_product(
     keyword: str,
     zip:     str = "",
     status:  str = "",
