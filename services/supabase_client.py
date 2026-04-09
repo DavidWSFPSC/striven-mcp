@@ -808,6 +808,194 @@ def query_callback_insights(
 
 
 # ---------------------------------------------------------------------------
+# Line-item keyword search — find estimates by product name / description
+# ---------------------------------------------------------------------------
+
+def query_estimates_by_keyword(
+    keyword: str,
+    zip_code:   str | None = None,
+    status:     str | None = None,
+    year:       int | None = None,
+    limit:      int        = 50,
+) -> dict:
+    """
+    Search estimates by keyword match in line item names or descriptions.
+
+    Strategy (two-step — Supabase-py has no native JOIN):
+      Step 1: Find estimate_ids whose line items contain the keyword
+              (ilike match on item_name OR description).
+      Step 2: Fetch those estimates from the estimates table, applying
+              optional zip/status/year filters via customer_locations lookup.
+
+    Args:
+        keyword:  Product or service term to match (case-insensitive, partial).
+                  e.g. "isokern", "gas log", "linear fireplace", "napoleon"
+        zip_code: Postal code to filter by (e.g. "29455" for Johns Island area).
+                  Matched against customer_locations.postal_code.
+        status:   Status to filter by (partial, case-insensitive).
+                  e.g. "Completed", "In Progress", "Quoted"
+        year:     Calendar year to restrict by created_date.
+        limit:    Max estimates to return in the sample (default 50).
+
+    Returns dict with:
+        count         — total matching estimates
+        total_revenue — sum of matching estimate totals
+        keyword       — echo of search term
+        filters       — all applied filters
+        by_status     — count + revenue breakdown by status
+        data          — sample estimates (up to limit), each with matched_items list
+    """
+    from collections import defaultdict
+
+    kw = keyword.strip()
+    if not kw:
+        return {"error": "keyword is required", "count": 0, "data": []}
+
+    # ── Step 1: find estimate_ids with matching line items ────────────────
+    # Search item_name (product SKU / name) and description (free-text detail)
+    li_res_name = (
+        _get_client()
+        .table("estimate_line_items")
+        .select("estimate_id, item_name, description")
+        .ilike("item_name", f"%{kw}%")
+        .execute()
+    )
+    li_res_desc = (
+        _get_client()
+        .table("estimate_line_items")
+        .select("estimate_id, item_name, description")
+        .ilike("description", f"%{kw}%")
+        .execute()
+    )
+
+    # Merge and de-dup, keeping one matched label per estimate_id
+    matched: dict[int, list[str]] = {}
+    for row in (li_res_name.data or []) + (li_res_desc.data or []):
+        eid   = row.get("estimate_id")
+        label = (row.get("item_name") or row.get("description") or "").strip()
+        if eid:
+            if eid not in matched:
+                matched[eid] = []
+            if label and label not in matched[eid]:
+                matched[eid].append(label)
+
+    if not matched:
+        return {
+            "count":         0,
+            "total_revenue": 0,
+            "keyword":       kw,
+            "filters":       {"zip": zip_code, "status": status, "year": year},
+            "by_status":     {},
+            "data":          [],
+            "note":          f"No line items found matching '{kw}'.",
+        }
+
+    estimate_ids = list(matched.keys())
+
+    # ── Step 2: optional zip filter — resolve zip → customer_ids ─────────
+    zip_customer_ids: set[int] | None = None
+    if zip_code:
+        loc_res = (
+            _get_client()
+            .table("customer_locations")
+            .select("customer_id")
+            .eq("postal_code", zip_code.strip())
+            .execute()
+        )
+        zip_customer_ids = {
+            r["customer_id"] for r in (loc_res.data or []) if r.get("customer_id")
+        }
+        if not zip_customer_ids:
+            return {
+                "count":         0,
+                "total_revenue": 0,
+                "keyword":       kw,
+                "filters":       {"zip": zip_code, "status": status, "year": year},
+                "by_status":     {},
+                "data":          [],
+                "note":          f"No customers found in zip code '{zip_code}'.",
+            }
+
+    # ── Step 3: fetch matching estimates (chunked) ────────────────────────
+    all_estimates: list[dict] = []
+    chunk_size = 100
+    for i in range(0, len(estimate_ids), chunk_size):
+        chunk = estimate_ids[i: i + chunk_size]
+        q = (
+            _get_client()
+            .table("estimates")
+            .select(
+                "estimate_id, estimate_number, customer_id, customer_name, "
+                "sales_rep_name, status_raw, status_normalized, "
+                "total_amount, created_date"
+            )
+            .in_("estimate_id", chunk)
+            .order("created_date", desc=True)
+        )
+        if zip_customer_ids is not None:
+            q = q.in_("customer_id", list(zip_customer_ids))
+        if status:
+            q = q.ilike("status_raw", f"%{status}%")
+        if year:
+            q = (
+                q
+                .gte("created_date", f"{year}-01-01T00:00:00+00:00")
+                .lt("created_date",  f"{year + 1}-01-01T00:00:00+00:00")
+            )
+        res = q.execute()
+        all_estimates.extend(res.data or [])
+
+    if not all_estimates:
+        return {
+            "count":         0,
+            "total_revenue": 0,
+            "keyword":       kw,
+            "filters":       {"zip": zip_code, "status": status, "year": year},
+            "by_status":     {},
+            "data":          [],
+            "note":          "Line items matched but no estimates passed the applied filters.",
+        }
+
+    # ── Step 4: aggregate ─────────────────────────────────────────────────
+    total_revenue = sum(e.get("total_amount") or 0 for e in all_estimates)
+    by_status: dict[str, dict] = defaultdict(lambda: {"count": 0, "revenue": 0.0})
+    for e in all_estimates:
+        s = e.get("status_raw") or "Unknown"
+        by_status[s]["count"]   += 1
+        by_status[s]["revenue"] += e.get("total_amount") or 0
+
+    for s in by_status:
+        by_status[s]["revenue"] = round(by_status[s]["revenue"], 2)
+
+    data = [
+        {
+            "estimate_number": e.get("estimate_number"),
+            "customer_name":   e.get("customer_name"),
+            "status":          e.get("status_raw"),
+            "sales_rep":       _normalize_sales_rep(e.get("sales_rep_name")),
+            "total":           e.get("total_amount"),
+            "created":         e.get("created_date"),
+            "matched_items":   matched.get(e.get("estimate_id"), [])[:5],
+        }
+        for e in all_estimates[:limit]
+    ]
+
+    return {
+        "count":         len(all_estimates),
+        "total_revenue": round(total_revenue, 2),
+        "keyword":       kw,
+        "filters":       {
+            "zip":    zip_code,
+            "status": status,
+            "year":   year,
+            "limit":  limit,
+        },
+        "by_status": dict(sorted(by_status.items(), key=lambda x: -x[1]["count"])),
+        "data":      data,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Charleston tri-county area → zip code map
 #
 # Used by query_jobs_by_area() to resolve named areas to postal codes before

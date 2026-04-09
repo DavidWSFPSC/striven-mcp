@@ -97,6 +97,7 @@ TOOLS AVAILABLE
 - backlog_by_rep               → active job count + revenue grouped by sales rep
 - jobs_by_location             → job count + revenue by named area (zip-code accurate for tri-county)
 - time_to_preview              → average days from estimate creation to site preview
+- search_estimates             → search estimates by product/service keyword in line items (e.g. "isokern", "gas log")
 - search_by_pipeline_status   → find active jobs by operational status (ready to schedule, waiting on product, etc.)
 - search_return_trips         → find return trip / callback tasks on estimates (live Striven scan)
 - search_callback_insights    → callback intelligence from historical database (fast, aggregated)
@@ -117,6 +118,8 @@ WHEN TO USE EACH TOOL
 - "Show me jobs ready to schedule"                → search_by_pipeline_status
 - "What jobs are waiting on product?"             → search_by_pipeline_status
 - "Which jobs need review before invoicing?"      → search_by_pipeline_status
+- "How many isokern jobs have we done?"            → search_estimates(keyword="isokern")
+- "Gas log installs in Kiawah?"                   → search_estimates(keyword="gas log", zip="29455")
 - "Show me all return trips"                      → search_return_trips
 - "Which jobs have callbacks?"                    → search_return_trips
 - "Who has the most callbacks?"                   → search_callback_insights(by="assignee")
@@ -446,6 +449,89 @@ def time_to_preview() -> dict:
                        each with estimate number, customer, and days_to_preview
     """
     return _call("get", "/queries/time-to-preview")
+
+
+@mcp.tool()
+def search_estimates(
+    keyword: str,
+    zip:     str = "",
+    status:  str = "",
+    year:    int = 0,
+    limit:   int = 50,
+) -> dict:
+    """
+    Search estimates by product or service keyword in line items, with optional
+    filters for zip code, status, and year.
+
+    Searches both item_name (product SKU) and description (free-text notes)
+    fields across all estimate line items, then joins to the estimate record.
+
+    Use when asked:
+      'How many isokern jobs have we done?'
+      'Show me all gas log estimates'
+      'How many linear fireplace installs in Kiawah?'
+      'What napoleon jobs did we complete in 2024?'
+      'How much isokern revenue came from Mount Pleasant?'
+      'Show me all electric fireplace estimates'
+      'How many isokern jobs in zip 29455?'
+      'What's our total revenue from gas log installs?'
+
+    Keyword examples (partial match, case-insensitive):
+      "isokern"       — Isokern masonry fireplace systems
+      "gas log"       — gas log sets and inserts
+      "linear"        — linear fireplaces
+      "napoleon"      — Napoleon brand products
+      "electric"      — electric fireplaces
+      "vented"        — vented gas logs
+      "gas insert"    — gas fireplace inserts
+      "wood burning"  — wood burning fireplaces
+      "outdoor"       — outdoor fireplaces
+
+    Args:
+        keyword: Product or service term to search in line item names/descriptions.
+                 Partial match, case-insensitive.
+
+        zip:     5-digit zip code to filter by job site address.
+                 Uses the customer_locations table — accurate geographic filter.
+                 Common zips:
+                   29455 = Johns Island / Kiawah / Seabrook Island
+                   29407 = West Ashley (inside 526)
+                   29414 = West Ashley (outside 526)
+                   29412 = James Island
+                   29464 = Mount Pleasant South
+                   29466 = Mount Pleasant North
+                   29492 = Daniel Island
+                 Leave empty to search all areas.
+
+        status:  Filter to a specific estimate status (partial match).
+                 e.g. "Completed", "In Progress", "Quoted", "Approved"
+                 Leave empty for all statuses.
+
+        year:    Filter to a specific calendar year (e.g. 2024 or 2025).
+                 Use 0 for all years (default).
+
+        limit:   Max estimates to return in the sample (default 50, max 500).
+
+    Returns:
+        count           — total estimates matching all filters
+        total_revenue   — sum of those estimate values
+        keyword         — echo of the search term
+        filters         — all applied filters
+        by_status       — count + revenue breakdown by status
+        data            — sample estimates, each including:
+                          estimate_number, customer_name, status, sales_rep,
+                          total, created date, matched_items (line item labels)
+    """
+    params: dict = {"keyword": keyword}
+    if zip:
+        params["zip"] = zip
+    if status:
+        params["status"] = status
+    if year and year > 0:
+        params["year"] = year
+    if limit != 50:
+        params["limit"] = limit
+    return _call("get", "/queries/search-by-product", params=params)
 
 
 @mcp.tool()

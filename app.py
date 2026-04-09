@@ -1921,6 +1921,60 @@ def return_trips():
 
 
 # ---------------------------------------------------------------------------
+# Line-item keyword search — find estimates by product name / description
+# ---------------------------------------------------------------------------
+
+@app.route("/queries/search-by-product", methods=["GET"])
+def search_by_product():
+    """
+    Search estimates by keyword in line item names or descriptions.
+
+    Finds every estimate that contains a matching line item, then applies
+    optional filters for zip code, status, and year.  All queries hit
+    Supabase — no Striven API calls needed.
+
+    Query params:
+        keyword  (required) — product/service term (case-insensitive, partial)
+                              e.g. "isokern", "gas log", "napoleon", "linear"
+        zip      (optional) — 5-digit zip code to filter by job site
+                              e.g. "29455" = Johns Island / Kiawah / Seabrook
+        status   (optional) — estimate status (partial match)
+                              e.g. "Completed", "In Progress", "Quoted"
+        year     (optional) — calendar year to restrict (e.g. 2024)
+        limit    (optional) — max sample rows returned (default 50)
+
+    Examples:
+        GET /queries/search-by-product?keyword=isokern
+        GET /queries/search-by-product?keyword=isokern&zip=29455
+        GET /queries/search-by-product?keyword=gas+log&status=Completed&year=2024
+        GET /queries/search-by-product?keyword=napoleon&zip=29407
+    """
+    from services.supabase_client import query_estimates_by_keyword
+
+    keyword = (request.args.get("keyword") or "").strip()
+    if not keyword:
+        return jsonify({
+            "error": "Query param 'keyword' is required.",
+            "hint":  "Try: ?keyword=isokern or ?keyword=gas+log",
+        }), 400
+
+    zip_code = request.args.get("zip") or None
+    status   = request.args.get("status") or None
+    limit    = min(int(request.args.get("limit", 50)), 500)
+
+    year_raw = request.args.get("year")
+    year: int | None = int(year_raw) if year_raw and year_raw.isdigit() else None
+
+    try:
+        result = query_estimates_by_keyword(
+            keyword=keyword, zip_code=zip_code, status=status, year=year, limit=limit
+        )
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
 # Callback / return-trip insights — reads from Supabase callback_tasks table
 # ---------------------------------------------------------------------------
 
