@@ -121,8 +121,16 @@ WHEN TO USE EACH TOOL
 - "Which jobs need review before invoicing?"      → search_by_pipeline_status
 - "What brands do we install most?"                → brand_summary()
 - "Brand breakdown in Kiawah?"                    → brand_summary(zip="29455")
-- "How many isokern jobs have we done?"            → search_by_product(keyword="isokern")
+- "How many isokern jobs have we done?"            → search_by_product(keyword="isokern")  ← NEVER use search_estimates for this
 - "Gas log installs in Kiawah?"                   → search_by_product(keyword="gas log", zip="29455")
+- "How many Heat & Glo jobs?"                     → search_by_product(keyword="heat & glo")
+- "Show me all Majestic estimates"                → search_by_product(keyword="majestic")
+- "Napoleon jobs completed in 2024"               → search_by_product(keyword="napoleon", status="Completed", year=2024)
+
+CRITICAL ROUTING RULE:
+Any question about a product brand or product type → search_by_product or brand_summary.
+NEVER call search_estimates for brand/product questions — it hits Striven's API and rate-limits.
+search_estimates is ONLY for status/date/estimate-number lookups.
 - "Show me all return trips"                      → search_return_trips
 - "Which jobs have callbacks?"                    → search_return_trips
 - "Who has the most callbacks?"                   → search_callback_insights(by="assignee")
@@ -223,9 +231,20 @@ def search_estimates(
     page: int = 1,
 ) -> dict:
     """
-    Flexible estimate search with optional filters.
+    Search estimates by status, date range, or estimate name/number.
+    Calls the Striven API directly — use sparingly to avoid rate limits.
 
-    Use when asked about estimates filtered by status, date range, or name.
+    IMPORTANT — DO NOT use this tool for product or brand searches.
+    If the user asks about a brand (Isokern, Heat & Glo, Napoleon, Majestic,
+    Acucraft, Stellar, Heatilator, Dimplex, etc.) or a product type (gas log,
+    gas insert, linear fireplace, electric fireplace) — use search_by_product
+    or brand_summary instead. Those tools hit Supabase and never rate-limit.
+
+    Use THIS tool only for:
+      - Filtering by status (Approved, In Progress, Completed, etc.)
+      - Filtering by date range (this month, this year, etc.)
+      - Looking up an estimate by its number or name fragment
+      - Filtering by a specific customer ID
 
     Status codes:
       18 = Incomplete
@@ -240,14 +259,14 @@ def search_estimates(
         customer_id: Filter by Striven customer ID (integer).
         date_from:   Start of date range, ISO 8601 format (e.g. '2025-01-01').
         date_to:     End of date range, ISO 8601 format (e.g. '2025-12-31').
-        keyword:     Filter by estimate name or number keyword.
+        keyword:     Filter by estimate name or number (NOT product/brand names).
         page_size:   Number of results to return (default 25, max 100).
         page:        Page number, 1-based (default 1).
 
     Examples:
       search_estimates(status=22)                          → all Approved
       search_estimates(status=19, date_from='2025-01-01') → Quoted this year
-      search_estimates(keyword='roof')                     → name contains 'roof'
+      search_estimates(keyword='8452')                     → find estimate #8452
     """
     params: dict = {
         "pageSize":  page_size,
