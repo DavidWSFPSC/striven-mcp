@@ -97,6 +97,7 @@ TOOLS AVAILABLE
 - backlog_by_rep               → active job count + revenue grouped by sales rep
 - jobs_by_location             → job count + revenue for a specific location/area
 - time_to_preview              → average days from estimate creation to site preview
+- search_by_pipeline_status   → find active jobs by operational status (ready to schedule, waiting on product, etc.)
 
 WHEN TO USE EACH TOOL
 ---------------------
@@ -110,6 +111,9 @@ WHEN TO USE EACH TOOL
 - "Who has the most active jobs?"                 → backlog_by_rep
 - "How much work do we have in Kiawah?"           → jobs_by_location
 - "How long does it take to schedule a preview?"  → time_to_preview
+- "Show me jobs ready to schedule"                → search_by_pipeline_status
+- "What jobs are waiting on product?"             → search_by_pipeline_status
+- "Which jobs need review before invoicing?"      → search_by_pipeline_status
 
 TONE & FORMAT
 -------------
@@ -406,6 +410,64 @@ def time_to_preview() -> dict:
                        each with estimate number, customer, and days_to_preview
     """
     return _call("get", "/queries/time-to-preview")
+
+
+@mcp.tool()
+def search_by_pipeline_status(status: str, limit: int = 200) -> dict:
+    """
+    Find all active (Approved or In-Progress) estimates that match a specific
+    pipeline/operational status based on custom field values in Striven.
+
+    Use when asked:
+      'Show me jobs that are ready to schedule'
+      'What estimates are waiting on product?'
+      'Which jobs need review before invoicing?'
+      'Find all return trip required jobs'
+      'Show me installations that are complete'
+      'What jobs have all product received?'
+
+    Valid status values (case-insensitive):
+      Order Fulfillment Status (field 1501):
+        - ready to schedule          (All Product Received: Ready To Schedule)
+        - all product received        (same as above)
+        - waiting on product
+        - order placed
+        - product not ordered
+        - partial product received
+
+      Ops Install Status (field 1521):
+        - return trip required        (Installation Incomplete - Return Trip Required)
+        - installation incomplete     (same as above)
+        - installation complete
+        - ops complete                (same as installation complete)
+
+      Post Install Status (field 1503):
+        - needs review before invoicing
+        - needs review                (same as above)
+        - ready to invoice
+        - invoiced
+        - n/a
+
+    Args:
+        status: Pipeline status phrase to search for (see valid values above).
+        limit:  Maximum number of estimates to scan (default 200).
+                Higher values give more complete results but take longer.
+                Each estimate requires one Striven API call.
+
+    Returns:
+        count         — number of estimates matching the status
+        status        — canonical label for the matched status
+        field_id      — which custom field was checked
+        scanned       — total estimates scanned
+        filters       — echo of search parameters
+        data          — list of matching estimates, each with estimate_number,
+                        customer_name, sales_rep, total_value, created_date,
+                        and pipeline_status
+    """
+    params: dict = {"status": status}
+    if limit != 200:
+        params["limit"] = limit
+    return _call("get", "/queries/pipeline-status", params=params)
 
 
 # ---------------------------------------------------------------------------

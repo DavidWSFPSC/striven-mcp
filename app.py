@@ -1568,6 +1568,199 @@ def time_to_preview():
 
 
 # ---------------------------------------------------------------------------
+# Pipeline status endpoint — filter active estimates by custom field value
+#
+# Striven does not support native custom field filtering via the search API.
+# This endpoint pages through active estimates, fetches full detail for each,
+# and matches on customFields[].value (numeric ID) or valueText (label string).
+#
+# Known field map (confirmed from live Striven data):
+#   Field 1501 — Order Fulfillment Status
+#   Field 1521 — Operations Installation Status (Ops Install Status)
+#   Field 1503 — Post Install Status
+#
+# Value IDs are mapped below.  New values can be added as they are discovered
+# from live Striven responses.
+# ---------------------------------------------------------------------------
+
+# Friendly alias → (field_id, value_id, canonical_label)
+_PIPELINE_STATUS_MAP: dict[str, tuple[int, str, str]] = {
+    # Order Fulfillment Status (field 1501)
+    "ready to schedule":             (1501, "63", "All Product Received: Ready To Schedule"),
+    "all product received":          (1501, "63", "All Product Received: Ready To Schedule"),
+    "all product received ready to schedule": (1501, "63", "All Product Received: Ready To Schedule"),
+    "waiting on product":            (1501, "64", "Waiting On Product"),
+    "order placed":                  (1501, "65", "Order Placed"),
+    "product not ordered":           (1501, "66", "Product Not Ordered"),
+    "partial product received":      (1501, "67", "Partial Product Received"),
+
+    # Operations Installation Status (field 1521)
+    "return trip required":          (1521, "96", "Installation Incomplete - Return Trip Required"),
+    "installation incomplete":       (1521, "96", "Installation Incomplete - Return Trip Required"),
+    "installation complete":         (1521, "97", "Installation Complete"),
+    "ops complete":                  (1521, "97", "Installation Complete"),
+
+    # Post Install Status (field 1503)
+    "needs review before invoicing": (1503, "35", "Needs Review Before Invoicing"),
+    "needs review":                  (1503, "35", "Needs Review Before Invoicing"),
+    "ready to invoice":              (1503, "36", "Ready To Invoice"),
+    "invoiced":                      (1503, "37", "Invoiced"),
+    "n/a":                           (1503, "38", "N/A"),
+}
+
+
+def _extract_custom_field_value(custom_fields: list, field_id: int) -> tuple[str | None, str | None]:
+    """Return (value_id, value_text) for a given field_id from a customFields list."""
+    for cf in custom_fields:
+        if cf.get("id") == field_id or cf.get("Id") == field_id:
+            val  = str(cf.get("value")     or cf.get("Value")     or "").strip()
+            text = str(cf.get("valueText") or cf.get("ValueText") or "").strip()
+            return (val or None, text or None)
+    return (None, None)
+
+
+@app.route("/queries/pipeline-status", methods=["GET"])
+def pipeline_status():
+    """
+    Filter active Striven estimates by a pipeline custom field value.
+
+    Scans Approved (22) and In Progress (25) estimates, fetches full detail
+    for each, and returns those matching the requested pipeline status.
+
+    Query params:
+        status  (required) — friendly status name, e.g.:
+                             "ready to schedule"
+                             "return trip required"
+                             "needs review before invoicing"
+        limit   (optional) — max estimates to scan (default 200, max 500).
+                             Higher = more complete but slower (one API call per estimate).
+
+    Examples:
+        GET /queries/pipeline-status?status=ready+to+schedule
+        GET /queries/pipeline-status?status=return+trip+required&limit=300
+
+    Performance note:
+        Each matched estimate requires one GET /v1/sales-orders/{id} call.
+        Expect 1–3 seconds per 10 estimates scanned on a warm Render instance.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    status_raw = request.args.get("status", "").strip().lower()
+    if not status_raw:
+        return jsonify({
+            "error": "Query param 'status' is required.",
+            "valid_values": list(_PIPELINE_STATUS_MAP.keys()),
+        }), 400
+
+    mapping = _PIPELINE_STATUS_MAP.get(status_raw)
+    if not mapping:
+        # Try partial match
+        for key, val in _PIPELINE_STATUS_MAP.items():
+            if status_raw in key or key in status_raw:
+                mapping = val
+                break
+
+    if not mapping:
+        return jsonify({
+            "error": f"Unknown status: {status_raw!r}",
+            "valid_values": list(_PIPELINE_STATUS_MAP.keys()),
+        }), 400
+
+    field_id, target_value_id, canonical_label = mapping
+    scan_limit = min(int(request.args.get("limit", 200)), 500)
+
+    try:
+        # ── Step 1: collect estimate stubs (Approved + In Progress) ──────────
+        stubs: list[dict] = []
+        for status_id in (22, 25):
+            page = 0
+            while len(stubs) < scan_limit:
+                resp  = striven.search_sales_orders({
+                    "PageIndex":       page,
+                    "PageSize":        100,
+                    "StatusChangedTo": status_id,
+                })
+                total, data = _striven_page(resp)
+                if not data:
+                    break
+                stubs.extend(data)
+                if (page + 1) * 100 >= total:
+                    break
+                page += 1
+            if len(stubs) >= scan_limit:
+                break
+
+        stubs = stubs[:scan_limit]
+
+        if not stubs:
+            return jsonify({
+                "count":   0,
+                "status":  canonical_label,
+                "filters": {"field_id": field_id, "value_id": target_value_id},
+                "data":    [],
+            })
+
+        # ── Step 2: fetch full detail in parallel, filter by custom field ────
+        matches: list[dict] = []
+
+        def _check(stub: dict) -> dict | None:
+            oid = stub.get("Id") or stub.get("id")
+            if not oid:
+                return None
+            try:
+                raw    = striven.get_estimate(oid)
+                cfields = raw.get("customFields") or raw.get("CustomFields") or []
+                val_id, val_text = _extract_custom_field_value(cfields, field_id)
+
+                # Match on value ID or text label (case-insensitive)
+                matched = (
+                    val_id == target_value_id
+                    or (val_text and canonical_label.lower() in val_text.lower())
+                    or (val_text and val_text.lower() in canonical_label.lower())
+                )
+                if not matched:
+                    return None
+
+                detail = _fmt_detail(raw)
+                return {
+                    "estimate_id":     detail.get("id"),
+                    "estimate_number": detail.get("estimate_number"),
+                    "customer":        detail.get("customer_name"),
+                    "sales_rep":       _normalize_sales_rep(detail.get("sales_rep_name")),
+                    "status":          detail.get("status"),
+                    "total":           detail.get("total"),
+                    "created":         detail.get("date_created"),
+                    "target_date":     detail.get("target_date"),
+                    "pipeline_status": canonical_label,
+                    "field_value_raw": val_text or val_id,
+                }
+            except Exception:
+                return None
+
+        # Use a thread pool — cap at 10 concurrent Striven API calls
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(_check, s): s for s in stubs}
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    matches.append(result)
+
+        # Sort newest first
+        matches.sort(key=lambda x: x.get("created") or "", reverse=True)
+
+        return jsonify({
+            "count":        len(matches),
+            "status":       canonical_label,
+            "scanned":      len(stubs),
+            "filters":      {"field_id": field_id, "value_id": target_value_id},
+            "data":         matches,
+        })
+
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
 # /ask — keyword router: routes known questions to direct endpoints, falls
 #         through to the Claude agentic loop only for unknown questions.
 # ---------------------------------------------------------------------------
