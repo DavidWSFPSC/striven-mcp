@@ -808,6 +808,54 @@ def query_callback_insights(
 
 
 # ---------------------------------------------------------------------------
+# Brand catalog — all brands carried by WilliamSmith Fireplaces
+#
+# Each entry: (display_name, [search_keywords])
+# Keywords are what actually appear in Striven line item names/descriptions.
+# Multiple keywords handle spelling variants, abbreviations, model prefixes.
+# ---------------------------------------------------------------------------
+
+_BRAND_CATALOG: list[tuple[str, list[str]]] = [
+    # ── Masonry / custom systems ────────────────────────────────────────────
+    ("Isokern",             ["isokern"]),
+    ("FireRock",            ["firerock"]),
+    ("Stellar",             ["stellar"]),
+    ("Acucraft",            ["acucraft", "accucraft"]),
+
+    # ── Gas fireplaces & inserts ────────────────────────────────────────────
+    ("Heat & Glo",          ["heat & glo", "heat n glo", "heatnglo", "heat and glo"]),
+    ("Heatilator",          ["heatilator"]),
+    ("Majestic",            ["majestic"]),
+    ("Napoleon",            ["napoleon"]),
+    ("Montigo",             ["montigo"]),
+    ("Kozy Heat",           ["kozy heat", "kozyheat"]),
+    ("Monessen",            ["monessen"]),
+    ("Superior",            ["superior"]),
+    ("Astria",              ["astria"]),
+    ("American Fyre Designs", ["american fyre", "american fyre designs"]),
+
+    # ── Electric fireplaces ──────────────────────────────────────────────────
+    ("Dimplex",             ["dimplex"]),
+    ("SimpliFire",          ["simplifire"]),
+    ("Ortal",               ["ortal"]),
+
+    # ── European / custom linear ─────────────────────────────────────────────
+    ("Element 4",           ["element 4", "element4"]),
+    ("Focus",               ["focus fireplaces", "focus fires"]),  # 'focus' alone too generic
+    ("JC Bordelet",         ["bordelet", "jc bordelet"]),
+    ("European Home",       ["european home"]),
+
+    # ── Gas logs ────────────────────────────────────────────────────────────
+    ("Rasmussen",           ["rasmussen"]),
+    ("RH Peterson",         ["rh peterson", "r.h. peterson", "peterson real fyre"]),
+    ("Grand Canyon",        ["grand canyon"]),
+
+    # ── Accessories / other ──────────────────────────────────────────────────
+    ("Stoll",               ["stoll"]),
+]
+
+
+# ---------------------------------------------------------------------------
 # Line-item keyword search — find estimates by product name / description
 # ---------------------------------------------------------------------------
 
@@ -992,6 +1040,160 @@ def query_estimates_by_keyword(
         },
         "by_status": dict(sorted(by_status.items(), key=lambda x: -x[1]["count"])),
         "data":      data,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Brand leaderboard — all brands ranked by job count and revenue
+# ---------------------------------------------------------------------------
+
+def query_brand_summary(
+    year:     int | None = None,
+    zip_code: str | None = None,
+    min_jobs: int        = 1,
+) -> dict:
+    """
+    Return a ranked leaderboard of all WilliamSmith brands by job count and revenue.
+
+    For each brand in _BRAND_CATALOG, searches estimate_line_items for matching
+    keywords (item_name + description), then joins to estimates for revenue.
+    Optional year and zip_code filters are applied to the estimate side.
+
+    Strategy:
+      1. Pre-build a valid estimate_id set (filtered by year/zip if given).
+      2. For each brand, query line items by keyword → intersect with valid IDs.
+      3. Aggregate job count + revenue per brand.
+      Runs brand lookups in parallel (ThreadPoolExecutor) for speed.
+
+    Args:
+        year:     Restrict to a specific calendar year.
+        zip_code: Restrict to a specific zip code (via customer_locations).
+        min_jobs: Only include brands with at least this many jobs (default 1).
+
+    Returns dict with:
+        brands      — list of {brand, job_count, total_revenue, top_status}
+                      sorted by job_count descending
+        total_jobs  — sum of all matched jobs across all brands
+        filters     — applied filters
+        note        — caveat if a zip/year filter was active
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    client = _get_client()
+
+    # ── Step 1: build valid estimate_id → revenue lookup (filtered) ────────
+    zip_customer_ids: set[int] | None = None
+    if zip_code:
+        loc_res = (
+            client.table("customer_locations")
+            .select("customer_id")
+            .eq("postal_code", zip_code.strip())
+            .execute()
+        )
+        zip_customer_ids = {
+            r["customer_id"] for r in (loc_res.data or []) if r.get("customer_id")
+        }
+
+    # Fetch all estimates (chunked for year/zip filters)
+    est_lookup: dict[int, dict] = {}
+    chunk_size = 1000
+    page = 0
+    while True:
+        q = (
+            client.table("estimates")
+            .select("estimate_id, total_amount, status_raw, customer_id")
+            .range(page * chunk_size, (page + 1) * chunk_size - 1)
+        )
+        if year:
+            q = (
+                q
+                .gte("created_date", f"{year}-01-01T00:00:00+00:00")
+                .lt("created_date",  f"{year + 1}-01-01T00:00:00+00:00")
+            )
+        if zip_customer_ids is not None:
+            # Filter in chunks of 100
+            pass   # handled below
+        res = q.execute()
+        rows = res.data or []
+        if not rows:
+            break
+        for r in rows:
+            eid = r.get("estimate_id")
+            if eid and (
+                zip_customer_ids is None
+                or r.get("customer_id") in zip_customer_ids
+            ):
+                est_lookup[eid] = r
+        if len(rows) < chunk_size:
+            break
+        page += 1
+
+    valid_ids = set(est_lookup.keys())
+
+    if not valid_ids:
+        return {
+            "brands":     [],
+            "total_jobs": 0,
+            "filters":    {"year": year, "zip": zip_code},
+            "note":       "No estimates found matching the given filters.",
+        }
+
+    # ── Step 2: for each brand, count matching estimate_ids in parallel ────
+    def _brand_count(brand_name: str, keywords: list[str]) -> dict:
+        matched: set[int] = set()
+        for kw in keywords:
+            for field in ("item_name", "description"):
+                try:
+                    li_res = (
+                        client.table("estimate_line_items")
+                        .select("estimate_id")
+                        .ilike(field, f"%{kw}%")
+                        .execute()
+                    )
+                    for r in (li_res.data or []):
+                        eid = r.get("estimate_id")
+                        if eid and eid in valid_ids:
+                            matched.add(eid)
+                except Exception:
+                    pass
+        if len(matched) < min_jobs:
+            return {}
+        revenue = sum(est_lookup[eid].get("total_amount") or 0 for eid in matched)
+        # Find most common status
+        status_counts: dict[str, int] = {}
+        for eid in matched:
+            s = est_lookup[eid].get("status_raw") or "Unknown"
+            status_counts[s] = status_counts.get(s, 0) + 1
+        top_status = max(status_counts, key=lambda x: status_counts[x]) if status_counts else "Unknown"
+        return {
+            "brand":         brand_name,
+            "job_count":     len(matched),
+            "total_revenue": round(revenue, 2),
+            "top_status":    top_status,
+        }
+
+    results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {
+            pool.submit(_brand_count, name, keywords): name
+            for name, keywords in _BRAND_CATALOG
+        }
+        for future in as_completed(futures):
+            r = future.result()
+            if r:
+                results.append(r)
+
+    results.sort(key=lambda x: (-x["job_count"], -x["total_revenue"]))
+
+    return {
+        "brands":     results,
+        "total_jobs": sum(r["job_count"] for r in results),
+        "filters":    {"year": year, "zip": zip_code, "min_jobs": min_jobs},
+        "note":       (
+            f"Each job counted once per brand. "
+            f"A single estimate may appear under multiple brands if it has "
+            f"line items from more than one manufacturer."
+        ),
     }
 
 

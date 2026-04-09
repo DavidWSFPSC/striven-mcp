@@ -1975,6 +1975,43 @@ def search_by_product():
 
 
 # ---------------------------------------------------------------------------
+# Brand leaderboard — all brands ranked by job count + revenue
+# ---------------------------------------------------------------------------
+
+@app.route("/queries/brand-summary", methods=["GET"])
+def brand_summary():
+    """
+    Return a ranked leaderboard of all WilliamSmith brands by job count and revenue.
+
+    Searches every brand in the product catalog against estimate line items,
+    then aggregates. Optional filters for year and zip code.
+
+    Query params:
+        year     (optional) — calendar year to restrict (e.g. 2024)
+        zip      (optional) — 5-digit zip code (e.g. "29455" = Kiawah area)
+        min_jobs (optional) — exclude brands with fewer than N jobs (default 1)
+
+    Examples:
+        GET /queries/brand-summary
+        GET /queries/brand-summary?year=2024
+        GET /queries/brand-summary?zip=29455
+        GET /queries/brand-summary?year=2025&min_jobs=5
+    """
+    from services.supabase_client import query_brand_summary
+
+    year_raw = request.args.get("year")
+    year: int | None = int(year_raw) if year_raw and year_raw.isdigit() else None
+    zip_code  = request.args.get("zip") or None
+    min_jobs  = int(request.args.get("min_jobs", 1))
+
+    try:
+        result = query_brand_summary(year=year, zip_code=zip_code, min_jobs=min_jobs)
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
 # Callback / return-trip insights — reads from Supabase callback_tasks table
 # ---------------------------------------------------------------------------
 

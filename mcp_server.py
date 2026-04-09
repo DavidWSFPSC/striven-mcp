@@ -98,6 +98,7 @@ TOOLS AVAILABLE
 - jobs_by_location             → job count + revenue by named area (zip-code accurate for tri-county)
 - time_to_preview              → average days from estimate creation to site preview
 - search_by_product            → search estimates by product/service keyword in line items (e.g. "isokern", "gas log")
+- brand_summary                → leaderboard of all brands by job count + revenue (all 24 brands in one call)
 - search_by_pipeline_status   → find active jobs by operational status (ready to schedule, waiting on product, etc.)
 - search_return_trips         → find return trip / callback tasks on estimates (live Striven scan)
 - search_callback_insights    → callback intelligence from historical database (fast, aggregated)
@@ -118,6 +119,8 @@ WHEN TO USE EACH TOOL
 - "Show me jobs ready to schedule"                → search_by_pipeline_status
 - "What jobs are waiting on product?"             → search_by_pipeline_status
 - "Which jobs need review before invoicing?"      → search_by_pipeline_status
+- "What brands do we install most?"                → brand_summary()
+- "Brand breakdown in Kiawah?"                    → brand_summary(zip="29455")
 - "How many isokern jobs have we done?"            → search_by_product(keyword="isokern")
 - "Gas log installs in Kiawah?"                   → search_by_product(keyword="gas log", zip="29455")
 - "Show me all return trips"                      → search_return_trips
@@ -476,16 +479,48 @@ def search_by_product(
       'How many isokern jobs in zip 29455?'
       'What's our total revenue from gas log installs?'
 
-    Keyword examples (partial match, case-insensitive):
-      "isokern"       — Isokern masonry fireplace systems
-      "gas log"       — gas log sets and inserts
-      "linear"        — linear fireplaces
-      "napoleon"      — Napoleon brand products
-      "electric"      — electric fireplaces
-      "vented"        — vented gas logs
-      "gas insert"    — gas fireplace inserts
-      "wood burning"  — wood burning fireplaces
-      "outdoor"       — outdoor fireplaces
+    Brand keywords (use the brand name as the keyword):
+      Masonry & custom systems:
+        "isokern"         — Isokern masonry fireplace systems
+        "firerock"        — FireRock masonry fireplaces
+        "stellar"         — Stellar fireplaces
+        "acucraft"        — Acucraft custom fireplaces
+
+      Gas fireplaces & inserts:
+        "heat & glo"      — Heat & Glo gas fireplaces
+        "heatilator"      — Heatilator fireplaces
+        "majestic"        — Majestic fireplaces
+        "napoleon"        — Napoleon fireplaces
+        "montigo"         — Montigo fireplaces
+        "kozy heat"       — Kozy Heat fireplaces
+        "monessen"        — Monessen fireplaces
+        "superior"        — Superior fireplaces
+        "astria"          — Astria fireplaces
+        "american fyre"   — American Fyre Designs
+
+      Electric fireplaces:
+        "dimplex"         — Dimplex electric fireplaces
+        "simplifire"      — SimpliFire electric fireplaces
+        "ortal"           — Ortal fireplaces
+
+      European / custom linear:
+        "element 4"       — Element 4 linear fireplaces
+        "bordelet"        — JC Bordelet fireplaces
+        "european home"   — European Home fireplaces
+
+      Gas logs:
+        "rasmussen"       — Rasmussen gas logs
+        "rh peterson"     — RH Peterson / Real Fyre gas logs
+        "grand canyon"    — Grand Canyon gas logs
+
+      Product types (when no specific brand):
+        "gas log"         — any gas log set
+        "gas insert"      — any gas insert
+        "linear"          — any linear fireplace
+        "electric"        — any electric fireplace
+        "wood burning"    — wood burning fireplaces
+        "outdoor"         — outdoor fireplaces / fire pits
+        "stoll"           — Stoll doors, screens, cabinetry
 
     Args:
         keyword: Product or service term to search in line item names/descriptions.
@@ -532,6 +567,57 @@ def search_by_product(
     if limit != 50:
         params["limit"] = limit
     return _call("get", "/queries/search-by-product", params=params)
+
+
+@mcp.tool()
+def brand_summary(year: int = 0, zip: str = "", min_jobs: int = 1) -> dict:
+    """
+    Return a ranked leaderboard of all WilliamSmith brands by job count and revenue.
+
+    Scans every brand we carry against estimate line items and returns a sorted
+    table — who we install most, total revenue per brand, and most common status.
+    Optional filters to narrow by year or geographic area (zip code).
+
+    Use when asked:
+      'What brands do we install the most?'
+      'Show me our brand breakdown'
+      'Which fireplace brand generates the most revenue?'
+      'What brands have we done in Kiawah?'
+      'Compare our brand mix in 2024 vs 2025'
+      'What's our top brand by revenue?'
+      'How many Isokern vs Majestic jobs have we done?'
+      'Which brands did we install in West Ashley last year?'
+
+    Brands covered (all brands WilliamSmith carries):
+      Isokern, FireRock, Stellar, Acucraft,
+      Heat & Glo, Heatilator, Majestic, Napoleon, Montigo,
+      Kozy Heat, Monessen, Superior, Astria, American Fyre Designs,
+      Dimplex, SimpliFire, Ortal,
+      Element 4, JC Bordelet, European Home,
+      Rasmussen, RH Peterson, Grand Canyon, Stoll
+
+    Args:
+        year:     Filter to a specific calendar year (e.g. 2024 or 2025).
+                  Use 0 for all years (default).
+        zip:      Filter by 5-digit zip code (e.g. "29455" = Kiawah/Johns Island).
+                  Leave empty for all areas.
+        min_jobs: Only include brands with at least this many jobs (default 1).
+                  Use 5 to hide brands with very few installs.
+
+    Returns:
+        brands      — ranked list of {brand, job_count, total_revenue, top_status}
+        total_jobs  — total jobs across all brands in the result
+        filters     — echo of applied filters
+        note        — data caveat (a job with 2 brands counts for both)
+    """
+    params: dict = {}
+    if year and year > 0:
+        params["year"] = year
+    if zip:
+        params["zip"] = zip
+    if min_jobs != 1:
+        params["min_jobs"] = min_jobs
+    return _call("get", "/queries/brand-summary", params=params or None)
 
 
 @mcp.tool()
