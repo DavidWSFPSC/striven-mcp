@@ -742,10 +742,12 @@
 
   // ── Preview panel ──────────────────────────────────────────────────────────
   function showPreview(moduleKey) {
+    const panelEl  = document.getElementById("intel-preview");
+    if (!panelEl) return;   // panel removed from simplified UI
+
     const snap = SNAPSHOTS[moduleKey];
     const mod  = MODULES[moduleKey];
 
-    const panelEl  = document.getElementById("intel-preview");
     const headerEl = document.getElementById("preview-header");
     const itemsEl  = document.getElementById("preview-items");
 
@@ -800,7 +802,7 @@
   }
 
   function hidePreview() {
-    document.getElementById("intel-preview").classList.remove("open");
+    document.getElementById("intel-preview")?.classList.remove("open");
   }
 
   // ── Drill-down ─────────────────────────────────────────────────────────────
@@ -895,39 +897,32 @@
   }
 
   // ── Core API call (shared by all entry points) ─────────────────────────────
+  // CONNECTION TEST: hardwired to /queries/gas-log-missing (fast, Supabase-only)
+  // Bypasses /api/chat entirely to verify UI → backend wiring.
+  // Replace this with the real callChat() once confirmed working.
   async function callChat() {
     try {
-      const res = await fetch("/api/chat", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ messages: history }),
-      });
-
-      // Parse JSON defensively — non-JSON body (e.g. Render cold-start HTML) would throw
-      let data;
-      try { data = await res.json(); }
-      catch { data = { error: `Server error (HTTP ${res.status}) — the service may be waking up. Please try again in a few seconds.` }; }
+      const res  = await fetch("/queries/gas-log-missing?limit=5");
+      const data = await res.json();
 
       removeTyping();
 
-      // Friendly messages for known HTTP status codes
-      let text;
-      if (res.status === 429) {
-        text = "Still processing the last request — please wait a moment and try again.";
-      } else if (res.status >= 500) {
-        text = "The server ran into an issue. Please wait a few seconds and try again.";
+      if (!res.ok || data.error) {
+        addMessage("assistant", `Error: ${data.error || res.statusText}`);
       } else {
-        text = data.error ? `Something went wrong: ${data.error}` : data.response;
+        // Pretty-print the JSON so we can visually confirm the data
+        const text = "**Connection test — `/queries/backlog-by-rep` response:**\n\n```json\n"
+                   + JSON.stringify(data, null, 2)
+                   + "\n```";
+        addMessage("assistant", text);
+        history.push({ role: "assistant", content: text });
       }
 
-      addMessage("assistant", text);
-      if (!data.error && res.ok) history.push({ role: "assistant", content: data.response });
-
-    } catch {
+    } catch (err) {
       removeTyping();
-      addMessage("assistant", "Connection error — the service may be waking up. Please try again in a few seconds.");
+      addMessage("assistant", `Connection error: ${err.message}`);
     }
-    // Cooldown: keep busy=true for COOLDOWN_MS after response to prevent burst requests
+
     await new Promise(r => setTimeout(r, COOLDOWN_MS));
     setBusy(false);
     inputEl.focus();
@@ -969,6 +964,7 @@
 
   // ── Regular chat ───────────────────────────────────────────────────────────
   async function sendMessage() {
+    console.log("SEND TRIGGERED");
     const text = inputEl.value.trim();
     if (!text) return;
     if (busy) { _flashHint("Finishing previous request…"); return; }
