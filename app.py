@@ -1776,140 +1776,137 @@ def pipeline_status():
 # Return-trip / callback task helper
 # ---------------------------------------------------------------------------
 
-# Keywords used to identify return-trip or callback tasks by name.
-# Matched case-insensitively against the task's Name field.
-_RETURN_TRIP_KEYWORDS = ("return", "callback", "call back", "trip")
+# Task type IDs that represent return trips or callbacks in Striven.
+# Using task type IDs (not keyword matching) because task search stubs
+# don't include the task name field — only the type is available on stubs.
+#
+# 71  = Installer: Return Trip (Unplanned)/Punch Work (ONLY)
+# 72  = Service: Return Trip (Unplanned) (Only Scheduled By Service Manager)
+# 124 = Service Diagnostic Repair: Call Back (Only Scheduled By Service Manager)
+_RETURN_TRIP_TASK_TYPE_IDS: tuple[int, ...] = (71, 72, 124)
 
-
-def _is_return_trip_task(task_name: str) -> bool:
-    """Return True if the task name suggests a return trip or callback."""
-    low = task_name.lower()
-    return any(kw in low for kw in _RETURN_TRIP_KEYWORDS)
+_RETURN_TRIP_TYPE_LABELS: dict[int, str] = {
+    71:  "Installer: Return Trip",
+    72:  "Service: Return Trip",
+    124: "Service: Call Back",
+}
 
 
 @app.route("/queries/return-trips", methods=["GET"])
 def return_trips():
     """
-    Find tasks on active estimates that represent return trips or callbacks.
+    Find return trip and callback tasks across Striven, enriched with
+    the linked estimate's customer, estimate number, and sales rep.
 
-    Pulls recent tasks from Striven and filters by name containing
-    'return', 'callback', 'call back', or 'trip'.  Each match is enriched
-    with its linked estimate's number and customer name.
+    Uses task type ID filtering (not keyword matching) — the Striven task
+    search API filters by TaskTypeId so results are precise and fast.
+
+    Task types included:
+      71  — Installer: Return Trip (Unplanned)/Punch Work
+      72  — Service: Return Trip (Unplanned)
+      124 — Service Diagnostic Repair: Call Back
 
     Query params:
-        limit   (optional) — max tasks to scan (default 300, max 1000)
-        days    (optional) — scan tasks created in the last N days (default 180)
+        limit   (optional) — max tasks to fetch per task type (default 200, max 500)
 
     Examples:
         GET /queries/return-trips
-        GET /queries/return-trips?limit=500&days=90
+        GET /queries/return-trips?limit=100
     """
-    from datetime import datetime, timedelta
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    task_limit = min(int(request.args.get("limit", 300)), 1000)
-    days_back  = min(int(request.args.get("days", 180)), 730)
-
-    date_from = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%dT00:00:00")
+    per_type_limit = min(int(request.args.get("limit", 200)), 500)
 
     try:
-        # ── Step 1: pull recent tasks in pages ──────────────────────────────
-        tasks_raw: list[dict] = []
-        page = 0
-        while len(tasks_raw) < task_limit:
-            resp = striven.search_tasks({
-                "PageIndex": page,
-                "PageSize":  100,
-                "DueDateRange": {"DateFrom": date_from},
-            })
-            total, data = _striven_page(resp)
-            if not data:
-                break
-            tasks_raw.extend(data)
-            if (page + 1) * 100 >= total or len(tasks_raw) >= task_limit:
-                break
-            page += 1
+        # ── Step 1: pull tasks for each return-trip type ─────────────────────
+        all_tasks: list[dict] = []
+        for type_id in _RETURN_TRIP_TASK_TYPE_IDS:
+            page = 0
+            fetched = 0
+            while fetched < per_type_limit:
+                resp = striven.search_tasks({
+                    "PageIndex":  page,
+                    "PageSize":   100,
+                    "TaskTypeId": type_id,
+                })
+                total, data = _striven_page(resp)
+                if not data:
+                    break
+                # Tag each task stub with its known type label
+                for t in data:
+                    t["_type_label"] = _RETURN_TRIP_TYPE_LABELS[type_id]
+                all_tasks.extend(data)
+                fetched += len(data)
+                if (page + 1) * 100 >= total or fetched >= per_type_limit:
+                    break
+                page += 1
 
-        tasks_raw = tasks_raw[:task_limit]
-
-        # ── Step 2: filter by keyword match on task name ────────────────────
-        matched_tasks: list[dict] = []
-        for t in tasks_raw:
-            name = t.get("Name") or t.get("name") or ""
-            if _is_return_trip_task(name):
-                matched_tasks.append(t)
-
-        if not matched_tasks:
+        if not all_tasks:
             return jsonify({
-                "count":   0,
-                "scanned": len(tasks_raw),
-                "filters": {"days": days_back, "keywords": list(_RETURN_TRIP_KEYWORDS)},
-                "data":    [],
+                "count":      0,
+                "task_types": list(_RETURN_TRIP_TYPE_LABELS.values()),
+                "data":       [],
             })
 
-        # ── Step 3: enrich with estimate detail from Striven ─────────────────
-        # RelatedEntity on task stubs holds the linked estimate ID
-        def _enrich_task(t: dict) -> dict | None:
-            name    = t.get("Name") or t.get("name") or "Unknown"
-            status  = (t.get("Status") or t.get("status") or {})
-            status_name = (
-                status.get("Name") or status.get("name")
-                if isinstance(status, dict) else str(status)
-            ) or "Unknown"
-            assigned = t.get("AssignedTo") or t.get("assignedTo") or {}
-            assigned_name = (
-                assigned.get("Name") or assigned.get("name")
-                if isinstance(assigned, dict) else str(assigned)
-            ) or "Unassigned"
-            due_date  = t.get("DueDate")   or t.get("dueDate")
-            created   = t.get("DateCreated") or t.get("dateCreated")
+        # ── Step 2: fetch full task detail + estimate detail in parallel ─────
+        # The search stub is minimal; GET /v2/tasks/{id} returns the full record
+        # including RelatedEntity (linked estimate), AssignedTo, DueDate, etc.
+        def _enrich(stub: dict) -> dict | None:
+            task_id    = stub.get("Id") or stub.get("id")
+            type_label = stub.get("_type_label", "Return Trip")
+            if not task_id:
+                return None
+            try:
+                t = striven.get_task(int(task_id))
 
-            related   = t.get("RelatedEntity") or t.get("relatedEntity") or {}
-            est_id    = related.get("Id") or related.get("id")
+                status   = t.get("Status")     or t.get("status")     or {}
+                assigned = t.get("AssignedTo") or t.get("assignedTo") or {}
+                related  = t.get("RelatedEntity") or t.get("relatedEntity") or {}
 
-            record = {
-                "task_name":       name,
-                "task_status":     status_name,
-                "assigned_to":     assigned_name,
-                "due_date":        due_date,
-                "task_created":    created,
-                "estimate_id":     est_id,
-                "estimate_number": None,
-                "customer":        None,
-                "sales_rep":       None,
-                "estimate_total":  None,
-            }
+                status_name   = (status.get("Name")   or status.get("name"))   if isinstance(status, dict)   else str(status)
+                assigned_name = (assigned.get("Name")  or assigned.get("name")) if isinstance(assigned, dict) else str(assigned)
+                est_id        = (related.get("Id")     or related.get("id"))    if isinstance(related, dict)  else None
 
-            if est_id:
-                try:
+                record: dict = {
+                    "task_type":       type_label,
+                    "task_status":     status_name   or "Unknown",
+                    "assigned_to":     assigned_name or "Unassigned",
+                    "due_date":        t.get("DueDate")    or t.get("dueDate"),
+                    "task_created":    t.get("DateCreated") or t.get("dateCreated"),
+                    "estimate_id":     est_id,
+                    "estimate_number": None,
+                    "customer":        None,
+                    "sales_rep":       None,
+                    "estimate_total":  None,
+                }
+
+                if est_id:
                     raw    = striven.get_estimate(int(est_id))
                     detail = _fmt_detail(raw)
                     record["estimate_number"] = detail.get("estimate_number")
                     record["customer"]        = detail.get("customer_name")
                     record["sales_rep"]       = _normalize_sales_rep(detail.get("sales_rep_name"))
                     record["estimate_total"]  = detail.get("total")
-                except Exception:
-                    pass
 
-            return record
+                return record
+            except Exception:
+                return None
 
         results: list[dict] = []
         with ThreadPoolExecutor(max_workers=10) as pool:
-            futures = {pool.submit(_enrich_task, t): t for t in matched_tasks}
+            futures = {pool.submit(_enrich, s): s for s in all_tasks}
             for future in as_completed(futures):
                 r = future.result()
                 if r:
                     results.append(r)
 
-        # Sort: tasks with linked estimates first, then by task_created desc
-        results.sort(key=lambda x: (x["estimate_id"] is None, x.get("task_created") or ""), reverse=False)
+        # Sort by task_created descending (most recent first)
         results.sort(key=lambda x: x.get("task_created") or "", reverse=True)
 
         return jsonify({
-            "count":   len(results),
-            "scanned": len(tasks_raw),
-            "filters": {"days": days_back, "keywords": list(_RETURN_TRIP_KEYWORDS)},
-            "data":    results,
+            "count":      len(results),
+            "task_types": list(_RETURN_TRIP_TYPE_LABELS.values()),
+            "data":       results,
         })
 
     except Exception as exc:
