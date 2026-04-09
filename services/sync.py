@@ -64,6 +64,7 @@ from services.supabase_client import (
     upsert_full_estimates,
     upsert_line_items,
     upsert_sales_reps,
+    upsert_customer_locations,
 )
 
 # ---------------------------------------------------------------------------
@@ -389,3 +390,137 @@ def sync_estimates_to_supabase(limit: int | None = None) -> int:
         flush=True,
     )
     return total_synced
+
+
+# ---------------------------------------------------------------------------
+# Customer location sync — Striven → Supabase
+# ---------------------------------------------------------------------------
+
+LOCATION_PAGE_SIZE  = 100   # records per Striven page (max)
+LOCATION_UPSERT_BATCH = 500 # rows per Supabase upsert
+
+
+def _transform_location(loc: dict) -> dict | None:
+    """
+    Map one raw customer-locations record into a customer_locations row.
+
+    Raw shape (confirmed from live GET /striven/customer-locations):
+        {
+          "id": int,
+          "name": str,
+          "isPrimary": bool,
+          "customer": {"id": int, "name": str, "number": str},
+          "address": {
+              "address1": str, "city": str, "state": str,
+              "postalCode": str, "fullAddress": str
+          },
+          "phones": null
+        }
+    """
+    loc_id   = loc.get("id")
+    customer = loc.get("customer") or {}
+    address  = loc.get("address")  or {}
+
+    if not loc_id or not customer.get("id"):
+        return None
+
+    city_raw  = (address.get("city")       or "").strip()
+    city_norm = city_raw.lower()
+
+    return {
+        "location_id":   loc_id,
+        "customer_id":   customer.get("id"),
+        "customer_name": customer.get("name"),
+        "address1":      (address.get("address1") or "").strip() or None,
+        "city":          city_raw or None,
+        "city_norm":     city_norm or None,
+        "state":         (address.get("state")      or "").strip() or None,
+        "postal_code":   (address.get("postalCode") or "").strip() or None,
+        "is_primary":    bool(loc.get("isPrimary", False)),
+    }
+
+
+def sync_customer_locations(striven: StrivenClient, limit: int | None = None) -> dict:
+    """
+    Page through all customer locations in Striven and upsert into Supabase.
+
+    Args:
+        striven: Authenticated StrivenClient instance.
+        limit:   Optional cap on total locations to sync (None = all).
+
+    Returns:
+        {"synced": int, "skipped": int, "pages": int, "elapsed_s": float}
+    """
+    t_start    = time.monotonic()
+    page       = 0
+    total_seen = 0
+    synced     = 0
+    skipped    = 0
+    buffer: list[dict] = []
+
+    print("[location-sync] Starting customer location sync...", flush=True)
+
+    while True:
+        try:
+            resp = striven.search_customer_locations({
+                "PageIndex": page,
+                "PageSize":  LOCATION_PAGE_SIZE,
+            })
+        except Exception as exc:
+            print(f"[location-sync] API error on page {page}: {exc}", flush=True)
+            break
+
+        # Response shape: {"totalCount": N, "data": [...]}
+        raw_list = resp.get("data") or resp.get("Data") or []
+        total_count = resp.get("totalCount") or resp.get("TotalCount") or 0
+
+        if not raw_list:
+            break
+
+        for loc in raw_list:
+            row = _transform_location(loc)
+            if row:
+                buffer.append(row)
+            else:
+                skipped += 1
+
+        total_seen += len(raw_list)
+        print(
+            f"[location-sync] Page {page}: {len(raw_list)} records "
+            f"({total_seen}/{total_count} total)",
+            flush=True,
+        )
+
+        # Flush buffer in batches
+        while len(buffer) >= LOCATION_UPSERT_BATCH:
+            batch = buffer[:LOCATION_UPSERT_BATCH]
+            buffer = buffer[LOCATION_UPSERT_BATCH:]
+            n = upsert_customer_locations(batch)
+            synced += n
+
+        # Check stopping conditions
+        if limit and total_seen >= limit:
+            print(f"[location-sync] Reached limit={limit}, stopping.", flush=True)
+            break
+        if total_seen >= total_count or len(raw_list) < LOCATION_PAGE_SIZE:
+            break
+
+        page += 1
+
+    # Final flush
+    if buffer:
+        n = upsert_customer_locations(buffer)
+        synced += n
+
+    elapsed = round(time.monotonic() - t_start, 1)
+    print(
+        f"[location-sync] Complete — {synced} locations synced, "
+        f"{skipped} skipped, {page + 1} pages, {elapsed}s",
+        flush=True,
+    )
+    return {
+        "synced":    synced,
+        "skipped":   skipped,
+        "pages":     page + 1,
+        "elapsed_s": elapsed,
+    }

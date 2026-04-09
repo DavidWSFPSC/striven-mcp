@@ -635,3 +635,150 @@ def upsert_gas_log_audit(
         },
         on_conflict="id",
     ).execute()
+
+
+# ---------------------------------------------------------------------------
+# customer_locations — address-based location warehouse
+#
+# Table schema (create once in Supabase dashboard or via SQL):
+#
+#   CREATE TABLE customer_locations (
+#       location_id   bigint PRIMARY KEY,
+#       customer_id   bigint NOT NULL,
+#       customer_name text,
+#       address1      text,
+#       city          text,
+#       city_norm     text,          -- lowercased+stripped for fast matching
+#       state         text,
+#       postal_code   text,
+#       is_primary    boolean DEFAULT false,
+#       synced_at     timestamptz DEFAULT now()
+#   );
+#   CREATE INDEX idx_locations_city_norm  ON customer_locations(city_norm);
+#   CREATE INDEX idx_locations_postal     ON customer_locations(postal_code);
+#   CREATE INDEX idx_locations_customer   ON customer_locations(customer_id);
+#
+# ---------------------------------------------------------------------------
+
+def upsert_customer_locations(records: list[dict]) -> int:
+    """
+    Upsert a batch of customer location records.
+    Conflicts resolved on location_id (Striven's primary key).
+    Returns the number of rows upserted.
+    """
+    if not records:
+        return 0
+    res = (
+        _get_client()
+        .table("customer_locations")
+        .upsert(records, on_conflict="location_id")
+        .execute()
+    )
+    return len(res.data) if res.data else 0
+
+
+def query_jobs_by_area(city: str, limit: int = 500) -> dict:
+    """
+    Find all estimates whose job site city matches the given area name.
+
+    Steps:
+      1. Query customer_locations where city_norm ILIKE %city%
+      2. Collect the unique customer_ids
+      3. Query estimates for those customers (all statuses)
+      4. Aggregate: total jobs, total revenue, by-status breakdown
+
+    Args:
+        city:  City or area name to search (case-insensitive, partial match).
+        limit: Max estimates to return in the sample list.
+
+    Returns dict with: count, total_revenue, customers_found,
+                       by_status breakdown, and sample estimates.
+    """
+    city_norm = city.strip().lower()
+
+    # Step 1 — find matching locations
+    loc_res = (
+        _get_client()
+        .table("customer_locations")
+        .select("customer_id, customer_name, city, postal_code, address1")
+        .ilike("city_norm", f"%{city_norm}%")
+        .execute()
+    )
+    locations = loc_res.data or []
+    if not locations:
+        return {
+            "count":            0,
+            "total_revenue":    0,
+            "customers_found":  0,
+            "city_searched":    city,
+            "by_status":        {},
+            "sample":           [],
+            "note":             f"No customer locations found matching '{city}'.",
+        }
+
+    customer_ids = list({r["customer_id"] for r in locations if r.get("customer_id")})
+
+    # Step 2 — pull estimates for those customers (paginate if needed)
+    all_estimates: list[dict] = []
+    chunk_size = 100
+    for i in range(0, len(customer_ids), chunk_size):
+        chunk = customer_ids[i: i + chunk_size]
+        res = (
+            _get_client()
+            .table("estimates")
+            .select(
+                "estimate_id, estimate_number, customer_id, customer_name, "
+                "sales_rep_name, status_raw, status_normalized, total_amount, "
+                "created_date, target_date"
+            )
+            .in_("customer_id", chunk)
+            .order("created_date", desc=True)
+            .execute()
+        )
+        all_estimates.extend(res.data or [])
+
+    if not all_estimates:
+        return {
+            "count":           0,
+            "total_revenue":   0,
+            "customers_found": len(customer_ids),
+            "city_searched":   city,
+            "by_status":       {},
+            "sample":          [],
+            "note":            "Customers found but no estimates on record.",
+        }
+
+    # Step 3 — aggregate
+    total_revenue = sum(e.get("total_amount") or 0 for e in all_estimates)
+    by_status: dict[str, dict] = {}
+    for e in all_estimates:
+        s = e.get("status_raw") or "Unknown"
+        if s not in by_status:
+            by_status[s] = {"count": 0, "revenue": 0}
+        by_status[s]["count"]   += 1
+        by_status[s]["revenue"] += e.get("total_amount") or 0
+
+    # Round revenue in by_status
+    for s in by_status:
+        by_status[s]["revenue"] = round(by_status[s]["revenue"], 2)
+
+    sample = [
+        {
+            "estimate_number": e.get("estimate_number"),
+            "customer":        e.get("customer_name"),
+            "sales_rep":       _normalize_sales_rep(e.get("sales_rep_name")),
+            "status":          e.get("status_raw"),
+            "total":           e.get("total_amount"),
+            "created":         e.get("created_date"),
+        }
+        for e in all_estimates[:limit]
+    ]
+
+    return {
+        "count":           len(all_estimates),
+        "total_revenue":   round(total_revenue, 2),
+        "customers_found": len(customer_ids),
+        "city_searched":   city,
+        "by_status":       by_status,
+        "sample":          sample,
+    }

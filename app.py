@@ -1178,23 +1178,56 @@ def no_line_items():
 # Analytics endpoints — read-only, AI-consumption, no LLM
 # ---------------------------------------------------------------------------
 
+@app.route("/sync-locations", methods=["GET"])
+def sync_locations():
+    """
+    Sync all customer locations from Striven into Supabase.
+
+    Pages through POST /v1/customer-locations/search (all ~13K records),
+    transforms each into a customer_locations row, and upserts to Supabase.
+
+    This is safe to re-run — uses upsert on location_id.  Run once to do
+    the initial load, then weekly to pick up new customers/addresses.
+
+    Query params:
+        limit  (optional) — max locations to sync this run (omit for all)
+
+    Example:
+        GET /sync-locations          → full sync (~13K records, ~2-5 min)
+        GET /sync-locations?limit=500 → test run
+    """
+    from services.sync import sync_customer_locations
+
+    limit_raw = request.args.get("limit")
+    limit = int(limit_raw) if limit_raw else None
+
+    try:
+        result = sync_customer_locations(striven, limit=limit)
+        return jsonify({"status": "ok", **result})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/queries/jobs-by-location", methods=["GET"])
 def jobs_by_location():
     """
-    Live Striven pipeline: search customers by name → join their estimates.
+    Find all estimates for customers whose job site is in a given city or area.
 
-    Accepts a location/name keyword, searches Striven for matching customers,
-    then pulls every estimate for those customers from Supabase and aggregates.
+    Queries the customer_locations Supabase table (city_norm index) to find
+    matching customers, then joins to the estimates table — all in Supabase,
+    sub-second response time.
+
+    Requires the customer_locations table to be populated via GET /sync-locations.
 
     Query params:
-        location  (required) — partial customer or city name to match
-        year      (optional) — restrict to a calendar year (e.g. 2024)
-        limit     (optional) — max customers to inspect (default 15, max 30)
+        location  (required) — city or area name (case-insensitive, partial match)
+                               e.g. "Mount Pleasant", "Kiawah", "Daniel Island"
 
     Example:
-        GET /queries/jobs-by-location?location=charleston&year=2024
+        GET /queries/jobs-by-location?location=Mount+Pleasant
+        GET /queries/jobs-by-location?location=Kiawah
     """
-    from collections import defaultdict
+    from services.supabase_client import query_jobs_by_area
 
     location = (
         request.args.get("location")
@@ -1204,95 +1237,9 @@ def jobs_by_location():
     if not location:
         return jsonify({"error": "Query param 'location' is required."}), 400
 
-    year_raw = request.args.get("year")
-    year = None
-    if year_raw:
-        try:
-            year = int(year_raw)
-        except ValueError:
-            return jsonify({"error": f"Invalid year: {year_raw!r}"}), 400
-
-    cust_limit = min(int(request.args.get("limit", 15)), 30)
-
     try:
-        # ── Step 1: search Striven for customers whose name contains the keyword
-        cust_resp = striven.search_customers(location, page_size=cust_limit)
-        _, cust_data = _striven_page(cust_resp)
-        if not cust_data:
-            return jsonify({
-                "count": 0,
-                "filters": {"location": location, "year": year},
-                "data": [],
-                "note": "No matching customers found in Striven.",
-            })
-
-        customer_ids = [
-            c.get("Id") or c.get("id")
-            for c in cust_data
-            if c.get("Id") or c.get("id")
-        ]
-
-        # ── Step 2: pull estimates for these customers from Supabase
-        q = (
-            _sb_client().table("estimates")
-            .select(
-                "estimate_id, estimate_number, customer_id, customer_name, "
-                "status_normalized, total_amount, created_date, sales_rep_name, target_date"
-            )
-            .in_("customer_id", customer_ids)
-        )
-        if year:
-            q = (
-                q
-                .gte("created_date", f"{year}-01-01T00:00:00+00:00")
-                .lt("created_date",  f"{year + 1}-01-01T00:00:00+00:00")
-            )
-        res = q.order("created_date", desc=True).limit(500).execute()
-        rows = res.data or []
-
-        # ── Step 3: aggregate per customer, collect sample
-        agg: dict[int, dict] = defaultdict(lambda: {
-            "total_jobs": 0,
-            "total_revenue": 0.0,
-            "active_jobs": 0,
-            "completed_jobs": 0,
-        })
-        for r in rows:
-            cid = r["customer_id"]
-            agg[cid]["customer_name"]  = r["customer_name"]
-            agg[cid]["total_jobs"]    += 1
-            agg[cid]["total_revenue"] += float(r["total_amount"] or 0)
-            if r["status_normalized"] == "ACTIVE":
-                agg[cid]["active_jobs"] += 1
-            elif r["status_normalized"] == "COMPLETE":
-                agg[cid]["completed_jobs"] += 1
-
-        summary = sorted(
-            [{"customer_id": cid, **vals} for cid, vals in agg.items()],
-            key=lambda x: -x["total_revenue"],
-        )
-
-        # Sample: up to 25 most-recent individual estimates
-        sample = [
-            {
-                "estimate_id":     r["estimate_id"],
-                "estimate_number": r["estimate_number"],
-                "customer":        r["customer_name"],
-                "status":          r["status_normalized"],
-                "amount":          r["total_amount"],
-                "sales_rep":       _normalize_sales_rep(r.get("sales_rep_name")),
-                "created":         r["created_date"],
-            }
-            for r in rows[:25]
-        ]
-
-        return jsonify({
-            "count":   len(rows),
-            "filters": {"location": location, "year": year, "customers_searched": len(customer_ids)},
-            "data":    summary,
-            "sample":  sample,
-        })
-
+        result = query_jobs_by_area(location)
+        return jsonify(result)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
