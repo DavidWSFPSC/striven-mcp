@@ -95,7 +95,7 @@ TOOLS AVAILABLE
 - sync_estimates               → refresh the database from Striven (use sparingly)
 - api_health                   → check if the system is online
 - backlog_by_rep               → active job count + revenue grouped by sales rep
-- jobs_by_location             → job count + revenue for a specific location/area
+- jobs_by_location             → job count + revenue by named area (zip-code accurate for tri-county)
 - time_to_preview              → average days from estimate creation to site preview
 - search_by_pipeline_status   → find active jobs by operational status (ready to schedule, waiting on product, etc.)
 - search_return_trips         → find return trip / callback tasks on estimates (live Striven scan)
@@ -111,7 +111,8 @@ WHEN TO USE EACH TOOL
 - "Which estimates are missing the portal flag?"  → portal_flag_audit
 - "The data seems outdated"                       → sync_estimates
 - "Who has the most active jobs?"                 → backlog_by_rep
-- "How much work do we have in Kiawah?"           → jobs_by_location
+- "How much work do we have in West Ashley?"       → jobs_by_location (zip-resolved)
+- "Show me Kiawah jobs from 2024"                 → jobs_by_location with year=2024
 - "How long does it take to schedule a preview?"  → time_to_preview
 - "Show me jobs ready to schedule"                → search_by_pipeline_status
 - "What jobs are waiting on product?"             → search_by_pipeline_status
@@ -359,36 +360,62 @@ def backlog_by_rep(limit: int = 50) -> dict:
 
 
 @mcp.tool()
-def jobs_by_location(location: str, year: int | None = None) -> dict:
+def jobs_by_location(location: str, year: int = 0) -> dict:
     """
-    Get job counts and total revenue for a specific location or area name.
+    Get job counts and total revenue for a specific service area or city.
 
-    Searches Striven for customers whose name matches the location keyword,
-    then pulls all their estimates and aggregates by customer. Use this to
-    answer questions about a specific neighborhood, island, city, or development.
+    Uses zip-code-based geographic matching for Charleston tri-county named areas,
+    which is far more accurate than city-name matching. A customer whose address
+    says "Charleston" but zip 29407 will correctly appear under "West Ashley".
+
+    Named areas (zip-resolved — use these for best results):
+      West Ashley            — zips 29407, 29414
+      James Island           — zip 29412
+      Johns Island           — zip 29455 (also covers Kiawah, Seabrook)
+      Kiawah Island          — zip 29455
+      Seabrook Island        — zip 29455
+      Downtown Charleston    — zips 29401, 29403
+      North Charleston       — zips 29405, 29406, 29418, 29420
+      Mount Pleasant         — zips 29464, 29466 (both N and S)
+      Mount Pleasant South   — zip 29464
+      Mount Pleasant North   — zip 29466
+      Daniel Island          — zip 29492
+      Summerville            — zips 29483, 29485
+      Goose Creek            — zip 29445
+      Hanahan                — zip 29410
+      Folly Beach            — zip 29439
+      Sullivan's Island      — zip 29482
+      Isle of Palms          — zip 29451
 
     Use when asked:
-      'How much work do we have in Kiawah?'
+      'How much work do we have in West Ashley?'
       'Show me jobs in Mount Pleasant'
-      'What is our revenue from Isle of Palms customers?'
-      'How many jobs have we done in Daniel Island?'
+      'What is our revenue from Isle of Palms?'
+      'How many jobs have we done in Kiawah?'
+      'How much business did we do in Summerville in 2024?'
+      'Compare North Charleston to West Ashley'
+      'Show me all Daniel Island jobs from last year'
 
     Args:
-        location: Location keyword to search — can be a neighborhood, city, or
-                  partial name (e.g. 'Kiawah', 'Mount Pleasant', 'Daniel Island').
-                  Matched against customer names — not a geographic address search.
+        location: Named area or city to search (case-insensitive).
+                  Named tri-county areas resolve to zip codes for accurate matching.
+                  Any other city/area name falls back to city-name substring search.
         year:     Optional calendar year to filter results (e.g. 2024 or 2025).
-                  Omit to return all years.
+                  Use 0 to include all years (default).
 
     Returns:
-        count   — total estimates found for matching customers
-        filters — echo of the search parameters used
-        data    — per-customer summary: {customer_name, total_jobs, total_revenue,
-                  active_jobs, completed_jobs}
-        sample  — up to 25 most-recent individual estimates
+        count           — total estimates for customers in this area
+        total_revenue   — sum of all estimate values
+        customers_found — distinct customers with addresses in the area
+        area_label      — canonical display name for the matched area
+        zips_used       — zip codes searched (empty if city-name fallback used)
+        method          — "zip" (accurate) or "city_name" (fallback)
+        year_filter     — year applied, or null
+        by_status       — estimate counts + revenue grouped by Striven status
+        sample          — up to 50 most-recent estimates with customer, rep, total
     """
     params: dict = {"location": location}
-    if year is not None:
+    if year and year > 0:
         params["year"] = year
     return _call("get", "/queries/jobs-by-location", params=params)
 

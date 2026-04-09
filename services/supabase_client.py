@@ -807,53 +807,118 @@ def query_callback_insights(
     }
 
 
-def query_jobs_by_area(city: str, limit: int = 500) -> dict:
+# ---------------------------------------------------------------------------
+# Charleston tri-county area → zip code map
+#
+# Used by query_jobs_by_area() to resolve named areas to postal codes before
+# querying customer_locations.  Zip-based matching is authoritative — a
+# customer whose city field says "Charleston" but zip 29407 is West Ashley,
+# not Downtown.  City-name ilike is used only as a fallback for non-local areas.
+#
+# Sources verified April 2026.
+# ---------------------------------------------------------------------------
+
+_TRI_COUNTY_AREA_ZIPS: dict[str, list[str]] = {
+    # West Ashley  — inside 526 (29407) + outside 526 (29414)
+    "west ashley":                  ["29407", "29414"],
+    # James Island
+    "james island":                 ["29412"],
+    # Johns Island / Kiawah / Seabrook — all share 29455
+    "johns island":                 ["29455"],
+    "kiawah":                       ["29455"],
+    "kiawah island":                ["29455"],
+    "seabrook":                     ["29455"],
+    "seabrook island":              ["29455"],
+    # Downtown Charleston
+    "downtown charleston":          ["29401", "29403"],
+    "charleston downtown":          ["29401", "29403"],
+    "downtown":                     ["29401", "29403"],
+    # North Charleston
+    "north charleston":             ["29405", "29406", "29418", "29420"],
+    # Mount Pleasant — split N/S by zip
+    "mount pleasant":               ["29464", "29466"],
+    "mt pleasant":                  ["29464", "29466"],
+    "mount pleasant south":         ["29464"],
+    "mount pleasant north":         ["29466"],
+    "mt pleasant south":            ["29464"],
+    "mt pleasant north":            ["29466"],
+    # Daniel Island
+    "daniel island":                ["29492"],
+    # Summerville
+    "summerville":                  ["29483", "29485"],
+    # Goose Creek
+    "goose creek":                  ["29445"],
+    # Hanahan
+    "hanahan":                      ["29410"],
+    # Beach communities
+    "folly beach":                  ["29439"],
+    "folly":                        ["29439"],
+    "sullivans island":             ["29482"],
+    "sullivan's island":            ["29482"],
+    "isle of palms":                ["29451"],
+    "iop":                          ["29451"],
+}
+
+# Canonical display name for each area key
+_TRI_COUNTY_AREA_LABELS: dict[str, str] = {
+    "west ashley":                  "West Ashley",
+    "james island":                 "James Island",
+    "johns island":                 "Johns Island / Kiawah / Seabrook",
+    "kiawah":                       "Johns Island / Kiawah / Seabrook",
+    "kiawah island":                "Johns Island / Kiawah / Seabrook",
+    "seabrook":                     "Johns Island / Kiawah / Seabrook",
+    "seabrook island":              "Johns Island / Kiawah / Seabrook",
+    "downtown charleston":          "Downtown Charleston",
+    "charleston downtown":          "Downtown Charleston",
+    "downtown":                     "Downtown Charleston",
+    "north charleston":             "North Charleston",
+    "mount pleasant":               "Mount Pleasant (All)",
+    "mt pleasant":                  "Mount Pleasant (All)",
+    "mount pleasant south":         "Mount Pleasant South (29464)",
+    "mount pleasant north":         "Mount Pleasant North (29466)",
+    "mt pleasant south":            "Mount Pleasant South (29464)",
+    "mt pleasant north":            "Mount Pleasant North (29466)",
+    "daniel island":                "Daniel Island",
+    "summerville":                  "Summerville",
+    "goose creek":                  "Goose Creek",
+    "hanahan":                      "Hanahan",
+    "folly beach":                  "Folly Beach",
+    "folly":                        "Folly Beach",
+    "sullivans island":             "Sullivan's Island",
+    "sullivan's island":            "Sullivan's Island",
+    "isle of palms":                "Isle of Palms",
+    "iop":                          "Isle of Palms",
+}
+
+
+def list_service_areas() -> list[dict]:
     """
-    Find all estimates whose job site city matches the given area name.
-
-    Steps:
-      1. Query customer_locations where city_norm ILIKE %city%
-      2. Collect the unique customer_ids
-      3. Query estimates for those customers (all statuses)
-      4. Aggregate: total jobs, total revenue, by-status breakdown
-
-    Args:
-        city:  City or area name to search (case-insensitive, partial match).
-        limit: Max estimates to return in the sample list.
-
-    Returns dict with: count, total_revenue, customers_found,
-                       by_status breakdown, and sample estimates.
+    Return the canonical list of named service areas with their zip codes.
+    Used by the /queries/areas endpoint and MCP tool.
     """
-    city_norm = city.strip().lower()
+    seen: set[str] = set()
+    areas = []
+    for key, label in _TRI_COUNTY_AREA_LABELS.items():
+        if label not in seen:
+            seen.add(label)
+            areas.append({
+                "area":  label,
+                "zips":  _TRI_COUNTY_AREA_ZIPS[key],
+            })
+    return areas
 
-    # Step 1 — find matching locations
-    loc_res = (
-        _get_client()
-        .table("customer_locations")
-        .select("customer_id, customer_name, city, postal_code, address1")
-        .ilike("city_norm", f"%{city_norm}%")
-        .execute()
-    )
-    locations = loc_res.data or []
-    if not locations:
-        return {
-            "count":            0,
-            "total_revenue":    0,
-            "customers_found":  0,
-            "city_searched":    city,
-            "by_status":        {},
-            "sample":           [],
-            "note":             f"No customer locations found matching '{city}'.",
-        }
 
-    customer_ids = list({r["customer_id"] for r in locations if r.get("customer_id")})
-
-    # Step 2 — pull estimates for those customers (paginate if needed)
+def _fetch_estimates_for_customers(customer_ids: list[int], year: int | None = None) -> list[dict]:
+    """
+    Pull all estimates for a list of customer_ids from Supabase.
+    Optionally filters to a specific calendar year.
+    Handles chunking automatically (Supabase IN limit ~200).
+    """
     all_estimates: list[dict] = []
     chunk_size = 100
     for i in range(0, len(customer_ids), chunk_size):
         chunk = customer_ids[i: i + chunk_size]
-        res = (
+        q = (
             _get_client()
             .table("estimates")
             .select(
@@ -863,32 +928,32 @@ def query_jobs_by_area(city: str, limit: int = 500) -> dict:
             )
             .in_("customer_id", chunk)
             .order("created_date", desc=True)
-            .execute()
         )
+        if year:
+            q = (
+                q
+                .gte("created_date", f"{year}-01-01T00:00:00+00:00")
+                .lt("created_date",  f"{year + 1}-01-01T00:00:00+00:00")
+            )
+        res = q.execute()
         all_estimates.extend(res.data or [])
+    return all_estimates
 
-    if not all_estimates:
-        return {
-            "count":           0,
-            "total_revenue":   0,
-            "customers_found": len(customer_ids),
-            "city_searched":   city,
-            "by_status":       {},
-            "sample":          [],
-            "note":            "Customers found but no estimates on record.",
-        }
 
-    # Step 3 — aggregate
+def _aggregate_estimates(all_estimates: list[dict], limit: int = 50) -> dict:
+    """
+    Aggregate a list of estimate rows into summary stats.
+    Returns: count, total_revenue, by_status, sample.
+    """
     total_revenue = sum(e.get("total_amount") or 0 for e in all_estimates)
     by_status: dict[str, dict] = {}
     for e in all_estimates:
         s = e.get("status_raw") or "Unknown"
         if s not in by_status:
-            by_status[s] = {"count": 0, "revenue": 0}
+            by_status[s] = {"count": 0, "revenue": 0.0}
         by_status[s]["count"]   += 1
         by_status[s]["revenue"] += e.get("total_amount") or 0
 
-    # Round revenue in by_status
     for s in by_status:
         by_status[s]["revenue"] = round(by_status[s]["revenue"], 2)
 
@@ -903,12 +968,134 @@ def query_jobs_by_area(city: str, limit: int = 500) -> dict:
         }
         for e in all_estimates[:limit]
     ]
-
     return {
-        "count":           len(all_estimates),
-        "total_revenue":   round(total_revenue, 2),
+        "count":         len(all_estimates),
+        "total_revenue": round(total_revenue, 2),
+        "by_status":     by_status,
+        "sample":        sample,
+    }
+
+
+def query_jobs_by_area(city: str, limit: int = 500, year: int | None = None) -> dict:
+    """
+    Find all estimates whose job site is in the named area or city.
+
+    Resolution order:
+      1. Named area  — checks _TRI_COUNTY_AREA_ZIPS (e.g. "West Ashley" → 29407, 29414)
+                       Queries customer_locations by postal_code — most accurate.
+      2. City ilike  — falls back to city_norm substring match for non-local areas.
+
+    Args:
+        city:  Named area (e.g. "West Ashley", "Mount Pleasant") or city name.
+        limit: Max estimates to return in the sample list.
+        year:  Optional calendar year to restrict estimates (e.g. 2024).
+
+    Returns dict with: count, total_revenue, customers_found, method,
+                       area_label, zips_used, by_status, and sample estimates.
+    """
+    key = city.strip().lower()
+
+    # ── Path 1: Named tri-county area → zip-based lookup ─────────────────
+    if key in _TRI_COUNTY_AREA_ZIPS:
+        zips        = _TRI_COUNTY_AREA_ZIPS[key]
+        area_label  = _TRI_COUNTY_AREA_LABELS.get(key, city.title())
+
+        loc_res = (
+            _get_client()
+            .table("customer_locations")
+            .select("customer_id, customer_name, city, postal_code, address1")
+            .in_("postal_code", zips)
+            .execute()
+        )
+        locations = loc_res.data or []
+        if not locations:
+            return {
+                "count":           0,
+                "total_revenue":   0,
+                "customers_found": 0,
+                "area_label":      area_label,
+                "zips_used":       zips,
+                "method":          "zip",
+                "by_status":       {},
+                "sample":          [],
+                "note":            f"No customer locations found in zip codes {zips}.",
+            }
+
+        customer_ids = list({r["customer_id"] for r in locations if r.get("customer_id")})
+        all_estimates = _fetch_estimates_for_customers(customer_ids, year=year)
+
+        if not all_estimates:
+            return {
+                "count":           0,
+                "total_revenue":   0,
+                "customers_found": len(customer_ids),
+                "area_label":      area_label,
+                "zips_used":       zips,
+                "method":          "zip",
+                "by_status":       {},
+                "sample":          [],
+                "note":            "Customer locations found but no estimates on record.",
+            }
+
+        agg = _aggregate_estimates(all_estimates, limit=limit)
+        return {
+            **agg,
+            "customers_found": len(customer_ids),
+            "area_label":      area_label,
+            "zips_used":       zips,
+            "method":          "zip",
+            "year_filter":     year,
+        }
+
+    # ── Path 2: Fallback — city name ilike match ──────────────────────────
+    city_norm = key
+    loc_res = (
+        _get_client()
+        .table("customer_locations")
+        .select("customer_id, customer_name, city, postal_code, address1")
+        .ilike("city_norm", f"%{city_norm}%")
+        .execute()
+    )
+    locations = loc_res.data or []
+    if not locations:
+        return {
+            "count":           0,
+            "total_revenue":   0,
+            "customers_found": 0,
+            "area_label":      city.title(),
+            "zips_used":       [],
+            "method":          "city_name",
+            "by_status":       {},
+            "sample":          [],
+            "note":            (
+                f"No customer locations found matching '{city}'. "
+                f"Try a named area: West Ashley, Mount Pleasant, James Island, "
+                f"Johns Island, North Charleston, Summerville, Daniel Island, etc."
+            ),
+        }
+
+    customer_ids  = list({r["customer_id"] for r in locations if r.get("customer_id")})
+    all_estimates = _fetch_estimates_for_customers(customer_ids, year=year)
+
+    if not all_estimates:
+        return {
+            "count":           0,
+            "total_revenue":   0,
+            "customers_found": len(customer_ids),
+            "area_label":      city.title(),
+            "zips_used":       [],
+            "method":          "city_name",
+            "by_status":       {},
+            "sample":          [],
+            "note":            "Customers found but no estimates on record.",
+        }
+
+    agg = _aggregate_estimates(all_estimates, limit=limit)
+    return {
+        **agg,
         "customers_found": len(customer_ids),
-        "city_searched":   city,
-        "by_status":       by_status,
-        "sample":          sample,
+        "area_label":      city.title(),
+        "zips_used":       [],
+        "method":          "city_name",
+        "year_filter":     year,
     }

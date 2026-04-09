@@ -59,7 +59,8 @@ from services.supabase_client import (
     query_gas_log_missing,
     query_unassigned_reps,
     query_no_line_items,
-    query_jobs_by_location,
+    query_jobs_by_location,  # legacy city-name helper (kept for /ask router)
+    list_service_areas,
     query_jobs_past_install_date,
     query_sales_rep_backlog,
     query_time_to_target,
@@ -1208,24 +1209,49 @@ def sync_locations():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/queries/areas", methods=["GET"])
+def list_areas():
+    """
+    Return the canonical list of named service areas with their zip codes.
+
+    Used by Claude to answer "what areas do you cover?" and to validate
+    area names before calling jobs-by-location.
+
+    Example:
+        GET /queries/areas
+    """
+    from services.supabase_client import list_service_areas
+    return jsonify({"areas": list_service_areas()})
+
+
 @app.route("/queries/jobs-by-location", methods=["GET"])
 def jobs_by_location():
     """
-    Find all estimates for customers whose job site is in a given city or area.
+    Find all estimates for customers whose job site is in a named area or city.
 
-    Queries the customer_locations Supabase table (city_norm index) to find
-    matching customers, then joins to the estimates table — all in Supabase,
-    sub-second response time.
+    Resolution order (most to least accurate):
+      1. Named tri-county area  → zip-code lookup in customer_locations.postal_code
+         e.g. "West Ashley" resolves to zips 29407 + 29414 — catches ALL customers
+         in that area regardless of how they entered their city name.
+      2. City name ilike match  → customer_locations.city_norm substring search
+         Used for non-local or non-standard area names.
 
-    Requires the customer_locations table to be populated via GET /sync-locations.
+    Valid named areas (zip-resolved):
+      West Ashley, James Island, Johns Island, Kiawah Island, Seabrook Island,
+      Downtown Charleston, North Charleston, Mount Pleasant, Mount Pleasant South,
+      Mount Pleasant North, Daniel Island, Summerville, Goose Creek, Hanahan,
+      Folly Beach, Sullivan's Island, Isle of Palms
 
     Query params:
-        location  (required) — city or area name (case-insensitive, partial match)
-                               e.g. "Mount Pleasant", "Kiawah", "Daniel Island"
+        location  (required) — named area or city (case-insensitive)
+        year      (optional) — filter to a specific calendar year (e.g. 2024)
+        limit     (optional) — max sample rows returned (default 50)
 
-    Example:
-        GET /queries/jobs-by-location?location=Mount+Pleasant
+    Examples:
+        GET /queries/jobs-by-location?location=West+Ashley
+        GET /queries/jobs-by-location?location=Mount+Pleasant&year=2024
         GET /queries/jobs-by-location?location=Kiawah
+        GET /queries/jobs-by-location?location=Summerville&year=2025
     """
     from services.supabase_client import query_jobs_by_area
 
@@ -1235,10 +1261,17 @@ def jobs_by_location():
         or ""
     ).strip()
     if not location:
-        return jsonify({"error": "Query param 'location' is required."}), 400
+        return jsonify({
+            "error": "Query param 'location' is required.",
+            "hint":  "Try: ?location=West+Ashley or ?location=Mount+Pleasant",
+        }), 400
+
+    year_raw = request.args.get("year")
+    year: int | None = int(year_raw) if year_raw and year_raw.isdigit() else None
+    limit = min(int(request.args.get("limit", 50)), 500)
 
     try:
-        result = query_jobs_by_area(location)
+        result = query_jobs_by_area(location, limit=limit, year=year)
         return jsonify(result)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
