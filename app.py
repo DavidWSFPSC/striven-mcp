@@ -2243,6 +2243,233 @@ def callback_insights():
 
 
 # ---------------------------------------------------------------------------
+# Financial data routes — bills, payments (read-only, Striven API)
+# ---------------------------------------------------------------------------
+
+@app.route("/queries/search-bills", methods=["GET"])
+def search_bills():
+    """
+    Search vendor bills (accounts payable).
+    Query params: customer_id, vendor_id, status_id, date_from, date_to, page_size
+    """
+    page_size = min(int(request.args.get("page_size", 25)), 50)
+    body: dict = {"PageIndex": 0, "PageSize": page_size}
+
+    if request.args.get("vendor_id"):
+        body["VendorId"] = int(request.args["vendor_id"])
+    if request.args.get("customer_id"):
+        body["CustomerId"] = int(request.args["customer_id"])
+    if request.args.get("status_id"):
+        body["StatusId"] = int(request.args["status_id"])
+    if request.args.get("date_from") or request.args.get("date_to"):
+        dr: dict = {}
+        if request.args.get("date_from"): dr["DateFrom"] = request.args["date_from"]
+        if request.args.get("date_to"):   dr["DateTo"]   = request.args["date_to"]
+        body["DateCreatedRange"] = dr
+
+    try:
+        resp = striven.search_bills(body)
+        total, data = _striven_page(resp)
+        print(f"[search_bills] fetched {len(data)} of {total} bills", flush=True)
+        return jsonify({"total": total, "count": len(data), "bills": [_fmt_bill(r) for r in data]})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/search-payments", methods=["GET"])
+def search_payments():
+    """
+    Search customer payments received.
+    Query params: customer_id, date_from, date_to, page_size
+    """
+    page_size = min(int(request.args.get("page_size", 25)), 50)
+    body: dict = {"PageIndex": 0, "PageSize": page_size}
+
+    if request.args.get("customer_id"):
+        body["CustomerId"] = int(request.args["customer_id"])
+    if request.args.get("date_from") or request.args.get("date_to"):
+        dr: dict = {}
+        if request.args.get("date_from"): dr["DateFrom"] = request.args["date_from"]
+        if request.args.get("date_to"):   dr["DateTo"]   = request.args["date_to"]
+        body["DateCreatedRange"] = dr
+
+    try:
+        resp = striven.search_payments(body)
+        total, data = _striven_page(resp)
+        print(f"[search_payments] fetched {len(data)} of {total} payments", flush=True)
+        return jsonify({"total": total, "count": len(data), "payments": [_fmt_payment(r) for r in data]})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Catalog / CRM data routes — items, vendors, contacts, opportunities
+# ---------------------------------------------------------------------------
+
+@app.route("/queries/search-items", methods=["GET"])
+def search_items():
+    """
+    Search the product and service catalog.
+    Query params: keyword, page_size
+    """
+    page_size = min(int(request.args.get("page_size", 25)), 50)
+    body: dict = {"PageIndex": 0, "PageSize": page_size}
+    if request.args.get("keyword"):
+        body["Name"] = request.args["keyword"]
+
+    try:
+        resp = striven.search_items(body)
+        total, data = _striven_page(resp)
+        print(f"[search_items] fetched {len(data)} of {total} items", flush=True)
+        return jsonify({"total": total, "count": len(data), "items": [_fmt_item(r) for r in data]})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/search-vendors", methods=["GET"])
+def search_vendors():
+    """
+    Search vendors.
+    Query params: name, page_size
+    """
+    page_size = min(int(request.args.get("page_size", 25)), 50)
+    body: dict = {"PageIndex": 0, "PageSize": page_size}
+    if request.args.get("name"):
+        body["Name"] = request.args["name"]
+
+    try:
+        resp = striven.search_vendors(body)
+        total, data = _striven_page(resp)
+        print(f"[search_vendors] fetched {len(data)} of {total} vendors", flush=True)
+        return jsonify({"total": total, "count": len(data), "vendors": [_fmt_vendor(r) for r in data]})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/search-contacts", methods=["GET"])
+def search_contacts():
+    """
+    Search contacts linked to customers or vendors.
+    Query params: name, customer_id, page_size
+    """
+    page_size = min(int(request.args.get("page_size", 25)), 50)
+    body: dict = {"PageIndex": 0, "PageSize": page_size}
+    if request.args.get("name"):
+        body["Name"] = request.args["name"]
+    if request.args.get("customer_id"):
+        body["CustomerId"] = int(request.args["customer_id"])
+
+    try:
+        resp = striven.search_contacts(body)
+        total, data = _striven_page(resp)
+        print(f"[search_contacts] fetched {len(data)} of {total} contacts", flush=True)
+        return jsonify({"total": total, "count": len(data), "contacts": [_fmt_contact(r) for r in data]})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/search-opportunities", methods=["GET"])
+def search_opportunities():
+    """
+    Search opportunities / sales pipeline.
+    Query params: customer_id, status_id, date_from, date_to, page_size
+    """
+    page_size = min(int(request.args.get("page_size", 25)), 50)
+    body: dict = {"PageIndex": 0, "PageSize": page_size}
+    if request.args.get("customer_id"):
+        body["CustomerId"] = int(request.args["customer_id"])
+    if request.args.get("status_id"):
+        body["StatusId"] = int(request.args["status_id"])
+    if request.args.get("date_from") or request.args.get("date_to"):
+        dr: dict = {}
+        if request.args.get("date_from"): dr["DateFrom"] = request.args["date_from"]
+        if request.args.get("date_to"):   dr["DateTo"]   = request.args["date_to"]
+        body["DateCreatedRange"] = dr
+
+    try:
+        resp = striven.search_opportunities(body)
+        total, data = _striven_page(resp)
+        print(f"[search_opportunities] fetched {len(data)} of {total} opportunities", flush=True)
+        return jsonify({"total": total, "count": len(data), "opportunities": [_fmt_opportunity(r) for r in data]})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Analysis routes — expose _analyze_* functions as GET endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/queries/analyze-stuck-jobs", methods=["GET"])
+def analyze_stuck_jobs():
+    """Identify stuck jobs across Quoted/Approved/In Progress. Query params: limit (default 50)"""
+    limit = min(int(request.args.get("limit", 50)), 50)
+    try:
+        result = _analyze_stuck_jobs(limit=limit)
+        return jsonify(_slim_analysis_result(result))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/analyze-install-gaps", methods=["GET"])
+def analyze_install_gaps():
+    """Find approved/in-progress jobs with no install task. Query params: limit (default 40)"""
+    limit = min(int(request.args.get("limit", 40)), 50)
+    try:
+        result = _analyze_install_gaps(limit=limit)
+        return jsonify(_slim_analysis_result(result))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/analyze-rep-pipeline", methods=["GET"])
+def analyze_rep_pipeline():
+    """Sales rep pipeline health grouped by rep. Query params: limit (default 30)"""
+    limit = min(int(request.args.get("limit", 30)), 50)
+    try:
+        result = _analyze_rep_pipeline(limit=limit)
+        return jsonify(_slim_analysis_result(result))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/analyze-weekly-pipeline", methods=["GET"])
+def analyze_weekly_pipeline():
+    """Full weekly pipeline review. Query params: limit (default 40)"""
+    limit = min(int(request.args.get("limit", 40)), 75)
+    try:
+        result = _analyze_weekly_pipeline(limit=limit)
+        return jsonify(_slim_analysis_result(result))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/analyze-job-pipeline", methods=["GET"])
+def analyze_job_pipeline():
+    """
+    Operations pipeline analysis — preview and install task gaps per estimate.
+    Query params: limit (default 20), status_ids (comma-separated, default "22"),
+                  date_from, date_to
+    """
+    limit      = min(int(request.args.get("limit", 20)), 50)
+    date_from  = request.args.get("date_from") or None
+    date_to    = request.args.get("date_to")   or None
+    raw_ids    = request.args.get("status_ids", "22")
+    try:
+        status_ids = [int(x.strip()) for x in raw_ids.split(",") if x.strip().isdigit()]
+    except ValueError:
+        status_ids = [22]
+
+    try:
+        result = _run_pipeline_analysis(
+            limit=limit, status_ids=status_ids,
+            date_from=date_from, date_to=date_to,
+        )
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
 # /ask — keyword router: routes known questions to direct endpoints, falls
 #         through to the Claude agentic loop only for unknown questions.
 # ---------------------------------------------------------------------------

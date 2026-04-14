@@ -911,6 +911,375 @@ def api_health() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Tools — Customers, Employees, CRM
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def search_customers(name: str, page_size: int = 25) -> dict:
+    """
+    Search customers by name. Returns customer ID, name, number, address, and phone.
+
+    Use when asked:
+      'Look up customer John Smith'
+      'Find the customer record for Acme Corp'
+      'What is the customer ID for Harbor Woods?'
+      'Get contact info for this customer'
+    """
+    return _call("get", "/striven/customers", params={"search": name, "pageSize": page_size})
+
+
+@mcp.tool()
+def get_employees(page_size: int = 100) -> dict:
+    """
+    Return all active employees and team members.
+
+    Use when asked:
+      'Who works here?'
+      'Show me the team roster'
+      'List all employees'
+      'Who is on the team?'
+    """
+    return _call("get", "/striven/employees", params={"pageSize": page_size})
+
+
+# ---------------------------------------------------------------------------
+# Tools — Financial: Invoices, Bills, Payments
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def search_invoices(
+    customer_id: int = 0,
+    status_id:   int = 0,
+    date_from:   str = "",
+    date_to:     str = "",
+    due_from:    str = "",
+    due_to:      str = "",
+    page_size:   int = 25,
+) -> dict:
+    """
+    Search customer invoices with optional filters.
+
+    Use when asked:
+      'Show me unpaid invoices'
+      'What invoices are overdue?'
+      'What did we invoice this month?'
+      'Show me all invoices for customer 4521'
+      'What is the outstanding balance for this customer?'
+
+    Args:
+        customer_id: Filter by Striven customer ID.
+        status_id:   Filter by invoice status ID.
+        date_from:   Invoice created on or after this date (YYYY-MM-DD).
+        date_to:     Invoice created on or before this date (YYYY-MM-DD).
+        due_from:    Due date range start (YYYY-MM-DD).
+        due_to:      Due date range end (YYYY-MM-DD).
+        page_size:   Max results (default 25).
+    """
+    params: dict = {"page_size": page_size}
+    if customer_id: params["customer_id"] = customer_id
+    if status_id:   params["status_id"]   = status_id
+    if date_from:   params["date_from"]   = date_from
+    if date_to:     params["date_to"]     = date_to
+    if due_from:    params["due_from"]    = due_from
+    if due_to:      params["due_to"]      = due_to
+    return _call("get", "/striven/invoices", params=params)
+
+
+@mcp.tool()
+def search_bills(
+    vendor_id:   int = 0,
+    status_id:   int = 0,
+    date_from:   str = "",
+    date_to:     str = "",
+    page_size:   int = 25,
+) -> dict:
+    """
+    Search vendor bills (accounts payable).
+
+    Use when asked:
+      'What do we owe vendors?'
+      'Show me unpaid bills'
+      'What bills are due this month?'
+      'AP aging — what is outstanding?'
+
+    Args:
+        vendor_id:  Filter by vendor ID.
+        status_id:  Filter by bill status.
+        date_from:  Bill date range start (YYYY-MM-DD).
+        date_to:    Bill date range end (YYYY-MM-DD).
+        page_size:  Max results (default 25).
+    """
+    params: dict = {"page_size": page_size}
+    if vendor_id:  params["vendor_id"]  = vendor_id
+    if status_id:  params["status_id"]  = status_id
+    if date_from:  params["date_from"]  = date_from
+    if date_to:    params["date_to"]    = date_to
+    return _call("get", "/queries/search-bills", params=params)
+
+
+@mcp.tool()
+def search_payments(
+    customer_id: int = 0,
+    date_from:   str = "",
+    date_to:     str = "",
+    page_size:   int = 25,
+) -> dict:
+    """
+    Search payments received from customers.
+
+    Use when asked:
+      'What payments have we received?'
+      'Has this customer paid?'
+      'Show me cash received this month'
+      'Payment history for customer 4521'
+
+    Args:
+        customer_id: Filter by customer ID.
+        date_from:   Payment date range start (YYYY-MM-DD).
+        date_to:     Payment date range end (YYYY-MM-DD).
+        page_size:   Max results (default 25).
+    """
+    params: dict = {"page_size": page_size}
+    if customer_id: params["customer_id"] = customer_id
+    if date_from:   params["date_from"]   = date_from
+    if date_to:     params["date_to"]     = date_to
+    return _call("get", "/queries/search-payments", params=params)
+
+
+# ---------------------------------------------------------------------------
+# Tools — Catalog, Vendors, Contacts, Opportunities
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def search_items(keyword: str = "", page_size: int = 25) -> dict:
+    """
+    Search the product and service catalog.
+
+    Use when asked:
+      'What products do we sell?'
+      'Find the price for isokern'
+      'What is the catalog item for gas log installation?'
+      'Search the catalog for linear fireplace'
+
+    Args:
+        keyword:   Product name to search (partial match).
+        page_size: Max results (default 25).
+    """
+    params: dict = {"page_size": page_size}
+    if keyword: params["keyword"] = keyword
+    return _call("get", "/queries/search-items", params=params)
+
+
+@mcp.tool()
+def search_vendors(name: str = "", page_size: int = 25) -> dict:
+    """
+    Search vendors we purchase from.
+
+    Use when asked:
+      'Who are our vendors?'
+      'Find vendor Napoleon'
+      'Who do we buy isokern from?'
+      'Show me all vendors'
+
+    Args:
+        name:      Vendor name to search (partial match).
+        page_size: Max results (default 25).
+    """
+    params: dict = {"page_size": page_size}
+    if name: params["name"] = name
+    return _call("get", "/queries/search-vendors", params=params)
+
+
+@mcp.tool()
+def search_contacts(name: str = "", customer_id: int = 0, page_size: int = 25) -> dict:
+    """
+    Search contacts linked to customers or vendors.
+
+    Use when asked:
+      'Find contact info for Jane Smith'
+      'Who is the contact at Harbor Woods Construction?'
+      'Get the email for this customer'
+      'Look up contacts for customer 4521'
+
+    Args:
+        name:        Contact name to search (partial match).
+        customer_id: Filter to contacts for a specific customer.
+        page_size:   Max results (default 25).
+    """
+    params: dict = {"page_size": page_size}
+    if name:        params["name"]        = name
+    if customer_id: params["customer_id"] = customer_id
+    return _call("get", "/queries/search-contacts", params=params)
+
+
+@mcp.tool()
+def search_opportunities(
+    customer_id: int = 0,
+    status_id:   int = 0,
+    date_from:   str = "",
+    date_to:     str = "",
+    page_size:   int = 25,
+) -> dict:
+    """
+    Search opportunities in the sales pipeline.
+
+    Use when asked:
+      'Show me open opportunities'
+      'What deals are in progress?'
+      'Pipeline value for this quarter'
+      'Win/loss analysis'
+      'Opportunities for customer 4521'
+
+    Args:
+        customer_id: Filter by customer.
+        status_id:   Filter by opportunity status.
+        date_from:   Created date range start (YYYY-MM-DD).
+        date_to:     Created date range end (YYYY-MM-DD).
+        page_size:   Max results (default 25).
+    """
+    params: dict = {"page_size": page_size}
+    if customer_id: params["customer_id"] = customer_id
+    if status_id:   params["status_id"]   = status_id
+    if date_from:   params["date_from"]   = date_from
+    if date_to:     params["date_to"]     = date_to
+    return _call("get", "/queries/search-opportunities", params=params)
+
+
+# ---------------------------------------------------------------------------
+# Tools — Operations Analysis
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def analyze_stuck_jobs(limit: int = 50) -> dict:
+    """
+    Identify jobs that are stuck across Quoted, Approved, and In Progress.
+
+    Stuck thresholds:
+      Quoted      > 7 days  — no customer follow-up
+      Approved    > 5 days  — no scheduling action
+      In Progress > 10 days — in progress with no install task
+
+    Use when asked:
+      'What jobs are stuck?'
+      'Which estimates have been sitting too long?'
+      'Show me stalled jobs'
+      'What needs attention in the pipeline?'
+      'Which approved jobs haven't been scheduled?'
+
+    Args:
+        limit: Max estimates to scan per status (default 50).
+    """
+    params: dict = {}
+    if limit != 50: params["limit"] = limit
+    return _call("get", "/queries/analyze-stuck-jobs", params=params or None)
+
+
+@mcp.tool()
+def analyze_install_gaps(limit: int = 40) -> dict:
+    """
+    Find approved or in-progress jobs with no install task scheduled.
+
+    Returns a sorted list of jobs missing an install date — oldest first.
+    This is the most focused scheduling gap tool.
+
+    Use when asked:
+      'Which jobs have no install task?'
+      'What approved jobs haven't been scheduled?'
+      'Show me jobs missing an install date'
+      'Scheduling gaps'
+
+    Args:
+        limit: Max estimates to check (default 40).
+    """
+    params: dict = {}
+    if limit != 40: params["limit"] = limit
+    return _call("get", "/queries/analyze-install-gaps", params=params or None)
+
+
+@mcp.tool()
+def analyze_rep_pipeline(limit: int = 30) -> dict:
+    """
+    Sales rep pipeline health — jobs, issues, and scheduling gaps grouped by rep.
+
+    Shows each rep's total active jobs, how many are stuck, how many have
+    no install scheduled, and average days from approval to install.
+
+    Use when asked:
+      'How is each rep doing?'
+      'Rep pipeline health'
+      'Which rep has the most stuck jobs?'
+      'Show me scheduling performance by rep'
+      'Rep accountability view'
+
+    Args:
+        limit: Max estimates to analyze (default 30).
+    """
+    params: dict = {}
+    if limit != 30: params["limit"] = limit
+    return _call("get", "/queries/analyze-rep-pipeline", params=params or None)
+
+
+@mcp.tool()
+def analyze_weekly_pipeline(limit: int = 40) -> dict:
+    """
+    Full weekly pipeline review — replaces the Excel pipeline report.
+
+    Returns pipeline summary by stage (Quoted / Approved / In Progress),
+    per-rep breakdown, top risk jobs, and headline totals. Designed to be
+    run once a week to get a complete picture of the business.
+
+    Use when asked:
+      'Give me the weekly pipeline report'
+      'Pipeline overview'
+      'Full business status'
+      'What does the pipeline look like this week?'
+      'Weekly review'
+
+    Args:
+        limit: Max estimates per stage (default 40).
+    """
+    params: dict = {}
+    if limit != 40: params["limit"] = limit
+    return _call("get", "/queries/analyze-weekly-pipeline", params=params or None)
+
+
+@mcp.tool()
+def analyze_job_pipeline(
+    limit:      int = 20,
+    status_ids: str = "22",
+    date_from:  str = "",
+    date_to:    str = "",
+) -> dict:
+    """
+    Operations pipeline analysis — where jobs break down step by step.
+
+    For each estimate, checks:
+      1. Does a preview task exist, and was it created within 3 days of approval?
+      2. Does an install task exist with a scheduled date?
+
+    Returns summary stats, per-rep breakdown, and problem job examples.
+
+    Use when asked:
+      'Where are jobs breaking down?'
+      'Show me the operations pipeline'
+      'Which jobs are missing preview tasks?'
+      'Job-level pipeline health'
+      'Preview task compliance'
+
+    Args:
+        limit:      Max estimates to analyze (default 20).
+        status_ids: Comma-separated status IDs to include (default "22" = Approved).
+                    Use "22,25" for Approved + In Progress.
+        date_from:  Estimate created on or after (YYYY-MM-DD).
+        date_to:    Estimate created on or before (YYYY-MM-DD).
+    """
+    params: dict = {"status_ids": status_ids, "limit": limit}
+    if date_from: params["date_from"] = date_from
+    if date_to:   params["date_to"]   = date_to
+    return _call("get", "/queries/analyze-job-pipeline", params=params)
+
+
+# ---------------------------------------------------------------------------
 # Claude Enterprise compatibility — patch tool schemas to allow extra fields
 #
 # Claude Enterprise injects internal metadata fields (e.g. paprika_mode) into
