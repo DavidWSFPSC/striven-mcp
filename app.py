@@ -1975,6 +1975,189 @@ def search_by_product():
 
 
 # ---------------------------------------------------------------------------
+# Invoice lookup — cross-reference estimates against Striven invoices
+# ---------------------------------------------------------------------------
+
+def _fmt_invoice(inv: dict) -> dict:
+    """Flatten a raw Striven invoice record to a clean summary dict."""
+    status = inv.get("status") or {}
+    so     = inv.get("salesOrder") or {}
+    cust   = inv.get("customer")   or {}
+    return {
+        "invoice_id":     inv.get("id"),
+        "invoice_number": inv.get("number"),
+        "status":         status.get("name") if isinstance(status, dict) else str(status),
+        "total":          inv.get("total"),
+        "balance_due":    inv.get("balanceDue"),
+        "date_created":   inv.get("dateCreated"),
+        "due_date":       inv.get("dueDate"),
+        "sales_order_id": so.get("id") if isinstance(so, dict) else so,
+        "customer_name":  cust.get("name") if isinstance(cust, dict) else cust,
+    }
+
+
+@app.route("/queries/invoices-by-estimate", methods=["GET"])
+def invoices_by_estimate():
+    """
+    Return all invoices linked to a specific estimate / sales order.
+
+    Strategy:
+      1. Look up the estimate in Supabase to get customer_id.
+      2. Search Striven invoices by CustomerId.
+      3. Filter client-side for invoices where salesOrder.id matches.
+
+    Query params:
+        estimate_id  (required) — Striven estimate / sales order ID
+
+    Examples:
+        GET /queries/invoices-by-estimate?estimate_id=14843
+    """
+    raw = request.args.get("estimate_id", "").strip()
+    if not raw or not raw.isdigit():
+        return jsonify({"error": "estimate_id is required and must be an integer."}), 400
+
+    estimate_id = int(raw)
+
+    try:
+        # Step 1 — get customer_id from Supabase
+        from services.supabase_client import _get_client as _sb
+        est_res = (
+            _sb().table("estimates")
+            .select("customer_id, customer_name, estimate_number, status_raw, total_amount")
+            .eq("estimate_id", estimate_id)
+            .limit(1)
+            .execute()
+        )
+        est_row = (est_res.data or [None])[0]
+        if not est_row:
+            return jsonify({"error": f"Estimate {estimate_id} not found in Supabase. Run sync first."}), 404
+
+        customer_id   = est_row["customer_id"]
+        customer_name = est_row["customer_name"]
+
+        # Step 2 — search Striven invoices by customer
+        resp    = striven.search_invoices({"CustomerId": customer_id, "PageSize": 100})
+        total   = resp.get("TotalCount") or resp.get("totalCount") or 0
+        raw_inv = resp.get("Data") or resp.get("data") or []
+
+        # Step 3 — filter to invoices linked to this specific estimate
+        matched = [
+            _fmt_invoice(inv) for inv in raw_inv
+            if (inv.get("salesOrder") or {}).get("id") == estimate_id
+        ]
+
+        return jsonify({
+            "estimate_id":     estimate_id,
+            "estimate_number": est_row.get("estimate_number"),
+            "customer_name":   customer_name,
+            "estimate_status": est_row.get("status_raw"),
+            "estimate_total":  est_row.get("total_amount"),
+            "invoice_count":   len(matched),
+            "invoices":        matched,
+            "note": (
+                None if matched else
+                "No invoices found linked to this estimate. "
+                "If recently completed, invoices may not yet be created in Striven."
+            ),
+        })
+
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/invoice-audit", methods=["GET"])
+def invoice_audit():
+    """
+    Find completed estimates that are missing a final invoice in Striven.
+
+    Pulls completed estimates from Supabase, then checks each against Striven
+    invoices. Flags any completed job with no invoice on record.
+
+    This is the core billing gap audit — surfaces jobs that were finished
+    but never invoiced.
+
+    Query params:
+        limit   (optional) — max estimates to audit (default 50, max 200)
+        year    (optional) — restrict to a specific calendar year
+
+    Examples:
+        GET /queries/invoice-audit
+        GET /queries/invoice-audit?year=2025&limit=100
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from services.supabase_client import _get_client as _sb
+
+    limit    = min(int(request.args.get("limit", 50)), 200)
+    year_raw = request.args.get("year")
+    year: int | None = int(year_raw) if year_raw and year_raw.isdigit() else None
+
+    try:
+        # Step 1 — pull completed estimates from Supabase
+        q = (
+            _sb().table("estimates")
+            .select("estimate_id, estimate_number, customer_id, customer_name, total_amount, created_date, sales_rep_name")
+            .eq("status_normalized", "COMPLETED")
+            .order("created_date", desc=True)
+            .limit(limit)
+        )
+        if year:
+            q = (
+                q
+                .gte("created_date", f"{year}-01-01T00:00:00+00:00")
+                .lt("created_date",  f"{year + 1}-01-01T00:00:00+00:00")
+            )
+        est_res = q.execute()
+        estimates = est_res.data or []
+
+        if not estimates:
+            return jsonify({"count": 0, "missing_invoice": [], "note": "No completed estimates found."})
+
+        # Step 2 — for each estimate, check Striven for invoices
+        def _check(est: dict) -> dict | None:
+            """Return est dict if it has NO invoice, else None."""
+            try:
+                resp    = striven.search_invoices({"CustomerId": est["customer_id"], "PageSize": 100})
+                raw_inv = resp.get("Data") or resp.get("data") or []
+                linked  = [
+                    inv for inv in raw_inv
+                    if (inv.get("salesOrder") or {}).get("id") == est["estimate_id"]
+                ]
+                if linked:
+                    return None   # has invoice — OK
+                return {
+                    "estimate_id":     est["estimate_id"],
+                    "estimate_number": est["estimate_number"],
+                    "customer_name":   est["customer_name"],
+                    "sales_rep":       _normalize_sales_rep(est.get("sales_rep_name")),
+                    "total":           est["total_amount"],
+                    "completed_date":  est["created_date"],
+                }
+            except Exception:
+                return None   # skip on error
+
+        missing: list[dict] = []
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {pool.submit(_check, e): e for e in estimates}
+            for future in as_completed(futures):
+                r = future.result()
+                if r:
+                    missing.append(r)
+
+        missing.sort(key=lambda x: x.get("completed_date") or "", reverse=True)
+
+        return jsonify({
+            "audited":           len(estimates),
+            "missing_invoice":   len(missing),
+            "pct_missing":       round(len(missing) / max(len(estimates), 1) * 100, 1),
+            "year_filter":       year,
+            "data":              missing,
+        })
+
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
 # Brand leaderboard — all brands ranked by job count + revenue
 # ---------------------------------------------------------------------------
 

@@ -97,6 +97,8 @@ TOOLS AVAILABLE
 - backlog_by_rep               → active job count + revenue grouped by sales rep
 - jobs_by_location             → job count + revenue by named area (zip-code accurate for tri-county)
 - time_to_preview              → average days from estimate creation to site preview
+- get_invoices_by_estimate     → all invoices linked to a specific estimate (status, total, balance due)
+- invoice_audit                → completed estimates missing a final invoice (billing gap audit)
 - search_by_product            → search estimates by product/service keyword in line items (e.g. "isokern", "gas log")
 - brand_summary                → leaderboard of all brands by job count + revenue (all 24 brands in one call)
 - search_by_pipeline_status   → find active jobs by operational status (ready to schedule, waiting on product, etc.)
@@ -119,6 +121,9 @@ WHEN TO USE EACH TOOL
 - "Show me jobs ready to schedule"                → search_by_pipeline_status
 - "What jobs are waiting on product?"             → search_by_pipeline_status
 - "Which jobs need review before invoicing?"      → search_by_pipeline_status
+- "Has estimate 9275 been invoiced?"               → get_invoices_by_estimate(9275)
+- "Which completed jobs have no invoice?"          → invoice_audit()
+- "Billing gaps from 2024"                         → invoice_audit(year=2024)
 - "What brands do we install most?"                → brand_summary()
 - "Brand breakdown in Kiawah?"                    → brand_summary(zip="29455")
 - "How many isokern jobs have we done?"            → search_by_product(keyword="isokern")  ← NEVER use search_estimates for this
@@ -586,6 +591,78 @@ def search_by_product(
     if limit != 50:
         params["limit"] = limit
     return _call("get", "/queries/search-by-product", params=params)
+
+
+@mcp.tool()
+def get_invoices_by_estimate(estimate_id: int) -> dict:
+    """
+    Return all invoices linked to a specific estimate / sales order.
+
+    Cross-references the estimate against Striven invoices to show what has
+    been billed, the invoice status, total, and any outstanding balance.
+
+    Use when asked:
+      'Has estimate 9275 been invoiced?'
+      'Show me the invoice for job #8452'
+      'What is the invoice status for this estimate?'
+      'Has the final invoice been sent for this job?'
+      'Is there an outstanding balance on estimate 7123?'
+
+    Args:
+        estimate_id: The Striven estimate / sales order ID (integer).
+
+    Returns:
+        estimate_number  — the estimate number (e.g. "9275")
+        customer_name    — customer on the estimate
+        estimate_status  — current estimate status
+        estimate_total   — estimate value
+        invoice_count    — number of invoices found
+        invoices         — list of invoices, each with:
+                           invoice_number, status, total, balance_due,
+                           date_created, due_date
+    """
+    return _call("get", "/queries/invoices-by-estimate", params={"estimate_id": estimate_id})
+
+
+@mcp.tool()
+def invoice_audit(year: int = 0, limit: int = 50) -> dict:
+    """
+    Find completed estimates that are missing a final invoice in Striven.
+
+    Audits completed jobs against Striven invoices to surface billing gaps —
+    jobs that were finished but never invoiced. This is the core tool for
+    catching revenue that hasn't been billed yet.
+
+    Use when asked:
+      'Which completed jobs have no invoice?'
+      'Are there any jobs we forgot to invoice?'
+      'Show me billing gaps'
+      'Which finished jobs are missing invoices?'
+      'What completed jobs haven't been billed?'
+      'Are there uninvoiced completed estimates from last year?'
+
+    Args:
+        year:  Filter to a specific calendar year (e.g. 2024 or 2025).
+               Use 0 for all years (default).
+        limit: Max completed estimates to audit (default 50, max 200).
+               Higher values are more thorough but slower — each estimate
+               requires one Striven API call to check for invoices.
+
+    Returns:
+        audited          — number of completed estimates checked
+        missing_invoice  — count with no invoice found
+        pct_missing      — percentage without an invoice
+        year_filter      — year applied, or null
+        data             — list of estimates missing invoices, each with:
+                           estimate_number, customer_name, sales_rep, total,
+                           completed_date
+    """
+    params: dict = {}
+    if year and year > 0:
+        params["year"] = year
+    if limit != 50:
+        params["limit"] = limit
+    return _call("get", "/queries/invoice-audit", params=params or None)
 
 
 @mcp.tool()
