@@ -7322,6 +7322,78 @@ def simple_chat():
 
 
 # ---------------------------------------------------------------------------
+# Knowledge base semantic search
+# ---------------------------------------------------------------------------
+
+@app.route("/search-knowledge-base", methods=["GET"])
+def search_knowledge_base():
+    """
+    Semantic search over the Notion knowledge base stored in Supabase.
+
+    Embeds the query with OpenAI text-embedding-3-small, then runs a cosine
+    similarity search against kb_document_chunks via the
+    match_kb_document_chunks Postgres function (pgvector).
+
+    Query params:
+        query  — required — the search string
+        limit  — optional — max chunks to return, capped at 20 (default 5)
+
+    Returns:
+        {
+          "query": "...",
+          "results": [
+            {
+              "id":          "...",
+              "document_id": "...",
+              "chunk_index": 0,
+              "content":     "...",
+              "similarity":  0.87,
+              "title":       "...",   # from kb_documents join
+              "url":         "..."
+            },
+            ...
+          ]
+        }
+    """
+    query = request.args.get("query", "").strip()
+    if not query:
+        return jsonify({"error": "Missing required query parameter: query"}), 400
+
+    limit = min(int(request.args.get("limit", 5)), 20)
+
+    try:
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if not openai_key:
+            return jsonify({"error": "OPENAI_API_KEY is not configured on this server."}), 500
+
+        from openai import OpenAI as _OpenAI
+        _oa_client = _OpenAI(api_key=openai_key)
+
+        embed_resp     = _oa_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=query,
+        )
+        query_embedding = embed_resp.data[0].embedding
+
+        result = (
+            _sb_client()
+            .rpc(
+                "match_kb_document_chunks",
+                {
+                    "query_embedding": query_embedding,
+                    "match_count":     limit,
+                },
+            )
+            .execute()
+        )
+
+        return jsonify({"query": query, "results": result.data or []})
+
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
