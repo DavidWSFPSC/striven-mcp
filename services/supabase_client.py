@@ -1804,7 +1804,7 @@ def query_weekly_digest() -> dict:
         .table("estimates")
         .select(
             "estimate_number, customer_name, sales_rep_name, "
-            "status_normalized, created_date, total_amount"
+            "status_normalized, status_raw, project_type, created_date, total_amount"
         )
         .eq("status_normalized", "ACTIVE")
         .lt("created_date", _iso(fourteen_ago))
@@ -1822,12 +1822,13 @@ def query_weekly_digest() -> dict:
                 "count":  len(stalled_rows),
                 "sample": [
                     {
-                        "estimate": r["estimate_number"],
-                        "customer": r["customer_name"],
-                        "rep":      r.get("sales_rep_name"),
-                        "status":   r["status_normalized"],
-                        "days_old": _days_since(r["created_date"]),
-                        "value":    r.get("total_amount"),
+                        "estimate":     r["estimate_number"],
+                        "customer":     r["customer_name"],
+                        "rep":          r.get("sales_rep_name"),
+                        "stage":        r.get("status_raw"),
+                        "project_type": r.get("project_type"),
+                        "days_old":     _days_since(r["created_date"]),
+                        "value":        r.get("total_amount"),
                     }
                     for r in stalled_rows[:10]
                 ],
@@ -1869,63 +1870,100 @@ def query_weekly_digest() -> dict:
             },
         })
 
-    # ── Check 4: Sales rep activity drop ──────────────────────────────────────
-    rep_rows = (
+    # ── Fix 1 + 3: Fetch all ACTIVE estimates for pipeline matrix and rep summary ──
+    active_rows = (
         _get_client()
         .table("estimates")
-        .select("sales_rep_name, created_date")
-        .gte("created_date", _iso(now - timedelta(days=28)))
+        .select(
+            "estimate_id, sales_rep_name, total_amount, "
+            "status_raw, project_type, created_date"
+        )
+        .eq("status_normalized", "ACTIVE")
         .order("created_date", desc=True)
-        .limit(1000)
+        .limit(2000)
         .execute()
     ).data or []
 
-    rep_buckets: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0, 0])
-    for r in rep_rows:
-        rep = (r.get("sales_rep_name") or "").strip()
-        if not rep or rep.lower() in ("unassigned", "unknown"):
+    # ── Fix 1: Pipeline by project_type × rep (matches Backlog Summary sheet) ─
+    matrix: dict[str, dict[str, dict]] = defaultdict(
+        lambda: defaultdict(lambda: {"count": 0, "value": 0.0})
+    )
+    all_amounts: list[float] = []
+    for r in active_rows:
+        pt  = (r.get("project_type") or "Unspecified").strip() or "Unspecified"
+        rep = (r.get("sales_rep_name") or "Unassigned").strip() or "Unassigned"
+        amt = float(r.get("total_amount") or 0)
+        matrix[pt][rep]["count"] += 1
+        matrix[pt][rep]["value"] += amt
+        all_amounts.append(amt)
+
+    pipeline_by_type_and_rep = {
+        pt: {rep: {"count": v["count"], "value": round(v["value"], 2)}
+             for rep, v in sorted(reps.items())}
+        for pt, reps in sorted(matrix.items())
+    }
+
+    all_zero = bool(all_amounts) and all(a == 0 for a in all_amounts)
+    data_quality_note = (
+        "All total_amount values are $0 or null — order totals may not be synced yet"
+        if all_zero else None
+    )
+
+    # ── Fix 3: Rep activity summary (replaces broken rep-drop check) ──────────
+    rep_data: dict[str, dict] = defaultdict(
+        lambda: {"count": 0, "total_value": 0.0, "by_stage": defaultdict(int)}
+    )
+    for r in active_rows:
+        rep = (r.get("sales_rep_name") or "Unassigned").strip() or "Unassigned"
+        if rep.lower() in ("unassigned", "unknown"):
             continue
-        cd = r.get("created_date", "")
-        if cd >= _iso(week_start):
-            rep_buckets[rep][0] += 1
-        elif cd >= _iso(now - timedelta(days=14)):
-            rep_buckets[rep][1] += 1
-        elif cd >= _iso(now - timedelta(days=21)):
-            rep_buckets[rep][2] += 1
-        else:
-            rep_buckets[rep][3] += 1
+        amt   = float(r.get("total_amount") or 0)
+        stage = (r.get("status_raw") or "Unknown").strip()
+        rep_data[rep]["count"] += 1
+        rep_data[rep]["total_value"] += amt
+        rep_data[rep]["by_stage"][stage] += 1
 
-    dropped = [
-        {
-            "rep":           rep,
-            "this_week":     buckets[0],
-            "prior_3_weeks": buckets[1:],
-        }
-        for rep, buckets in rep_buckets.items()
-        if buckets[0] == 0 and sum(buckets[1:]) > 0
-    ]
+    rep_summary = sorted(
+        [
+            {
+                "rep":            rep,
+                "active_jobs":    v["count"],
+                "pipeline_value": round(v["total_value"], 2),
+                "by_stage":       dict(
+                    sorted(v["by_stage"].items(), key=lambda x: -x[1])
+                ),
+            }
+            for rep, v in rep_data.items()
+        ],
+        key=lambda x: -x["pipeline_value"],
+    )
 
-    if dropped:
+    # Flag reps with zero active opportunities in the pipeline
+    idle_reps = [r["rep"] for r in rep_summary if r["active_jobs"] == 0]
+    if idle_reps:
         flags.append({
             "category": "Sales",
             "severity": "low",
-            "summary":  f"{len(dropped)} rep(s) had zero new estimates this week after recent activity",
-            "detail": {
-                "reps": sorted(dropped, key=lambda x: -sum(x["prior_3_weeks"])),
-            },
+            "summary":  f"{len(idle_reps)} rep(s) have no active opportunities in the pipeline",
+            "detail":   {"reps": idle_reps},
         })
 
-    return {
-        "generated_at":   now.isoformat(),
-        "flags_count":    len(flags),
-        "flags":          flags,
+    result: dict = {
+        "generated_at":             now.isoformat(),
+        "flags_count":              len(flags),
+        "flags":                    flags,
+        "pipeline_by_type_and_rep": pipeline_by_type_and_rep,
+        "rep_summary":              rep_summary,
         "checks_run": [
             "callback_rate_spike",
             "stalled_active_estimates",
             "overdue_open_callbacks",
-            "sales_rep_activity_drop",
+            "rep_pipeline_summary",
         ],
         "skipped_checks": [
             "unlinked_payments — no payments table in Supabase",
         ],
     }
+    if data_quality_note:
+        result["data_quality_note"] = data_quality_note
+    return result
