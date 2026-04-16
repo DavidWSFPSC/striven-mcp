@@ -51,6 +51,13 @@ def _get_client() -> Client:
     return _client
 
 
+def _reset_client() -> Client:
+    """Force-create a fresh Supabase client (e.g. after a connection error)."""
+    global _client
+    _client = _init_client()
+    return _client
+
+
 # ---------------------------------------------------------------------------
 # Write helpers (Supabase only — never touches Striven)
 # ---------------------------------------------------------------------------

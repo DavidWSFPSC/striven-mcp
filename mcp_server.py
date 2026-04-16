@@ -1279,6 +1279,44 @@ def analyze_job_pipeline(
     return _call("get", "/queries/analyze-job-pipeline", params=params)
 
 
+@mcp.tool()
+def search_knowledge_base(query: str, top_k: int = 5) -> dict:
+    """
+    Semantic search across the WilliamSmith Fireplaces internal knowledge base.
+
+    Searches 17,000+ embedded chunks from 756 internal documents including:
+      - Installation manuals (Isokern, Heat & Glo, Empire, Dimplex, Element4, Astria, etc.)
+      - Product specifications and brochures
+      - Fireplace and insert installation specs
+      - Mortar, masonry, and venting requirements
+      - Service and callback guides
+      - Troubleshooting guides (gas, electric, wood-burning)
+      - Builder books and construction phase docs
+      - CSR policies and company procedures
+      - Employee onboarding and HR documents
+      - Permit information and estimating standards
+      - Price books and vendor documents
+      - Marketing materials
+
+    Use when asked about:
+      - How to install a specific fireplace model
+      - Product specs, dimensions, clearances, BTU ratings
+      - Isokern or masonry fireplace requirements
+      - Venting, gas line, or combustion air specs
+      - Warranty policy or service procedures
+      - Troubleshooting a specific symptom or brand
+      - Company policies or procedures
+      - Mortar mixes, refractory specs, or hearth materials
+      - Any question that requires referencing a manual or internal doc
+
+    Args:
+        query: Natural language question or keyword search (e.g. 'Isokern mortar mix ratio',
+               'Heat and Glo SL-550 clearances', 'gas valve troubleshooting').
+        top_k: Number of results to return (default 5, max 20).
+    """
+    return _call("get", "/search-knowledge-base", params={"query": query, "limit": top_k})
+
+
 # ---------------------------------------------------------------------------
 # Claude Enterprise compatibility — patch tool schemas to allow extra fields
 #

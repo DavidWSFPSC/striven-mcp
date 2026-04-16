@@ -67,7 +67,7 @@ import hashlib
 from dotenv import load_dotenv
 from notion_client import Client as NotionClient
 from openai import OpenAI
-from services.supabase_client import _get_client
+from services.supabase_client import _get_client, _reset_client
 
 load_dotenv()
 
@@ -304,13 +304,70 @@ def _upsert_document(page_id: str, title: str, url: str, full_text: str) -> str:
         "url":            url,
         "content":        full_text,
     }
-    (
+    _supabase_call(lambda: (
         _get_client()
         .table("kb_documents")
         .upsert(record, on_conflict="notion_page_id")
         .execute()
-    )
+    ))
     return doc_id
+
+
+_UPSERT_RETRIES = [2, 4, 8, 16]   # backoff seconds between retries
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Return True if the exception looks like a transient network/DB failure."""
+    import errno, socket
+    # Windows connection-reset (WinError 10054) and similar socket errors
+    if isinstance(exc, OSError) and exc.errno in (
+        errno.ECONNRESET, errno.ECONNABORTED, errno.ECONNREFUSED,
+        errno.EPIPE, errno.ETIMEDOUT, 10054, 10053, 10061,
+    ):
+        return True
+    msg = str(exc).lower()
+    triggers = [
+        "57014",                  # PostgreSQL statement_timeout
+        "502",                    # Gateway / Cloudflare timeout
+        "statement timeout",
+        "canceling statement",
+        "connectionterminated",   # HTTP/2 stream limit
+        "10054",                  # WinError connection reset
+        "forcibly closed",        # WinError 10054 text
+        "remote end closed",
+        "broken pipe",
+        "eof occurred",
+        "connection reset",
+        "connection was closed",
+        "connection aborted",
+    ]
+    return any(t in msg for t in triggers)
+
+
+def _supabase_call(fn, *args, **kwargs):
+    """
+    Call any Supabase table operation with retry + fresh-client logic.
+    fn should be a callable that returns a Supabase query builder.
+    """
+    last_exc = None
+    for attempt, delay in enumerate([0] + _UPSERT_RETRIES):
+        if delay:
+            print(f"[kb-sync]     retrying in {delay}s (attempt {attempt+1})...", flush=True)
+            time.sleep(delay)
+        try:
+            return fn()
+        except Exception as exc:
+            if _is_retryable(exc):
+                last_exc = exc
+                try:
+                    _reset_client()
+                except Exception:
+                    pass
+                if attempt < len(_UPSERT_RETRIES):
+                    continue
+                raise RuntimeError(f"Exhausted retries after {len(_UPSERT_RETRIES)} attempts: {exc}") from exc
+            raise   # non-retryable — propagate immediately
+    raise last_exc
 
 
 def _upsert_chunks(
@@ -320,29 +377,27 @@ def _upsert_chunks(
     embeddings: list[list[float]],
 ) -> None:
     """
-    Upsert all chunks for a document into kb_document_chunks.
+    Upsert all chunks for a document into kb_document_chunks one row at a time.
+    Each row goes through _supabase_call for retry + connection-reset logic.
     Conflicts are resolved on id (stable hash of page_id + chunk_index).
     """
     if not chunks:
         return
 
-    records = [
-        {
+    for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+        record = {
             "id":          _chunk_id(page_id, i),
             "document_id": doc_id,
             "chunk_index": i,
             "content":     chunk,
             "embedding":   embedding,
         }
-        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
-    ]
-
-    (
-        _get_client()
-        .table("kb_document_chunks")
-        .upsert(records, on_conflict="id")
-        .execute()
-    )
+        _supabase_call(lambda r=record: (
+            _get_client()
+            .table("kb_document_chunks")
+            .upsert(r, on_conflict="id")
+            .execute()
+        ))
 
 
 # ---------------------------------------------------------------------------
