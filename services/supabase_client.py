@@ -1496,3 +1496,137 @@ def query_jobs_by_area(city: str, limit: int = 500, year: int | None = None) -> 
         "method":          "city_name",
         "year_filter":     year,
     }
+
+
+# ---------------------------------------------------------------------------
+# Callbacks by product — which fireplace models generate the most return trips
+# ---------------------------------------------------------------------------
+
+def query_callbacks_by_product(
+    year:          int | None = None,
+    callback_type: str | None = None,
+    min_price:     float = 500.0,
+    limit:         int = 2000,
+) -> dict:
+    """
+    Join callback_tasks to estimate_line_items to identify which fireplace
+    makes and models generate the most callbacks / return trips.
+
+    Args:
+        year:          Filter callbacks to a specific calendar year.
+        callback_type: Filter by task_type substring (e.g. "Installer", "Service").
+        min_price:     Minimum line item price to qualify as a main product unit
+                       (filters out accessories, parts, and labor). Default $500.
+        limit:         Max callback rows to fetch before aggregation (default 2000).
+
+    Returns:
+        Dict with ranked by_product list, total/linked/unlinked counts, and filters.
+    """
+    from collections import defaultdict
+
+    # ── Step 1: fetch callback tasks ────────────────────────────────────────
+    q = (
+        _get_client()
+        .table("callback_tasks")
+        .select(
+            "task_id, task_type, task_status, assigned_to, "
+            "customer_name, estimate_id, estimate_number, created_date"
+        )
+        .order("created_date", desc=True)
+        .limit(limit)
+    )
+    if year:
+        q = (
+            q
+            .gte("created_date", f"{year}-01-01T00:00:00+00:00")
+            .lt("created_date",  f"{year + 1}-01-01T00:00:00+00:00")
+        )
+    if callback_type:
+        q = q.ilike("task_type", f"%{callback_type}%")
+
+    cb_res    = q.execute()
+    callbacks = cb_res.data or []
+
+    total_callbacks = len(callbacks)
+    linked          = [c for c in callbacks if c.get("estimate_id")]
+    unlinked_count  = total_callbacks - len(linked)
+
+    if not linked:
+        return {
+            "total_callbacks": total_callbacks,
+            "linked_count":    0,
+            "unlinked_count":  unlinked_count,
+            "by_product":      [],
+            "filters": {
+                "year":          year,
+                "callback_type": callback_type,
+                "min_price":     min_price,
+            },
+            "note": "No callbacks are linked to an estimate — cannot join to line items.",
+        }
+
+    # ── Step 2: fetch line items for linked estimate_ids (batched) ──────────
+    estimate_ids  = list({c["estimate_id"] for c in linked})
+    all_line_items: list[dict] = []
+    batch_size    = 200
+
+    for i in range(0, len(estimate_ids), batch_size):
+        batch  = estimate_ids[i : i + batch_size]
+        li_res = (
+            _get_client()
+            .table("estimate_line_items")
+            .select("estimate_id, item_name, description, price, line_total")
+            .in_("estimate_id", batch)
+            .gte("price", min_price)
+            .execute()
+        )
+        all_line_items.extend(li_res.data or [])
+
+    # ── Step 3: map estimate_id → line items ────────────────────────────────
+    li_by_estimate: dict[int, list] = defaultdict(list)
+    for li in all_line_items:
+        li_by_estimate[li["estimate_id"]].append(li)
+
+    # ── Step 4: group callbacks by product ──────────────────────────────────
+    # Use a set of task_ids per product to ensure distinct callback counts.
+    product_task_ids:  dict[str, set]  = defaultdict(set)
+    product_desc:      dict[str, str]  = {}
+    no_line_item_count = 0
+
+    for cb in linked:
+        est_id = cb["estimate_id"]
+        items  = li_by_estimate.get(est_id, [])
+        if not items:
+            no_line_item_count += 1
+            continue
+        for li in items:
+            key = (li.get("item_name") or "Unknown").strip()
+            product_task_ids[key].add(cb["task_id"])
+            if key not in product_desc:
+                product_desc[key] = (li.get("description") or "").strip()
+
+    # ── Step 5: build ranked list ────────────────────────────────────────────
+    by_product = sorted(
+        [
+            {
+                "item_name":      name,
+                "description":    product_desc.get(name, ""),
+                "callback_count": len(task_ids),
+            }
+            for name, task_ids in product_task_ids.items()
+        ],
+        key=lambda x: -x["callback_count"],
+    )
+
+    return {
+        "total_callbacks":    total_callbacks,
+        "linked_count":       len(linked),
+        "unlinked_count":     unlinked_count,
+        "no_line_item_count": no_line_item_count,
+        "by_product":         by_product,
+        "filters": {
+            "year":          year,
+            "callback_type": callback_type,
+            "min_price":     min_price,
+        },
+    }

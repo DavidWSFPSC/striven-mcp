@@ -2242,6 +2242,54 @@ def callback_insights():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/analyze/callbacks-by-product", methods=["GET"])
+def callbacks_by_product():
+    """
+    Join callback tasks to estimate line items to rank which fireplace makes
+    and models generate the most return trips / callbacks.
+
+    Logic:
+      1. Fetch all callback_tasks (optionally filtered by year / callback_type).
+      2. For the ~800 tasks linked to an estimate, fetch matching estimate_line_items
+         where price >= min_price (default $500) to isolate main fireplace units
+         and exclude accessories, parts, and labor.
+      3. Group by item_name, count distinct callback task IDs per product.
+      4. Return ranked list (highest callback count first).
+      5. Also returns separate counts for unlinked callbacks and estimates with
+         no qualifying line items.
+
+    Query params:
+        year          — filter callbacks to a specific calendar year (e.g. 2024)
+        callback_type — filter by task type substring (e.g. "Installer", "Service")
+        min_price     — minimum line item price to qualify as a main unit (default 500)
+
+    Examples:
+        GET /analyze/callbacks-by-product
+        GET /analyze/callbacks-by-product?year=2024
+        GET /analyze/callbacks-by-product?callback_type=Installer
+        GET /analyze/callbacks-by-product?year=2024&callback_type=Service
+    """
+    from services.supabase_client import query_callbacks_by_product
+
+    year_raw  = request.args.get("year")
+    year: int | None = int(year_raw) if year_raw and year_raw.isdigit() else None
+
+    callback_type = request.args.get("callback_type") or None
+
+    min_price_raw = request.args.get("min_price")
+    min_price = float(min_price_raw) if min_price_raw else 500.0
+
+    try:
+        result = query_callbacks_by_product(
+            year=year,
+            callback_type=callback_type,
+            min_price=min_price,
+        )
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 # ---------------------------------------------------------------------------
 # Financial data routes — bills, payments (read-only, Striven API)
 # ---------------------------------------------------------------------------

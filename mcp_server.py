@@ -1349,6 +1349,41 @@ def search_knowledge_base(query: str, top_k: int = 5) -> dict:
     return _kb_search(query, top_k)
 
 
+@mcp.tool()
+def callbacks_by_product(
+    year:          int | None = None,
+    callback_type: str | None = None,
+) -> dict:
+    """
+    Analyze which fireplace makes and models generate the most callbacks and return trips.
+
+    Joins callback task records to estimate line items to identify problem products
+    by brand and model. Only counts line items priced over $500 so accessories,
+    parts, and labor are excluded — results reflect actual fireplace unit callbacks.
+
+    Returns a ranked list of products by callback count, plus separate tallies for
+    the ~200 callbacks with no linked estimate and any estimates missing line items.
+
+    Use when asked:
+      'Which fireplace models have the most callbacks?'
+      'What brands generate the most return trips?'
+      'Which products are most problematic?'
+      'Show me callback counts by product'
+      'What are our worst performing fireplace brands?'
+      'Which models do we keep going back to service?'
+
+    Args:
+        year:          Filter to callbacks from a specific year (e.g. 2024).
+        callback_type: Filter by task type substring — "Installer" for installer
+                       return trips, "Service" for service callbacks.
+                       Leave blank for all types combined.
+    """
+    params: dict = {}
+    if year:          params["year"]          = year
+    if callback_type: params["callback_type"] = callback_type
+    return _call("get", "/analyze/callbacks-by-product", params=params or None)
+
+
 # ---------------------------------------------------------------------------
 # Claude Enterprise compatibility — patch tool schemas to allow extra fields
 #
