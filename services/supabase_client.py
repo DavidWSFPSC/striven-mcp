@@ -537,6 +537,101 @@ def get_chat_logs(limit: int = 100) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Knowledge-base search logging
+# ---------------------------------------------------------------------------
+
+def log_kb_search(
+    query:          str,
+    results_count:  int,
+    top_similarity: float | None,
+) -> None:
+    """
+    Insert one row into kb_search_log. Called fire-and-forget after every
+    search_knowledge_base invocation — failures are silently swallowed so
+    they never break the search itself.
+
+    Table DDL (run once in Supabase SQL editor):
+        CREATE TABLE IF NOT EXISTS kb_search_log (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            query           TEXT NOT NULL,
+            results_count   INT NOT NULL,
+            top_similarity  FLOAT,
+            was_helpful     BOOLEAN DEFAULT NULL,
+            searched_at     TIMESTAMPTZ DEFAULT now()
+        );
+    """
+    try:
+        _get_client().table("kb_search_log").insert({
+            "query":          query[:500],
+            "results_count":  results_count,
+            "top_similarity": top_similarity,
+        }).execute()
+    except Exception:
+        pass   # fire-and-forget — never raise
+
+
+def query_kb_gaps(days: int = 30) -> dict:
+    """
+    Return the most frequently searched queries that produced poor results
+    (no results OR top_similarity < 0.5) in the last `days` days.
+
+    Groups by exact query text and counts occurrences, sorted descending.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
+        "%Y-%m-%dT%H:%M:%S+00:00"
+    )
+
+    res = (
+        _get_client()
+        .table("kb_search_log")
+        .select("query, results_count, top_similarity, searched_at")
+        .gte("searched_at", since)
+        .or_("results_count.eq.0,top_similarity.lt.0.5")
+        .order("searched_at", desc=True)
+        .limit(2000)
+        .execute()
+    )
+    rows = res.data or []
+
+    # Group by exact query text
+    from collections import defaultdict
+    counts: dict[str, dict] = defaultdict(lambda: {"count": 0, "top_sim_samples": [], "last_searched": ""})
+    for r in rows:
+        q   = r["query"]
+        sim = r.get("top_similarity")
+        counts[q]["count"] += 1
+        if sim is not None:
+            counts[q]["top_sim_samples"].append(sim)
+        if r["searched_at"] > counts[q]["last_searched"]:
+            counts[q]["last_searched"] = r["searched_at"]
+
+    gaps = sorted(
+        [
+            {
+                "query":            q,
+                "search_count":     v["count"],
+                "avg_similarity":   round(
+                    sum(v["top_sim_samples"]) / len(v["top_sim_samples"]), 3
+                ) if v["top_sim_samples"] else None,
+                "last_searched":    v["last_searched"],
+            }
+            for q, v in counts.items()
+        ],
+        key=lambda x: -x["search_count"],
+    )
+
+    return {
+        "days":        days,
+        "since":       since,
+        "total_poor_searches": len(rows),
+        "unique_gap_queries":  len(gaps),
+        "gaps":        gaps,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Gas log audit helpers — single-row summary table (id always = 1)
 # ---------------------------------------------------------------------------
 

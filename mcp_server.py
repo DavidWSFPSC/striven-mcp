@@ -54,7 +54,21 @@ def _kb_search(query: str, top_k: int = 5) -> dict:
             )
             .execute()
         )
-        return {"query": query, "results": result.data or []}
+        results = result.data or []
+
+        # Fire-and-forget logging — never raises, never breaks search
+        try:
+            from services.supabase_client import log_kb_search
+            top_sim = results[0].get("similarity") if results else None
+            log_kb_search(
+                query=query,
+                results_count=len(results),
+                top_similarity=top_sim,
+            )
+        except Exception:
+            pass
+
+        return {"query": query, "results": results}
     except Exception as exc:
         return {"error": str(exc)}
 
@@ -1347,6 +1361,30 @@ def search_knowledge_base(query: str, top_k: int = 5) -> dict:
         top_k: Number of results to return (default 5, max 20).
     """
     return _kb_search(query, top_k)
+
+
+@mcp.tool()
+def kb_gap_report(days: int = 30) -> dict:
+    """
+    Report on knowledge base search gaps — queries that returned no results or
+    low-confidence results. Use this to identify what documentation is missing
+    from the WilliamSmith knowledge base.
+
+    Analyzes kb_search_log for searches where results_count = 0 OR
+    top_similarity < 0.5, groups by query text, and ranks by frequency
+    so the most-needed missing docs float to the top.
+
+    Use when asked:
+      'What is the knowledge base missing?'
+      'What questions can the KB not answer?'
+      'Show me KB search gaps'
+      'What docs should we add to the knowledge base?'
+      'Which searches keep coming back empty?'
+
+    Args:
+        days: Look-back window in days (default 30).
+    """
+    return _call("get", "/analyze/kb-gaps", params={"days": days})
 
 
 @mcp.tool()

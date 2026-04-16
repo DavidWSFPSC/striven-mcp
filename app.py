@@ -2329,6 +2329,44 @@ def weekly_digest():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/analyze/kb-gaps", methods=["GET"])
+def kb_gaps():
+    """
+    Report on knowledge base search gaps — queries that returned no results
+    or a top similarity score below 0.5, grouped by exact query text and
+    ranked by search frequency.
+
+    Query params:
+        days — look-back window in days (default 30)
+
+    Returns:
+        {
+          "days": int,
+          "since": ISO timestamp,
+          "total_poor_searches": int,
+          "unique_gap_queries": int,
+          "gaps": [
+            {
+              "query":          "...",
+              "search_count":   int,
+              "avg_similarity": float | null,
+              "last_searched":  ISO timestamp
+            }, ...
+          ]
+        }
+    """
+    from services.supabase_client import query_kb_gaps
+
+    days_raw = request.args.get("days")
+    days = int(days_raw) if days_raw and days_raw.isdigit() else 30
+
+    try:
+        result = query_kb_gaps(days=days)
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 # ---------------------------------------------------------------------------
 # Financial data routes — bills, payments (read-only, Striven API)
 # ---------------------------------------------------------------------------
