@@ -494,14 +494,16 @@ if __name__ == "__main__":
         print("[kb-sync] FULL RESYNC — deleting all existing chunks and documents...", flush=True)
         try:
             sb = _get_client()
-            # Delete chunks first (FK constraint: chunks reference documents).
-            # PostgREST requires at least one filter; use universally-true conditions:
-            #   chunk_index >= 0  (integer column, always true)
-            #   notion_page_id != ''  (text column, never empty in practice)
-            sb.table("kb_document_chunks").delete().gte("chunk_index", 0).execute()
-            print("[kb-sync]   kb_document_chunks cleared.", flush=True)
-            sb.table("kb_documents").delete().neq("notion_page_id", "").execute()
-            print("[kb-sync]   kb_documents cleared.", flush=True)
+            # TRUNCATE via RPC — bulk DELETE times out on large tables.
+            # Requires this function in Supabase (run once in SQL editor):
+            #
+            #   CREATE OR REPLACE FUNCTION truncate_kb_tables()
+            #   RETURNS void LANGUAGE SQL SECURITY DEFINER AS $$
+            #     TRUNCATE kb_document_chunks;
+            #     TRUNCATE kb_documents CASCADE;
+            #   $$;
+            sb.rpc("truncate_kb_tables", {}).execute()
+            print("[kb-sync]   kb_document_chunks + kb_documents truncated.", flush=True)
         except Exception as exc:
             print(f"[kb-sync]   ERROR during delete: {exc}", flush=True)
             raise SystemExit(1)
