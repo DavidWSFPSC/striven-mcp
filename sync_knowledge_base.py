@@ -494,10 +494,13 @@ if __name__ == "__main__":
         print("[kb-sync] FULL RESYNC — deleting all existing chunks and documents...", flush=True)
         try:
             sb = _get_client()
-            # Delete chunks first (FK constraint: chunks reference documents)
-            sb.table("kb_document_chunks").delete().neq("id", "").execute()
+            # Delete chunks first (FK constraint: chunks reference documents).
+            # PostgREST requires at least one filter; use universally-true conditions:
+            #   chunk_index >= 0  (integer column, always true)
+            #   notion_page_id != ''  (text column, never empty in practice)
+            sb.table("kb_document_chunks").delete().gte("chunk_index", 0).execute()
             print("[kb-sync]   kb_document_chunks cleared.", flush=True)
-            sb.table("kb_documents").delete().neq("id", "").execute()
+            sb.table("kb_documents").delete().neq("notion_page_id", "").execute()
             print("[kb-sync]   kb_documents cleared.", flush=True)
         except Exception as exc:
             print(f"[kb-sync]   ERROR during delete: {exc}", flush=True)
