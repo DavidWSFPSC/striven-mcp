@@ -27,6 +27,38 @@ from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse
 
 # ---------------------------------------------------------------------------
+# Knowledge-base search helpers (in-process — no inter-service HTTP call)
+# ---------------------------------------------------------------------------
+
+def _kb_embed(query: str) -> list:
+    """Embed a query string using OpenAI text-embedding-3-small."""
+    from openai import OpenAI as _OpenAI
+    client = _OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    resp = client.embeddings.create(model="text-embedding-3-small", input=query)
+    return resp.data[0].embedding
+
+
+def _kb_search(query: str, top_k: int = 5) -> dict:
+    """Embed query and call the Supabase match_kb_document_chunks RPC directly."""
+    try:
+        from supabase import create_client as _create_client
+        sb = _create_client(
+            os.environ["SUPABASE_URL"],
+            os.environ["SUPABASE_KEY"],
+        )
+        embedding = _kb_embed(query)
+        result = (
+            sb.rpc(
+                "match_kb_document_chunks",
+                {"query_embedding": embedding, "match_count": min(top_k, 20)},
+            )
+            .execute()
+        )
+        return {"query": query, "results": result.data or []}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -1314,7 +1346,7 @@ def search_knowledge_base(query: str, top_k: int = 5) -> dict:
                'Heat and Glo SL-550 clearances', 'gas valve troubleshooting').
         top_k: Number of results to return (default 5, max 20).
     """
-    return _call("get", "/search-knowledge-base", params={"query": query, "limit": top_k})
+    return _kb_search(query, top_k)
 
 
 # ---------------------------------------------------------------------------
