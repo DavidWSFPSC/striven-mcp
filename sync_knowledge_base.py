@@ -201,8 +201,8 @@ def _fetch_all_notion_pages(notion: NotionClient) -> list[dict]:
 # Chunking
 # ---------------------------------------------------------------------------
 
-_CHUNK_SIZE    = 1000
-_CHUNK_OVERLAP = 100   # 10% of chunk size
+_CHUNK_SIZE    = 1500   # larger chunks keep table rows intact
+_CHUNK_OVERLAP = 200    # ~13% overlap for cross-chunk context
 
 
 def _chunk_text(
@@ -480,5 +480,28 @@ def sync() -> dict:
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Sync Notion pages into Supabase kb tables.")
+    parser.add_argument(
+        "--full-resync",
+        action="store_true",
+        help="Delete all existing chunks and documents before syncing (rebuilds from scratch).",
+    )
+    args = parser.parse_args()
+
+    if args.full_resync:
+        print("[kb-sync] FULL RESYNC — deleting all existing chunks and documents...", flush=True)
+        try:
+            sb = _get_client()
+            # Delete chunks first (FK constraint: chunks reference documents)
+            sb.table("kb_document_chunks").delete().neq("id", "").execute()
+            print("[kb-sync]   kb_document_chunks cleared.", flush=True)
+            sb.table("kb_documents").delete().neq("id", "").execute()
+            print("[kb-sync]   kb_documents cleared.", flush=True)
+        except Exception as exc:
+            print(f"[kb-sync]   ERROR during delete: {exc}", flush=True)
+            raise SystemExit(1)
+
     result = sync()
     print(result)
