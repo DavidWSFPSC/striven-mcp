@@ -1350,6 +1350,32 @@ def search_knowledge_base(query: str, top_k: int = 5) -> dict:
 
 
 @mcp.tool()
+def weekly_digest() -> dict:
+    """
+    Generate a weekly business health digest flagging anomalies — callback spikes,
+    stalled estimates, overdue open callbacks, pipeline gaps, and sales rep activity drops.
+    Run this every Monday morning or when asked for a business health check.
+
+    Runs four checks and returns a flags array (empty = all clear):
+      - Callback rate spike: this week's new callbacks vs 4-week rolling average
+      - Stalled active estimates: jobs in ACTIVE status for 14+ days with no movement
+      - Overdue open callbacks: callback tasks still open after 7+ days
+      - Sales rep activity drop: reps with zero new estimates this week after recent activity
+
+    Each flag has: category, severity (low/medium/high), summary, and detail.
+
+    Use when asked:
+      'Monday health check'
+      'Business anomaly report'
+      'What looks off this week?'
+      'Weekly digest'
+      'Are there any spikes or issues I should know about?'
+      'How does this week compare to recent weeks?'
+    """
+    return _call("get", "/analyze/weekly-digest")
+
+
+@mcp.tool()
 def callbacks_by_product(
     year:          int | None = None,
     callback_type: str | None = None,

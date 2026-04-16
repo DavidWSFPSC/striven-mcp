@@ -2290,6 +2290,45 @@ def callbacks_by_product():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/analyze/weekly-digest", methods=["GET"])
+def weekly_digest():
+    """
+    Generate a weekly business health digest flagging anomalies.
+
+    Runs four checks against Supabase data and returns a structured flags
+    array for any conditions outside normal range:
+      1. Callback rate spike — this week vs 4-week rolling average (>25% = flag)
+      2. Stalled active estimates — ACTIVE status, created more than 14 days ago
+      3. Overdue open callbacks — task_status open, created more than 7 days ago
+      4. Sales rep activity drop — zero new estimates this week after 3 weeks of activity
+
+    Returns:
+        {
+          "generated_at": ISO timestamp,
+          "flags_count":  int,
+          "flags": [
+            {
+              "category": "Callbacks" | "Pipeline" | "Sales",
+              "severity": "low" | "medium" | "high",
+              "summary":  "...",
+              "detail":   { ... }
+            }, ...
+          ],
+          "checks_run":    [...],
+          "skipped_checks": [...]
+        }
+
+    No query params — always runs all checks against current data.
+    """
+    from services.supabase_client import query_weekly_digest
+
+    try:
+        result = query_weekly_digest()
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 # ---------------------------------------------------------------------------
 # Financial data routes — bills, payments (read-only, Striven API)
 # ---------------------------------------------------------------------------

@@ -1630,3 +1630,207 @@ def query_callbacks_by_product(
             "min_price":     min_price,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Weekly anomaly digest — flags business health issues vs recent baselines
+# ---------------------------------------------------------------------------
+
+def query_weekly_digest() -> dict:
+    """
+    Run four anomaly checks against Supabase and return a flags array
+    for any conditions outside normal range.
+
+    Checks:
+      1. Callback rate spike — this week vs 4-week rolling average (>25% = flag)
+      2. Stalled active estimates — in ACTIVE status, created > 14 days ago
+      3. Overdue open callbacks — task_status = open, created > 7 days ago
+      4. Sales rep activity drop — zero new estimates this week after prior 3-week activity
+
+    Note: unlinked payments check is skipped — no payments table in Supabase.
+    """
+    from datetime import datetime, timezone, timedelta
+    from collections import defaultdict
+
+    now          = datetime.now(timezone.utc)
+    week_start   = now - timedelta(days=7)
+    four_wks_ago = now - timedelta(days=35)
+    fourteen_ago = now - timedelta(days=14)
+
+    def _iso(dt: datetime) -> str:
+        return dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+    def _days_since(date_str: str) -> int:
+        try:
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            return max(0, (now - dt).days)
+        except Exception:
+            return 0
+
+    flags: list[dict] = []
+
+    # ── Check 1: Callback rate spike ─────────────────────────────────────────
+    cb_rows = (
+        _get_client()
+        .table("callback_tasks")
+        .select("task_id, created_date")
+        .gte("created_date", _iso(four_wks_ago))
+        .order("created_date", desc=True)
+        .limit(2000)
+        .execute()
+    ).data or []
+
+    this_week_cbs = [r for r in cb_rows if r["created_date"] >= _iso(week_start)]
+    prior_wk_counts: list[int] = []
+    for i in range(1, 5):
+        s = _iso(now - timedelta(days=7 * (i + 1)))
+        e = _iso(now - timedelta(days=7 * i))
+        prior_wk_counts.append(sum(1 for r in cb_rows if s <= r["created_date"] < e))
+
+    prior_avg     = sum(prior_wk_counts) / 4
+    this_wk_count = len(this_week_cbs)
+
+    if prior_avg > 0 and this_wk_count > prior_avg * 1.25:
+        pct = round((this_wk_count / prior_avg - 1) * 100)
+        flags.append({
+            "category": "Callbacks",
+            "severity": "high" if pct >= 50 else "medium",
+            "summary":  f"Callback rate up {pct}% this week vs 4-week average",
+            "detail": {
+                "this_week_count": this_wk_count,
+                "four_week_avg":   round(prior_avg, 1),
+                "prior_4_weeks":   prior_wk_counts,
+            },
+        })
+
+    # ── Check 2: Stalled active estimates (created > 14 days ago) ────────────
+    stalled_rows = (
+        _get_client()
+        .table("estimates")
+        .select(
+            "estimate_number, customer_name, sales_rep_name, "
+            "status_normalized, created_date, total_amount"
+        )
+        .eq("status_normalized", "ACTIVE")
+        .lt("created_date", _iso(fourteen_ago))
+        .order("created_date", desc=True)
+        .limit(100)
+        .execute()
+    ).data or []
+
+    if stalled_rows:
+        flags.append({
+            "category": "Pipeline",
+            "severity": "medium",
+            "summary":  f"{len(stalled_rows)} active estimate(s) haven't progressed in 14+ days",
+            "detail": {
+                "count":  len(stalled_rows),
+                "sample": [
+                    {
+                        "estimate": r["estimate_number"],
+                        "customer": r["customer_name"],
+                        "rep":      r.get("sales_rep_name"),
+                        "status":   r["status_normalized"],
+                        "days_old": _days_since(r["created_date"]),
+                        "value":    r.get("total_amount"),
+                    }
+                    for r in stalled_rows[:10]
+                ],
+            },
+        })
+
+    # ── Check 3: Open callbacks older than 7 days ─────────────────────────────
+    overdue_rows = (
+        _get_client()
+        .table("callback_tasks")
+        .select(
+            "task_id, task_type, assigned_to, "
+            "customer_name, estimate_number, created_date"
+        )
+        .ilike("task_status", "%open%")
+        .lt("created_date", _iso(week_start))
+        .order("created_date", desc=False)   # oldest first
+        .limit(200)
+        .execute()
+    ).data or []
+
+    if overdue_rows:
+        flags.append({
+            "category": "Callbacks",
+            "severity": "high" if len(overdue_rows) >= 10 else "medium",
+            "summary":  f"{len(overdue_rows)} callback task(s) still open after 7+ days",
+            "detail": {
+                "count":  len(overdue_rows),
+                "sample": [
+                    {
+                        "task_type":   r.get("task_type"),
+                        "assigned_to": r.get("assigned_to"),
+                        "customer":    r.get("customer_name"),
+                        "estimate":    r.get("estimate_number"),
+                        "days_open":   _days_since(r["created_date"]),
+                    }
+                    for r in overdue_rows[:15]
+                ],
+            },
+        })
+
+    # ── Check 4: Sales rep activity drop ──────────────────────────────────────
+    rep_rows = (
+        _get_client()
+        .table("estimates")
+        .select("sales_rep_name, created_date")
+        .gte("created_date", _iso(now - timedelta(days=28)))
+        .order("created_date", desc=True)
+        .limit(1000)
+        .execute()
+    ).data or []
+
+    rep_buckets: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0, 0])
+    for r in rep_rows:
+        rep = (r.get("sales_rep_name") or "").strip()
+        if not rep or rep.lower() in ("unassigned", "unknown"):
+            continue
+        cd = r.get("created_date", "")
+        if cd >= _iso(week_start):
+            rep_buckets[rep][0] += 1
+        elif cd >= _iso(now - timedelta(days=14)):
+            rep_buckets[rep][1] += 1
+        elif cd >= _iso(now - timedelta(days=21)):
+            rep_buckets[rep][2] += 1
+        else:
+            rep_buckets[rep][3] += 1
+
+    dropped = [
+        {
+            "rep":           rep,
+            "this_week":     buckets[0],
+            "prior_3_weeks": buckets[1:],
+        }
+        for rep, buckets in rep_buckets.items()
+        if buckets[0] == 0 and sum(buckets[1:]) > 0
+    ]
+
+    if dropped:
+        flags.append({
+            "category": "Sales",
+            "severity": "low",
+            "summary":  f"{len(dropped)} rep(s) had zero new estimates this week after recent activity",
+            "detail": {
+                "reps": sorted(dropped, key=lambda x: -sum(x["prior_3_weeks"])),
+            },
+        })
+
+    return {
+        "generated_at":   now.isoformat(),
+        "flags_count":    len(flags),
+        "flags":          flags,
+        "checks_run": [
+            "callback_rate_spike",
+            "stalled_active_estimates",
+            "overdue_open_callbacks",
+            "sales_rep_activity_drop",
+        ],
+        "skipped_checks": [
+            "unlinked_payments — no payments table in Supabase",
+        ],
+    }
