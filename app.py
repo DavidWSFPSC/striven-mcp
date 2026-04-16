@@ -6050,6 +6050,38 @@ def _analyze_weekly_pipeline(limit: int = 40) -> dict:
                 "has_install":  None,   # filled below for approved/in-progress
             })
 
+    # ── Step 2b: Enrich reps + totals from Supabase ──────────────────────────
+    # Striven search stubs don't return salesRep or orderTotal.
+    # Supabase has both synced as sales_rep_name and total_amount.
+    try:
+        est_numbers = [j["id"] for j in all_jobs if j["id"]]
+        if est_numbers:
+            _enrich_raw = (
+                _sb_client()
+                .table("estimates")
+                .select("estimate_number, total_amount, sales_rep_name")
+                .in_("estimate_number", est_numbers)
+                .execute()
+            )
+            _enrich_map = {
+                str(row["estimate_number"]): row
+                for row in (_enrich_raw.data or [])
+            }
+            for j in all_jobs:
+                row = _enrich_map.get(j["id"])
+                if row:
+                    if j["rep"] in ("Unassigned", "", None):
+                        j["rep"] = row.get("sales_rep_name") or "Unassigned"
+                    if not j["total"]:
+                        j["total"] = row.get("total_amount") or 0
+            print(
+                f"[weekly_pipeline] enriched {len(_enrich_map)}/{len(est_numbers)} "
+                f"estimates from Supabase",
+                flush=True,
+            )
+    except Exception as _enrich_exc:
+        print(f"[weekly_pipeline] WARNING enrichment failed: {_enrich_exc}", flush=True)
+
     # ── Step 3: Install-task check (approved + in-progress, capped at 20) ─────
     # Each task check costs one Striven API call.  Cap at 20 to keep the
     # total latency acceptable; remaining jobs show has_install=None (unknown).
