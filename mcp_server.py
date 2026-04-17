@@ -189,6 +189,11 @@ search_estimates is ONLY for status/date/estimate-number lookups.
 - "Show me open return trips"                     → search_callback_insights(status="Open")
 - "How many callbacks did Steven have?"           → search_callback_insights(assignee="Steven")
 - "Show callback breakdown by type"               → search_callback_insights(by="type")
+- "Why are we getting callbacks?"                 → analyze_callback_causes()
+- "Are callbacks product failures or user error?" → analyze_callback_causes()
+- "How many callbacks are billable?"              → analyze_callback_causes()
+- "Callback cause breakdown for 2024"             → analyze_callback_causes(year=2024)
+- "Show me Part failure callbacks"                → analyze_callback_causes(cause="Part")
 
 TONE & FORMAT
 -------------
@@ -1411,6 +1416,71 @@ def weekly_digest() -> dict:
       'How does this week compare to recent weeks?'
     """
     return _call("get", "/analyze/weekly-digest")
+
+
+@mcp.tool()
+def analyze_callback_causes(
+    cause:         str  = "",
+    year:          int  = 0,
+    billable_only: bool = False,
+    assignee:      str  = "",
+    limit:         int  = 500,
+) -> dict:
+    """
+    Analyze the root causes of service callbacks using structured
+    post-visit classifications captured by techs in Striven.
+
+    Covers only Service Diagnostic Repair: Call Back tasks (type 124)
+    where technicians filled in confirmed cause, service outcome,
+    billability, and work-performed notes after each visit.
+
+    Breaks down callbacks by confirmed cause (Part, Service, Battery,
+    User Error), service outcome (Red/Yellow/Green light), billability,
+    and whether a return trip was required.
+
+    Use when asked:
+      'Why are we getting so many callbacks?'
+      'Are our callbacks product failures or user error?'
+      'How many callbacks are billable?'
+      'What percentage of callbacks need a return trip?'
+      'Are callbacks improving over time?'
+      'What did techs actually do on callback visits?'
+      'Show me callbacks that needed a return trip'
+      'How many callbacks were caused by a bad part?'
+      'What is our callback cause breakdown?'
+      'Show me service callbacks vs part failures'
+
+    Args:
+        cause:         Filter by confirmed cause --
+                       "Part", "Service", "Battery", or "User Error".
+                       Leave empty for all causes combined.
+        year:          Filter to a specific year (e.g. 2024, 2025).
+                       0 = all years.
+        billable_only: If True, only include billable callbacks.
+        assignee:      Filter to a specific tech (partial name match).
+        limit:         Max tasks to analyze (default 500).
+
+    Returns:
+        total_analyzed     -- synced callback tasks matching filters
+        coverage_pct       -- % of all callback tasks with cause data
+        by_confirmed_cause -- count/pct/billable breakdown per cause
+        by_outcome         -- Red/Yellow/Green light counts
+        return_trip_required -- Scheduled/No/Unknown counts
+        billable_summary   -- billable vs not-billable counts and pct
+        sample_work_notes  -- up to 10 recent tech work notes
+    """
+    params: dict = {}
+    if cause:
+        params["cause"] = cause
+    if year:
+        params["year"] = year
+    if billable_only:
+        params["billable_only"] = "true"
+    if assignee:
+        params["assignee"] = assignee
+    if limit != 500:
+        params["limit"] = limit
+    return _call("get", "/queries/callback-causes", params=params or None)
 
 
 @mcp.tool()

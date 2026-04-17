@@ -194,6 +194,106 @@ def fetch_details_parallel(stubs: list[dict], token: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Custom field value maps — confirmed from live data (Phase 1 analysis)
+# ---------------------------------------------------------------------------
+
+# Fields 1329 + 1349 share identical option IDs
+CAUSE_MAP: dict[str, str] = {
+    "530": "Part",
+    "531": "Service",
+    "532": "Battery",
+    "533": "User Error",
+}
+
+OUTCOME_MAP: dict[str, str] = {
+    "123": "Red Light - Critical Review Needed",
+    "124": "Yellow Light - Return Trip Needed",
+    "125": "Green Light - Complete",
+}
+
+# Only two values confirmed in dataset; unknown IDs fall back to raw string
+RETURN_TRIP_MAP: dict[str, str] = {
+    "464": "Scheduled",
+    "465": "No",
+}
+
+# Sentinels that mean "no answer given" for free-text fields
+_FREE_TEXT_NULLS: frozenset[str] = frozenset(
+    {"", "0", "not entered", "none", "n/a"}
+)
+
+# Field IDs that only appear on Service Call Back tasks (type 124)
+_CALLBACK_CF_IDS: frozenset[int] = frozenset(
+    {1329, 1349, 1556, 1337, 1328, 1335, 1336, 1359, 1361}
+)
+
+
+def _extract_custom_field(
+    fields: list,
+    field_id: int,
+    value_map: dict | None = None,
+) -> str | None:
+    """
+    Locate a custom field by numeric ID and return its resolved value.
+
+    Dropdown fields (value_map provided):
+      1. Return valueText if non-null and non-empty.
+      2. Return None for value "0" or null (field not answered).
+      3. Return value_map[value] if key found.
+      4. Return raw value string for any unrecognized non-"0" value
+         (preserves Yes/Waiting etc. if Striven adds new options).
+
+    Free-text fields (no value_map):
+      1. Read from `value` (valueText is always null on these fields).
+      2. Return None if value is null, empty, or in _FREE_TEXT_NULLS.
+    """
+    for cf in (fields or []):
+        if cf.get("id") != field_id:
+            continue
+
+        vt = cf.get("valueText")
+        v  = cf.get("value")
+
+        if value_map is not None:
+            # Dropdown: try valueText first
+            if vt and str(vt).strip():
+                return str(vt).strip()
+            # Null / unset guard
+            if v is None or str(v).strip() == "0":
+                return None
+            raw = str(v).strip()
+            # Map lookup, then fall back to raw string
+            return value_map.get(raw, raw)
+        else:
+            # Free-text: always read from value
+            if v is None:
+                return None
+            raw = str(v).strip()
+            if raw.lower() in _FREE_TEXT_NULLS:
+                return None
+            return raw
+
+    return None
+
+
+def _extract_billable(fields: list, field_id: int) -> bool | None:
+    """
+    Extract a boolean stored as the string 'True' or 'False' in value.
+    valueText is always null for this field.
+    """
+    for cf in (fields or []):
+        if cf.get("id") != field_id:
+            continue
+        v = cf.get("value")
+        if v == "True":
+            return True
+        if v == "False":
+            return False
+        return None
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Transform raw task detail → clean flat record for storage
 # ---------------------------------------------------------------------------
 
@@ -205,18 +305,35 @@ def transform_task(t: dict) -> dict:
     assignments = t.get("assignments") or []
     customer    = t.get("customer")    or {}
 
+    info_fields = t.get("infoCustomFields")     or []
+    done_fields = t.get("markDoneCustomFields")  or []
+
+    all_cf_ids  = {cf.get("id") for cf in info_fields + done_fields}
+    has_cf      = bool(all_cf_ids & _CALLBACK_CF_IDS)
+
     return {
-        "task_id":       t.get("id"),
-        "task_type_id":  task_type.get("id"),
-        "task_type":     CALLBACK_TYPE_IDS.get(task_type.get("id"), task_type.get("name")),
-        "task_status":   status.get("name"),
-        "assigned_to":   assignments[0].get("name") if assignments else "Unassigned",
-        "customer_id":   customer.get("id"),
-        "customer_name": customer.get("name"),
-        "estimate_id":   sales_order.get("id"),
+        "task_id":         t.get("id"),
+        "task_type_id":    task_type.get("id"),
+        "task_type":       CALLBACK_TYPE_IDS.get(task_type.get("id"), task_type.get("name")),
+        "task_status":     status.get("name"),
+        "assigned_to":     assignments[0].get("name") if assignments else "Unassigned",
+        "customer_id":     customer.get("id"),
+        "customer_name":   customer.get("name"),
+        "estimate_id":     sales_order.get("id"),
         "estimate_number": sales_order.get("number"),
-        "created_date":  t.get("dateCreated"),
-        "due_date":      t.get("dueDateTime"),
+        "created_date":    t.get("dateCreated"),
+        "due_date":        t.get("dueDateTime"),
+        # Custom fields — only populated for type 124 (Service Call Back)
+        "preliminary_cause":    _extract_custom_field(info_fields, 1329, CAUSE_MAP),
+        "confirmed_cause":      _extract_custom_field(info_fields, 1349, CAUSE_MAP),
+        "customer_issue_desc":  _extract_custom_field(info_fields, 1328),
+        "work_performed":       _extract_custom_field(info_fields, 1335),
+        "service_outcome":      _extract_custom_field(info_fields, 1556, OUTCOME_MAP),
+        "return_trip_required": _extract_custom_field(info_fields, 1337, RETURN_TRIP_MAP),
+        "parts_used":           _extract_custom_field(info_fields, 1336),
+        "was_billable":         _extract_billable(done_fields, 1359),
+        "manager_notes":        _extract_custom_field(done_fields, 1361),
+        "custom_fields_synced": has_cf,
     }
 
 

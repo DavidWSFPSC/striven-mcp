@@ -2242,6 +2242,53 @@ def callback_insights():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/queries/callback-causes", methods=["GET"])
+def callback_causes():
+    """
+    Return root-cause analysis for service callbacks.
+
+    Only covers type 124 (Service Diagnostic Repair: Call Back) tasks
+    where technicians filled in structured post-visit fields.
+
+    Query params:
+        cause         -- filter by confirmed_cause (partial match, e.g. "Part")
+        year          -- filter to a specific year (e.g. 2024)
+        billable_only -- "true" to restrict to billable callbacks only
+        assignee      -- filter by technician name (partial match)
+        limit         -- max rows to aggregate (default 500, max 2000)
+
+    Examples:
+        GET /queries/callback-causes
+        GET /queries/callback-causes?cause=Part
+        GET /queries/callback-causes?year=2024
+        GET /queries/callback-causes?billable_only=true
+        GET /queries/callback-causes?assignee=Steven&year=2024
+    """
+    from services.supabase_client import query_callback_causes
+
+    cause     = request.args.get("cause",    "")
+    assignee  = request.args.get("assignee", "")
+    limit     = min(int(request.args.get("limit", 500)), 2000)
+
+    billable_raw  = request.args.get("billable_only", "false").lower()
+    billable_only = billable_raw in ("true", "1", "yes")
+
+    year_raw = request.args.get("year")
+    year     = int(year_raw) if year_raw and year_raw.isdigit() else 0
+
+    try:
+        result = query_callback_causes(
+            cause=cause,
+            year=year,
+            billable_only=billable_only,
+            assignee=assignee,
+            limit=limit,
+        )
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/analyze/callbacks-by-product", methods=["GET"])
 def callbacks_by_product():
     """

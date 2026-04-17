@@ -1967,3 +1967,158 @@ def query_weekly_digest() -> dict:
     if data_quality_note:
         result["data_quality_note"] = data_quality_note
     return result
+
+
+# ---------------------------------------------------------------------------
+# Callback root-cause analysis — structured post-visit classifications
+# ---------------------------------------------------------------------------
+
+def query_callback_causes(
+    cause:         str  = "",
+    year:          int  = 0,
+    billable_only: bool = False,
+    assignee:      str  = "",
+    limit:         int  = 500,
+) -> dict:
+    """
+    Analyse confirmed root causes of service callbacks using the structured
+    fields captured by technicians in Striven (type 124 tasks only).
+
+    Args:
+        cause:         Filter by confirmed_cause (partial, case-insensitive).
+        year:          Filter to a specific calendar year (0 = all).
+        billable_only: If True, only include rows where was_billable = True.
+        assignee:      Filter by assigned_to (partial, case-insensitive).
+        limit:         Max synced rows to aggregate (default 500).
+
+    Returns a dict with cause breakdown, outcome counts, return-trip counts,
+    billability summary, coverage stats, and up to 10 sample work notes.
+    """
+    from collections import defaultdict
+
+    client = _get_client()
+
+    # Coverage denominators — global counts, no filters applied
+    total_all_res = (
+        client.table("callback_tasks")
+        .select("task_id", count="exact")
+        .execute()
+    )
+    total_all = total_all_res.count or 0
+
+    synced_all_res = (
+        client.table("callback_tasks")
+        .select("task_id", count="exact")
+        .eq("custom_fields_synced", True)
+        .execute()
+    )
+    synced_all = synced_all_res.count or 0
+
+    coverage_pct = round(synced_all / max(total_all, 1) * 100, 1)
+
+    # Main query — always restrict to synced rows
+    q = (
+        client.table("callback_tasks")
+        .select(
+            "task_id, confirmed_cause, preliminary_cause, "
+            "service_outcome, return_trip_required, was_billable, "
+            "work_performed, customer_name, assigned_to, created_date"
+        )
+        .eq("custom_fields_synced", True)
+        .order("created_date", desc=True)
+        .limit(limit)
+    )
+
+    if cause:
+        q = q.ilike("confirmed_cause", f"%{cause}%")
+    if year > 0:
+        q = (
+            q
+            .gte("created_date", f"{year}-01-01T00:00:00+00:00")
+            .lt("created_date",  f"{year + 1}-01-01T00:00:00+00:00")
+        )
+    if billable_only:
+        q = q.eq("was_billable", True)
+    if assignee:
+        q = q.ilike("assigned_to", f"%{assignee}%")
+
+    res  = q.execute()
+    rows = res.data or []
+
+    total_analyzed = len(rows)
+
+    # ── By confirmed cause ────────────────────────────────────────────────────
+    known_causes = ["Part", "Service", "Battery", "User Error", "Unknown"]
+    cause_agg: dict[str, dict] = defaultdict(lambda: {"count": 0, "billable_count": 0})
+
+    for r in rows:
+        c = r.get("confirmed_cause") or "Unknown"
+        if c not in {"Part", "Service", "Battery", "User Error"}:
+            c = "Unknown"
+        cause_agg[c]["count"] += 1
+        if r.get("was_billable"):
+            cause_agg[c]["billable_count"] += 1
+
+    by_confirmed_cause = {
+        label: {
+            "count":          cause_agg[label]["count"],
+            "pct":            round(cause_agg[label]["count"] / max(total_analyzed, 1) * 100, 1),
+            "billable_count": cause_agg[label]["billable_count"],
+        }
+        for label in known_causes
+    }
+
+    # ── By service outcome (simplified labels) ────────────────────────────────
+    outcome_agg: dict[str, int] = defaultdict(int)
+    for r in rows:
+        o = r.get("service_outcome") or ""
+        if "Red"    in o: outcome_agg["Red"]     += 1
+        elif "Yellow" in o: outcome_agg["Yellow"] += 1
+        elif "Green"  in o: outcome_agg["Green"]  += 1
+        else:               outcome_agg["Unknown"] += 1
+    by_outcome = dict(outcome_agg)
+
+    # ── By return trip required ────────────────────────────────────────────────
+    rtr_agg: dict[str, int] = defaultdict(int)
+    for r in rows:
+        rtr = r.get("return_trip_required") or "Unknown"
+        rtr_agg[rtr] += 1
+    return_trip_required = dict(rtr_agg)
+
+    # ── Billable summary ──────────────────────────────────────────────────────
+    billable     = sum(1 for r in rows if r.get("was_billable") is True)
+    not_billable = sum(1 for r in rows if r.get("was_billable") is False)
+    answered     = billable + not_billable
+    billable_summary = {
+        "billable":     billable,
+        "not_billable": not_billable,
+        "unanswered":   total_analyzed - answered,
+        "billable_pct": round(billable / max(answered, 1) * 100, 1),
+    }
+
+    # ── Sample work notes (up to 10 most recent non-null work_performed) ──────
+    sample_work_notes = []
+    for r in rows:
+        if r.get("work_performed") and len(sample_work_notes) < 10:
+            sample_work_notes.append({
+                "task_id":  r.get("task_id"),
+                "customer": r.get("customer_name"),
+                "cause":    r.get("confirmed_cause"),
+                "note":     r.get("work_performed"),
+            })
+
+    return {
+        "total_analyzed":     total_analyzed,
+        "coverage_pct":       coverage_pct,
+        "by_confirmed_cause": by_confirmed_cause,
+        "by_outcome":         by_outcome,
+        "return_trip_required": return_trip_required,
+        "billable_summary":   billable_summary,
+        "filters_applied": {
+            "cause":         cause,
+            "year":          year,
+            "billable_only": billable_only,
+            "assignee":      assignee,
+        },
+        "sample_work_notes": sample_work_notes,
+    }
