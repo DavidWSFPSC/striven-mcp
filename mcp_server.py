@@ -73,6 +73,170 @@ def _kb_search(query: str, top_k: int = 5) -> dict:
         return {"error": str(exc)}
 
 # ---------------------------------------------------------------------------
+# Invoice AR helpers (in-process Supabase queries — no Flask hop)
+# ---------------------------------------------------------------------------
+
+def _sb_client():
+    """Return a Supabase client using env vars (lazy, not cached — safe for forked workers)."""
+    from supabase import create_client as _create_client
+    return _create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+
+
+def _aging_info(due_date_str: str | None) -> tuple[int | None, str]:
+    """Return (days_outstanding, aging_bucket) computed from a due_date ISO string."""
+    from datetime import date, datetime
+    if not due_date_str:
+        return None, "Unknown"
+    try:
+        due = datetime.fromisoformat(due_date_str.replace("Z", "+00:00")).date()
+    except Exception:
+        return None, "Unknown"
+    today = date.today()
+    days  = (today - due).days
+    if today <= due:
+        return 0, "Current"
+    if days <= 30:
+        return days, "1-30 Days"
+    if days <= 60:
+        return days, "31-60 Days"
+    if days <= 90:
+        return days, "61-90 Days"
+    return days, "90+ Days"
+
+
+def _bucket_due_date_range(bucket: str) -> tuple[str | None, str | None]:
+    """Translate an aging_bucket name to a (due_date_lt, due_date_gte) pair for Supabase filtering."""
+    from datetime import date, timedelta
+    today = date.today()
+    if bucket == "Current":
+        # due_date >= today
+        return None, today.isoformat()
+    if bucket == "1-30 Days":
+        return (today - timedelta(days=1)).isoformat(), (today - timedelta(days=30)).isoformat()
+    if bucket == "31-60 Days":
+        return (today - timedelta(days=31)).isoformat(), (today - timedelta(days=60)).isoformat()
+    if bucket == "61-90 Days":
+        return (today - timedelta(days=61)).isoformat(), (today - timedelta(days=90)).isoformat()
+    if bucket == "90+ Days":
+        return (today - timedelta(days=91)).isoformat(), None
+    return None, None
+
+
+def _invoice_ar_summary() -> dict:
+    """Aggregate open-AR totals and aging from the Supabase invoices table."""
+    try:
+        res = (
+            _sb_client()
+            .table("invoices")
+            .select("invoice_id, customer_name, open_balance, due_date")
+            .gt("open_balance", 0)
+            .limit(5000)
+            .execute()
+        )
+        rows = res.data or []
+
+        if not rows:
+            return {"total_open_ar": 0, "invoice_count": 0, "by_bucket": {}, "oldest_invoice": None}
+
+        from collections import defaultdict
+        bucket_counts:  dict[str, int]   = defaultdict(int)
+        bucket_amounts: dict[str, float] = defaultdict(float)
+        total_ar = 0.0
+        oldest: dict | None = None
+
+        for r in rows:
+            bal                   = float(r.get("open_balance") or 0)
+            days_out, bucket      = _aging_info(r.get("due_date"))
+            total_ar             += bal
+            bucket_counts[bucket]  += 1
+            bucket_amounts[bucket] += bal
+
+            due = r.get("due_date")
+            if due and days_out is not None and (
+                oldest is None or days_out > (oldest.get("days_outstanding") or 0)
+            ):
+                oldest = {
+                    "invoice_id":       r["invoice_id"],
+                    "customer_name":    r.get("customer_name"),
+                    "open_balance":     bal,
+                    "due_date":         due,
+                    "days_outstanding": days_out,
+                }
+
+        ordered_buckets = ["Current", "1-30 Days", "31-60 Days", "61-90 Days", "90+ Days", "Unknown"]
+        by_bucket = {
+            b: {"count": bucket_counts[b], "amount": round(bucket_amounts[b], 2)}
+            for b in ordered_buckets
+            if bucket_counts[b] > 0
+        }
+
+        return {
+            "total_open_ar":  round(total_ar, 2),
+            "invoice_count":  len(rows),
+            "by_bucket":      by_bucket,
+            "oldest_invoice": oldest,
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _search_invoices_supabase(
+    customer_name: str   = "",
+    aging_bucket:  str   = "",
+    min_balance:   float = 0.0,
+    limit:         int   = 50,
+) -> dict:
+    """Query Supabase invoices table with optional filters, sorted by days_outstanding desc."""
+    try:
+        q = (
+            _sb_client()
+            .table("invoices")
+            .select("invoice_id, txn_number, txn_date, due_date, open_balance, customer_name, memo")
+            .gt("open_balance", 0)
+        )
+        if customer_name:
+            q = q.ilike("customer_name", f"%{customer_name}%")
+        if min_balance > 0:
+            q = q.gte("open_balance", min_balance)
+
+        # Translate aging_bucket to a due_date range filter so it works even when
+        # the generated column is null (CURRENT_DATE is volatile; PostgreSQL may
+        # refuse to store it in a GENERATED ALWAYS AS STORED column).
+        if aging_bucket:
+            due_lt, due_gte = _bucket_due_date_range(aging_bucket)
+            if aging_bucket == "Current":
+                q = q.gte("due_date", due_gte)
+            elif aging_bucket == "90+ Days":
+                q = q.lt("due_date", due_lt)
+            elif due_lt and due_gte:
+                q = q.lt("due_date", due_lt).gte("due_date", due_gte)
+
+        res  = q.limit(limit * 3).execute()   # over-fetch so Python sort+limit is accurate
+        rows = res.data or []
+
+        # Compute and attach aging fields in Python, then sort by days_outstanding desc
+        enriched = []
+        for r in rows:
+            days_out, bucket = _aging_info(r.get("due_date"))
+            enriched.append({**r, "days_outstanding": days_out, "aging_bucket": bucket})
+
+        enriched.sort(key=lambda x: (x["days_outstanding"] or 0), reverse=True)
+        enriched = enriched[:limit]
+
+        return {
+            "count":   len(enriched),
+            "filters": {
+                "customer_name": customer_name or None,
+                "aging_bucket":  aging_bucket  or None,
+                "min_balance":   min_balance   or None,
+            },
+            "invoices": enriched,
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -145,6 +309,8 @@ TOOLS AVAILABLE
 - time_to_preview              → average days from estimate creation to site preview
 - get_invoices_by_estimate     → all invoices linked to a specific estimate (status, total, balance due)
 - invoice_audit                → completed estimates missing a final invoice (billing gap audit)
+- invoice_ar_summary           → total AR, aging bucket breakdown, oldest unpaid invoice (Supabase)
+- search_invoices              → search open invoices by customer, aging bucket, or min balance (Supabase)
 - search_by_product            → search estimates by product/service keyword in line items (e.g. "isokern", "gas log")
 - brand_summary                → leaderboard of all brands by job count + revenue (all 24 brands in one call)
 - search_by_pipeline_status   → find active jobs by operational status (ready to schedule, waiting on product, etc.)
@@ -170,6 +336,11 @@ WHEN TO USE EACH TOOL
 - "Has estimate 9275 been invoiced?"               → get_invoices_by_estimate(9275)
 - "Which completed jobs have no invoice?"          → invoice_audit()
 - "Billing gaps from 2024"                         → invoice_audit(year=2024)
+- "What is our total AR?"                          → invoice_ar_summary()
+- "Show me the AR aging report"                    → invoice_ar_summary()
+- "Which customers owe us 90+ days?"               → search_invoices(aging_bucket="90+ Days")
+- "AR for Village Restoration"                     → search_invoices(customer_name="Village Restoration")
+- "Invoices over $10,000 past due"                 → search_invoices(aging_bucket="90+ Days", min_balance=10000)
 - "What brands do we install most?"                → brand_summary()
 - "Brand breakdown in Kiawah?"                    → brand_summary(zip="29455")
 - "How many isokern jobs have we done?"            → search_by_product(keyword="isokern")  ← NEVER use search_estimates for this
@@ -998,7 +1169,7 @@ def get_employees(page_size: int = 100) -> dict:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-def search_invoices(
+def search_invoices_live(
     customer_id: int = 0,
     status_id:   int = 0,
     date_from:   str = "",
@@ -1008,14 +1179,10 @@ def search_invoices(
     page_size:   int = 25,
 ) -> dict:
     """
-    Search customer invoices with optional filters.
-
-    Use when asked:
-      'Show me unpaid invoices'
-      'What invoices are overdue?'
-      'What did we invoice this month?'
-      'Show me all invoices for customer 4521'
-      'What is the outstanding balance for this customer?'
+    Search customer invoices live from the Striven API with optional filters.
+    Use this only when you need data fresher than the last sync_invoices run.
+    For AR aging, balances, and overdue analysis use invoice_ar_summary or
+    search_invoices instead — those hit Supabase and are much faster.
 
     Args:
         customer_id: Filter by Striven customer ID.
@@ -1034,6 +1201,83 @@ def search_invoices(
     if due_from:    params["due_from"]    = due_from
     if due_to:      params["due_to"]      = due_to
     return _call("get", "/striven/invoices", params=params)
+
+
+@mcp.tool()
+def invoice_ar_summary() -> dict:
+    """
+    Return a full accounts-receivable aging summary from the Supabase invoices table.
+
+    Aggregates all open-balance invoices into aging buckets and surfaces the
+    oldest unpaid invoice. Run sync_invoices.py first to refresh the data.
+
+    Use when asked:
+      'What is our total AR?'
+      'How much do customers owe us?'
+      'Show me the AR aging summary'
+      'What is our accounts receivable balance?'
+      'How much is 90+ days overdue?'
+      'Give me an AR breakdown'
+      'What is our total outstanding balance?'
+
+    Returns:
+        total_open_ar  — total dollars outstanding across all invoices
+        invoice_count  — number of open invoices
+        by_bucket      — for each aging bucket: count and dollar amount
+                         buckets: Current, 1-30 Days, 31-60 Days, 61-90 Days, 90+ Days
+        oldest_invoice — customer name, balance, due date, and days outstanding
+                         for the single oldest unpaid invoice
+    """
+    return _invoice_ar_summary()
+
+
+@mcp.tool()
+def search_invoices(
+    customer_name: str   = "",
+    aging_bucket:  str   = "",
+    min_balance:   float = 0.0,
+    limit:         int   = 50,
+) -> dict:
+    """
+    Search open invoices in the Supabase invoices table with optional filters,
+    sorted by days outstanding (oldest first).
+
+    Use when asked:
+      'Show me overdue invoices for [customer]'
+      'Which customers owe us 90+ days overdue?'
+      'Show me all invoices over $5,000'
+      'AR for Harbor Woods'
+      'Which invoices are in the 31-60 day bucket?'
+      'Show me all past-due invoices'
+      'What does [customer] owe us?'
+
+    Args:
+        customer_name: Filter by customer name (partial match, case-insensitive).
+                       Leave empty to include all customers.
+        aging_bucket:  Filter to one aging bucket. Valid values:
+                         'Current'    — not yet past due
+                         '1-30 Days'  — 1 to 30 days overdue
+                         '31-60 Days' — 31 to 60 days overdue
+                         '61-90 Days' — 61 to 90 days overdue
+                         '90+ Days'   — more than 90 days overdue
+                       Leave empty for all buckets.
+        min_balance:   Only return invoices with open_balance >= this amount.
+                       Use 0 (default) for all balances.
+        limit:         Max invoices to return (default 50).
+
+    Returns:
+        count    — number of invoices matching the filters
+        filters  — echo of applied filters
+        invoices — list of matching invoices sorted by days_outstanding descending,
+                   each with: invoice_id, txn_number, customer_name, due_date,
+                   open_balance, days_outstanding, aging_bucket, memo
+    """
+    return _search_invoices_supabase(
+        customer_name=customer_name,
+        aging_bucket=aging_bucket,
+        min_balance=min_balance,
+        limit=limit,
+    )
 
 
 @mcp.tool()
