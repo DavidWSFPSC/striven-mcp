@@ -6615,6 +6615,11 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
             data    = raw.get("data") or raw.get("Data") or []
             total   = raw.get("totalCount") or raw.get("TotalCount") or 0
             records = [_fmt_invoice(r) for r in data]
+            before  = len(records)
+            records = [r for r in records if "void" not in (r.get("status") or "").lower()]
+            dropped = before - len(records)
+            if dropped:
+                print(f"[search_invoices] filtered out {dropped} voided invoices", flush=True)
             print(f"[search_invoices] total={total} returned={len(records)}", flush=True)
             return {"total": total, "count": len(records), "invoices": records}
 
