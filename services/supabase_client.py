@@ -1686,10 +1686,13 @@ def query_callbacks_by_product(
 
     if not linked:
         return {
-            "total_callbacks": total_callbacks,
-            "linked_count":    0,
-            "unlinked_count":  unlinked_count,
-            "by_product":      [],
+            "total_callbacks":        total_callbacks,
+            "unique_total_callbacks": 0,
+            "association_total":      0,
+            "double_count_warning":   False,
+            "linked_count":           0,
+            "unlinked_count":         unlinked_count,
+            "by_product":             [],
             "filters": {
                 "year":          year,
                 "callback_type": callback_type,
@@ -1721,9 +1724,13 @@ def query_callbacks_by_product(
         li_by_estimate[li["estimate_id"]].append(li)
 
     # ── Step 4: group callbacks by product ──────────────────────────────────
-    # Use a set of task_ids per product to ensure distinct callback counts.
-    product_task_ids:  dict[str, set]  = defaultdict(set)
-    product_desc:      dict[str, str]  = {}
+    # product_task_ids  — set of unique task_ids per product (deduplicates within product)
+    # product_task_assoc — raw association counter (incremented per line-item match,
+    #                       so if a task links to an estimate with 3 Isokern items it
+    #                       increments 3×; distinguishes from unique task count)
+    product_task_ids:   dict[str, set] = defaultdict(set)
+    product_task_assoc: dict[str, int] = defaultdict(int)
+    product_desc:       dict[str, str] = {}
     no_line_item_count = 0
 
     for cb in linked:
@@ -1735,28 +1742,94 @@ def query_callbacks_by_product(
         for li in items:
             key = (li.get("item_name") or "Unknown").strip()
             product_task_ids[key].add(cb["task_id"])
+            product_task_assoc[key] += 1
             if key not in product_desc:
                 product_desc[key] = (li.get("description") or "").strip()
 
-    # ── Step 5: build ranked list ────────────────────────────────────────────
-    by_product = sorted(
-        [
-            {
-                "item_name":      name,
-                "description":    product_desc.get(name, ""),
-                "callback_count": len(task_ids),
-            }
-            for name, task_ids in product_task_ids.items()
-        ],
-        key=lambda x: -x["callback_count"],
-    )
+    # ── Step 5: units sold per product (completed estimates containing that line item)
+    units_sold_map: dict[str, int] = {}
+    for name in product_task_ids.keys():
+        try:
+            li_q = (
+                _get_client()
+                .table("estimate_line_items")
+                .select("estimate_id")
+                .ilike("item_name", name)
+                .execute()
+            )
+            eids = list({r["estimate_id"] for r in (li_q.data or []) if r.get("estimate_id")})
+            sold = 0
+            for i in range(0, len(eids), 200):
+                chunk = eids[i : i + 200]
+                est_q = (
+                    _get_client()
+                    .table("estimates")
+                    .select("estimate_id", count="exact")
+                    .in_("estimate_id", chunk)
+                    .ilike("status_raw", "%Completed%")
+                    .execute()
+                )
+                sold += est_q.count or 0
+            units_sold_map[name] = sold
+        except Exception:
+            units_sold_map[name] = 0
+
+    # ── Step 6: build ranked list with deduplication metadata and callback rates
+    def _rate_label(pct: float | None) -> str | None:
+        if pct is None:
+            return None
+        if pct < 5:
+            return "normal"
+        if pct < 15:
+            return "elevated"
+        if pct < 30:
+            return "high"
+        return "critical"
+
+    by_product = []
+    for name, task_ids in product_task_ids.items():
+        unique = len(task_ids)
+        assoc  = product_task_assoc[name]
+        sold   = units_sold_map.get(name, 0)
+        rate   = round(unique / sold * 100, 1) if sold > 0 else None
+        entry: dict = {
+            "item_name":             name,
+            "description":           product_desc.get(name, ""),
+            "callback_count":        unique,           # kept for backward compat
+            "unique_callback_tasks": unique,
+            "association_count":     assoc,
+            "units_sold":            sold,
+            "callback_rate_pct":     rate,
+            "rate_interpretation":   _rate_label(rate),
+        }
+        if sold == 0:
+            entry["rate_note"] = "units sold unknown"
+        by_product.append(entry)
+
+    by_product.sort(key=lambda x: -x["unique_callback_tasks"])
+
+    # ── Step 7: summary deduplication stats
+    all_task_ids_union    = set().union(*product_task_ids.values()) if product_task_ids else set()
+    unique_total_callbacks = len(all_task_ids_union)
+    association_total      = sum(product_task_assoc.values())
+    double_count_warning   = association_total > unique_total_callbacks
 
     return {
-        "total_callbacks":    total_callbacks,
-        "linked_count":       len(linked),
-        "unlinked_count":     unlinked_count,
-        "no_line_item_count": no_line_item_count,
-        "by_product":         by_product,
+        "total_callbacks":        total_callbacks,
+        "unique_total_callbacks": unique_total_callbacks,
+        "association_total":      association_total,
+        "double_count_warning":   double_count_warning,
+        "double_count_note": (
+            f"association_total ({association_total}) exceeds unique_total_callbacks "
+            f"({unique_total_callbacks}) because "
+            f"{association_total - unique_total_callbacks} task(s) are linked to estimates "
+            "with multiple qualifying products. Per-product unique_callback_tasks are accurate; "
+            "summing across products inflates the total."
+        ) if double_count_warning else None,
+        "linked_count":           len(linked),
+        "unlinked_count":         unlinked_count,
+        "no_line_item_count":     no_line_item_count,
+        "by_product":             by_product,
         "filters": {
             "year":          year,
             "callback_type": callback_type,

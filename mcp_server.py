@@ -1791,6 +1791,13 @@ def log_unanswered_question(
 
     Log first, then continue your response to the user normally.
     Do not tell the user you are logging unless they ask.
+
+    Also call this tool when:
+    - You use a phrase like "I took it at face value" or "I cannot independently verify"
+    - A tool returns a field labeled "warning" or "double_count_warning: true"
+    - You report a number you know may be inflated or deflated due to data structure
+      (e.g. association counts, keyword matches, incomplete syncs)
+    In these cases set category="Data Gap" and priority="High"
     """
     try:
         resp = requests.post(
@@ -1814,10 +1821,14 @@ def log_unanswered_question(
 
 @mcp.tool()
 def verify_aggregate(
-    category: str,
-    claimed_count: int,
-    claimed_total: float,
-    status_filter: str = "Completed"
+    category: str = "",
+    claimed_count: int = 0,
+    claimed_total: float = 0.0,
+    status_filter: str = "Completed",
+    mode: str = "",
+    product_item_name: str = "",
+    claimed_unique_count: int = 0,
+    claimed_association_count: int = 0,
 ) -> str:
     """
     Verify any revenue total, job count, or average BEFORE including it in a
@@ -1828,6 +1839,7 @@ def verify_aggregate(
     - A job count for a product category
     - An average ticket value derived from category data
     - A category ranking or comparison between categories
+    - A callback count or callback rate for any product
 
     WHEN to call it:
     - After gathering your raw data but before writing the final response
@@ -1835,37 +1847,92 @@ def verify_aggregate(
 
     WHAT to do with the result:
     - ✅ VERIFIED  → report the number with ✅ Verified against N source records
-    - ⚠️ WARNING   → report actual_count and actual_total instead of claimed,
-                     and tell the user what was flagged and why
-    - ❌ MISMATCH  → do not report the original number. Tell the user the data
-                     could not be verified and show them the discrepancy
-    - ❓ UNVERIFIED → note that verification was unavailable for this category
+    - ⚠️ WARNING   → report actual values instead of claimed, explain the discrepancy
+    - ❌ MISMATCH  → do not report the original number; show the verified number and discrepancy
+    - ❓ UNVERIFIED → note that verification was unavailable
 
+    REVENUE/COUNT mode (default — leave mode empty):
     category must be one of:
     outdoor, isokern, gas_logs, direct_vent, dimplex, gas_insert, linear
+
+    CALLBACK mode (pass mode="callbacks"):
+    For callback verification, pass:
+      mode="callbacks"
+      product_item_name="exact or partial SKU/product name"
+      claimed_unique_count=N
+      claimed_association_count=N
+
+    Call this automatically whenever you report a callback count or callback
+    rate for any product. Fire it after callbacks_by_product returns data
+    but before writing the final response. If confidence is WARNING or MISMATCH,
+    report the verified number and explain the discrepancy to the user.
 
     Do not call this for individual estimate lookups or single-record queries.
     Only call it for aggregates — counts, totals, averages, rankings.
     """
     try:
+        body: dict = {
+            "category":      category,
+            "claimed_count": claimed_count,
+            "claimed_total": claimed_total,
+            "status_filter": status_filter,
+        }
+        if mode:
+            body["mode"] = mode
+        if product_item_name:
+            body["product_item_name"] = product_item_name
+        if claimed_unique_count:
+            body["claimed_unique_count"] = claimed_unique_count
+        if claimed_association_count:
+            body["claimed_association_count"] = claimed_association_count
+
         resp = requests.post(
             f"{BASE_URL}/verify-aggregate",
-            json={
-                "category":      category,
-                "claimed_count":  claimed_count,
-                "claimed_total":  claimed_total,
-                "status_filter":  status_filter
-            },
+            json=body,
             timeout=15
         )
         if resp.status_code == 200:
-            d = resp.json()
-            conf  = d.get("confidence", "UNVERIFIED")
-            icon  = {"VERIFIED": "✅", "WARNING": "⚠️", "MISMATCH": "❌"}.get(conf, "❓")
-            flagged = d.get("flagged", {})
-            flag_summary = ", ".join(
-                f"{k}: {len(v)}" for k, v in flagged.items() if v
-            )
+            d    = resp.json()
+            conf = d.get("confidence", "UNVERIFIED")
+            icon = {"VERIFIED": "✅", "WARNING": "⚠️", "MISMATCH": "❌"}.get(conf, "❓")
+
+            # Auto-log MISMATCH / WARNING to Question Log (fire-and-forget)
+            if conf in ("MISMATCH", "WARNING"):
+                try:
+                    product  = d.get("product_item_name") or category
+                    claimed  = claimed_unique_count or claimed_count
+                    actual   = d.get("actual_unique_count") if d.get("mode") == "callbacks" else d.get("actual_count")
+                    flagged  = d.get("flagged", {})
+                    flag_str = ", ".join(f"{k}: {len(v)}" for k, v in flagged.items() if v) if flagged else ""
+                    requests.post(
+                        f"{BASE_URL}/log-question",
+                        json={
+                            "question": f"Aggregate verification {conf}: {product} — claimed {claimed}, actual {actual}",
+                            "category": "Data Gap",
+                            "priority": "High" if conf == "MISMATCH" else "Medium",
+                            "source":   "Ask WilliamSmith",
+                            "notes":    flag_str or f"delta={d.get('count_delta_pct', 0):.1f}%",
+                        },
+                        timeout=10,
+                    )
+                except Exception:
+                    pass
+
+            # Callback mode response
+            if d.get("mode") == "callbacks":
+                return (
+                    f"{icon} {conf} | mode=callbacks | product={d.get('product_item_name')} | "
+                    f"claimed_unique={d.get('claimed_unique_count')} | "
+                    f"actual_unique={d.get('actual_unique_count')} | "
+                    f"actual_association={d.get('actual_association_count')} | "
+                    f"count_delta={d.get('count_delta_pct', 0):.1f}% | "
+                    f"units_sold={d.get('units_sold')} | "
+                    f"callback_rate={d.get('callback_rate_pct')}%"
+                )
+
+            # Default revenue/count mode response
+            flagged     = d.get("flagged", {})
+            flag_summary = ", ".join(f"{k}: {len(v)}" for k, v in flagged.items() if v)
             return (
                 f"{icon} {conf} | category={category} | "
                 f"claimed={claimed_count} jobs / ${claimed_total:,.0f} | "

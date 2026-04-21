@@ -7716,10 +7716,88 @@ def verify_aggregate():
     from collections import defaultdict
 
     data          = request.get_json() or {}
+    mode          = (data.get('mode') or '').strip().lower()
     category      = (data.get('category') or '').strip().lower()
     claimed_count = data.get('claimed_count')
     claimed_total = data.get('claimed_total')
     status_filter = (data.get('status_filter') or '').strip()
+
+    # ── Callback verification mode ──────────────────────────────────────────
+    if mode == 'callbacks':
+        product_item_name = (data.get('product_item_name') or '').strip()
+        claimed_unique    = data.get('claimed_unique_count')
+        claimed_assoc_raw = data.get('claimed_association_count')
+
+        if not product_item_name:
+            return jsonify({'error': 'product_item_name is required for mode=callbacks'}), 400
+        if claimed_unique is None:
+            return jsonify({'error': 'claimed_unique_count is required for mode=callbacks'}), 400
+
+        try:
+            sb = _sb_client()
+
+            li_res = (
+                sb.table("estimate_line_items")
+                .select("estimate_id")
+                .ilike("item_name", f"%{product_item_name}%")
+                .execute()
+            )
+            est_ids = list({r["estimate_id"] for r in (li_res.data or []) if r.get("estimate_id")})
+
+            all_task_ids: set = set()
+            association_cnt   = 0
+            chunk_size        = 200
+            for i in range(0, len(est_ids), chunk_size):
+                chunk  = est_ids[i : i + chunk_size]
+                cb_res = (
+                    sb.table("callback_tasks")
+                    .select("task_id")
+                    .in_("estimate_id", chunk)
+                    .execute()
+                )
+                for r in (cb_res.data or []):
+                    all_task_ids.add(r["task_id"])
+                    association_cnt += 1
+
+            actual_unique = len(all_task_ids)
+
+            units_sold = 0
+            for i in range(0, len(est_ids), chunk_size):
+                chunk = est_ids[i : i + chunk_size]
+                est_q = (
+                    sb.table("estimates")
+                    .select("estimate_id", count="exact")
+                    .in_("estimate_id", chunk)
+                    .ilike("status_raw", "%Completed%")
+                    .execute()
+                )
+                units_sold += est_q.count or 0
+
+            cb_rate   = round(actual_unique / units_sold * 100, 1) if units_sold > 0 else None
+            cu        = int(claimed_unique)
+            delta_pct = abs(actual_unique - cu) / max(cu, 1) * 100
+
+            if delta_pct <= 2:
+                confidence = "VERIFIED"
+            elif delta_pct <= 15:
+                confidence = "WARNING"
+            else:
+                confidence = "MISMATCH"
+
+            return jsonify({
+                "confidence":               confidence,
+                "mode":                     "callbacks",
+                "product_item_name":        product_item_name,
+                "claimed_unique_count":     cu,
+                "claimed_association_count": int(claimed_assoc_raw) if claimed_assoc_raw is not None else None,
+                "actual_unique_count":      actual_unique,
+                "actual_association_count": association_cnt,
+                "count_delta_pct":          round(delta_pct, 1),
+                "callback_rate_pct":        cb_rate,
+                "units_sold":               units_sold,
+            })
+        except Exception as exc:
+            return jsonify({"error": str(exc), "confidence": "UNVERIFIED"}), 500
 
     if not category:
         return jsonify({'error': 'category is required'}), 400
