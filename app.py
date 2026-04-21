@@ -7666,6 +7666,236 @@ def log_question():
         return jsonify({'error': 'Notion API call failed', 'details': str(e)}), 502
 
 
+@app.route('/verify-aggregate', methods=['POST'])
+def verify_aggregate():
+    """Verify a category revenue/count aggregate against live Supabase line-item data."""
+    from collections import defaultdict
+
+    data          = request.get_json() or {}
+    category      = (data.get('category') or '').strip().lower()
+    claimed_count = data.get('claimed_count')
+    claimed_total = data.get('claimed_total')
+    status_filter = (data.get('status_filter') or '').strip()
+
+    if not category:
+        return jsonify({'error': 'category is required'}), 400
+    if claimed_count is None or claimed_total is None:
+        return jsonify({'error': 'claimed_count and claimed_total are required'}), 400
+
+    CATEGORY_SKU_MAP = {
+        "outdoor":     ["ODCTGWD", "ODVILLA", "ODCOUG", "WRE", "VRE", "ODLANAIG", "ODLANA"],
+        "isokern":     ["ISO-"],
+        "gas_logs":    ["RHSF", "RH-", "VFSL", "GCT", "RASP"],
+        "direct_vent": ["8KX", "SL-", "CLW-", "DV-", "DVL"],
+        "dimplex":     ["BF-", "XLF-", "CDFI", "IgniteXL"],
+        "gas_insert":  ["BHDV", "PHDI", "DVI-"],
+        "linear":      ["CLX", "CL-", "LHD"],
+    }
+
+    if category not in CATEGORY_SKU_MAP:
+        return jsonify({
+            'error': f"Unknown category: {category!r}. Valid: {list(CATEGORY_SKU_MAP.keys())}"
+        }), 400
+
+    prefixes = CATEGORY_SKU_MAP[category]
+    other_prefixes = [p for cat, prfxs in CATEGORY_SKU_MAP.items() if cat != category for p in prfxs]
+
+    try:
+        sb = _sb_client()
+
+        # Step 1: Find line items matching this category's SKU prefixes (item_name only)
+        or_filter = ",".join(f"item_name.ilike.{p}%" for p in prefixes)
+        li_res = (
+            sb.table("estimate_line_items")
+            .select("estimate_id, item_name")
+            .or_(or_filter)
+            .execute()
+        )
+        li_rows = li_res.data or []
+
+        if not li_rows:
+            return jsonify({
+                "confidence":      "UNVERIFIED",
+                "category":        category,
+                "claimed_count":   int(claimed_count),
+                "claimed_total":   float(claimed_total),
+                "actual_count":    0,
+                "actual_total":    0,
+                "clean_count":     0,
+                "clean_total":     0,
+                "count_delta_pct": 100.0,
+                "total_delta_pct": 100.0,
+                "flagged":         {"multi_category": [], "misc_supplies": [], "loose_match": []},
+                "records":         [],
+                "note":            f"No line items matched SKU prefixes for category '{category}'.",
+            })
+
+        # Deduplicate: first matched SKU per estimate_id
+        estimate_sku: dict[int, str] = {}
+        for row in li_rows:
+            eid = row.get("estimate_id")
+            if eid and eid not in estimate_sku:
+                estimate_sku[eid] = row.get("item_name", "")
+
+        matched_estimate_ids = list(estimate_sku.keys())
+
+        # Step 2: Fetch estimates, applying optional status filter
+        all_estimates: list[dict] = []
+        chunk_size = 200
+        for i in range(0, len(matched_estimate_ids), chunk_size):
+            chunk = matched_estimate_ids[i: i + chunk_size]
+            q = (
+                sb.table("estimates")
+                .select("estimate_id, estimate_number, customer_name, total_amount, status_raw")
+                .in_("estimate_id", chunk)
+            )
+            if status_filter:
+                q = q.ilike("status_raw", f"%{status_filter}%")
+            res = q.execute()
+            all_estimates.extend(res.data or [])
+
+        if not all_estimates:
+            return jsonify({
+                "confidence":      "UNVERIFIED",
+                "category":        category,
+                "claimed_count":   int(claimed_count),
+                "claimed_total":   float(claimed_total),
+                "actual_count":    0,
+                "actual_total":    0,
+                "clean_count":     0,
+                "clean_total":     0,
+                "count_delta_pct": 100.0,
+                "total_delta_pct": 100.0,
+                "flagged":         {"multi_category": [], "misc_supplies": [], "loose_match": []},
+                "records":         [],
+                "note":            f"Line items matched but no estimates passed status filter '{status_filter}'.",
+            })
+
+        final_ids   = [e["estimate_id"] for e in all_estimates]
+        est_lookup  = {e["estimate_id"]: e for e in all_estimates}
+
+        # Step 3: Fetch all line items for matched estimates (for flag detection)
+        all_li: list[dict] = []
+        for i in range(0, len(final_ids), chunk_size):
+            chunk = final_ids[i: i + chunk_size]
+            full_li_res = (
+                sb.table("estimate_line_items")
+                .select("estimate_id, item_name, description")
+                .in_("estimate_id", chunk)
+                .execute()
+            )
+            all_li.extend(full_li_res.data or [])
+
+        li_by_est: dict[int, list[dict]] = defaultdict(list)
+        for li in all_li:
+            li_by_est[li["estimate_id"]].append(li)
+
+        # Step 4: Compute per-estimate flags
+        def _starts_with_any(name: str, prfxs: list) -> bool:
+            n = (name or "").upper()
+            return any(n.startswith(p.upper()) for p in prfxs)
+
+        flagged_multi: list[dict] = []
+        flagged_misc:  list[dict] = []
+        flagged_loose: list[dict] = []
+        records:       list[dict] = []
+
+        for est in all_estimates:
+            eid   = est["estimate_id"]
+            sku   = estimate_sku.get(eid, "")
+            items = li_by_est.get(eid, [])
+            flags: list[str] = []
+
+            if any(_starts_with_any(li.get("item_name", ""), other_prefixes) for li in items):
+                flags.append("multi_category")
+                flagged_multi.append({
+                    "estimate_number": est.get("estimate_number"),
+                    "customer_name":   est.get("customer_name"),
+                    "total":           est.get("total_amount"),
+                    "matched_sku":     sku,
+                })
+
+            for li in items:
+                iname = (li.get("item_name") or "").lower()
+                idesc = (li.get("description") or "").lower()
+                if "misc" in iname or "misc supplies" in idesc:
+                    flags.append("misc_supplies")
+                    flagged_misc.append({
+                        "estimate_number": est.get("estimate_number"),
+                        "customer_name":   est.get("customer_name"),
+                        "total":           est.get("total_amount"),
+                        "matched_sku":     sku,
+                    })
+                    break
+
+            matched_prefix = next(
+                (p for p in prefixes if sku.upper().startswith(p.upper())),
+                sku
+            )
+            if len(matched_prefix) <= 3:
+                flags.append("loose_match")
+                flagged_loose.append({
+                    "estimate_number": est.get("estimate_number"),
+                    "customer_name":   est.get("customer_name"),
+                    "total":           est.get("total_amount"),
+                    "matched_sku":     sku,
+                })
+
+            records.append({
+                "estimate_id":     eid,
+                "estimate_number": est.get("estimate_number"),
+                "customer_name":   est.get("customer_name"),
+                "total":           est.get("total_amount"),
+                "status":          est.get("status_raw"),
+                "matched_sku":     sku,
+                "flags":           flags,
+            })
+
+        # Step 5: Aggregate totals
+        actual_count = len(all_estimates)
+        actual_total = sum(e.get("total_amount") or 0 for e in all_estimates)
+        clean_count  = sum(1 for r in records if not r["flags"])
+        clean_total  = sum(
+            (est_lookup[r["estimate_id"]].get("total_amount") or 0)
+            for r in records if not r["flags"]
+        )
+
+        # Step 6: Confidence
+        cc = int(claimed_count)
+        ct = float(claimed_total)
+        count_delta_pct = abs(actual_count - cc) / max(cc, 1) * 100
+        total_delta_pct = abs(actual_total - ct) / max(abs(ct), 1) * 100
+
+        if count_delta_pct <= 2 and total_delta_pct <= 2:
+            confidence = "VERIFIED"
+        elif count_delta_pct <= 15 or total_delta_pct <= 15:
+            confidence = "WARNING"
+        else:
+            confidence = "MISMATCH"
+
+        return jsonify({
+            "confidence":      confidence,
+            "category":        category,
+            "claimed_count":   cc,
+            "claimed_total":   ct,
+            "actual_count":    actual_count,
+            "actual_total":    round(actual_total, 2),
+            "clean_count":     clean_count,
+            "clean_total":     round(clean_total, 2),
+            "count_delta_pct": round(count_delta_pct, 1),
+            "total_delta_pct": round(total_delta_pct, 1),
+            "flagged": {
+                "multi_category": flagged_multi,
+                "misc_supplies":  flagged_misc,
+                "loose_match":    flagged_loose,
+            },
+            "records": records,
+        })
+
+    except Exception as exc:
+        return jsonify({"error": str(exc), "confidence": "UNVERIFIED"}), 500
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

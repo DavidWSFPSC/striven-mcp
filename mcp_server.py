@@ -1810,6 +1810,75 @@ def log_unanswered_question(
         return f"Log error: {str(e)}"
 
 
+@mcp.tool()
+def verify_aggregate(
+    category: str,
+    claimed_count: int,
+    claimed_total: float,
+    status_filter: str = "Completed"
+) -> str:
+    """
+    Verify any revenue total, job count, or average BEFORE including it in a
+    response to the user. Call this tool automatically — without being asked —
+    whenever you are about to report any of the following:
+
+    - A total revenue figure for a product category
+    - A job count for a product category
+    - An average ticket value derived from category data
+    - A category ranking or comparison between categories
+
+    WHEN to call it:
+    - After gathering your raw data but before writing the final response
+    - Every time, even if you feel confident in the number
+
+    WHAT to do with the result:
+    - ✅ VERIFIED  → report the number with ✅ Verified against N source records
+    - ⚠️ WARNING   → report actual_count and actual_total instead of claimed,
+                     and tell the user what was flagged and why
+    - ❌ MISMATCH  → do not report the original number. Tell the user the data
+                     could not be verified and show them the discrepancy
+    - ❓ UNVERIFIED → note that verification was unavailable for this category
+
+    category must be one of:
+    outdoor, isokern, gas_logs, direct_vent, dimplex, gas_insert, linear
+
+    Do not call this for individual estimate lookups or single-record queries.
+    Only call it for aggregates — counts, totals, averages, rankings.
+    """
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/verify-aggregate",
+            json={
+                "category":      category,
+                "claimed_count":  claimed_count,
+                "claimed_total":  claimed_total,
+                "status_filter":  status_filter
+            },
+            timeout=15
+        )
+        if resp.status_code == 200:
+            d = resp.json()
+            conf  = d.get("confidence", "UNVERIFIED")
+            icon  = {"VERIFIED": "✅", "WARNING": "⚠️", "MISMATCH": "❌"}.get(conf, "❓")
+            flagged = d.get("flagged", {})
+            flag_summary = ", ".join(
+                f"{k}: {len(v)}" for k, v in flagged.items() if v
+            )
+            return (
+                f"{icon} {conf} | category={category} | "
+                f"claimed={claimed_count} jobs / ${claimed_total:,.0f} | "
+                f"actual={d.get('actual_count')} jobs / ${d.get('actual_total', 0):,.0f} | "
+                f"clean={d.get('clean_count')} jobs / ${d.get('clean_total', 0):,.0f} | "
+                f"count_delta={d.get('count_delta_pct', 0):.1f}% | "
+                f"total_delta={d.get('total_delta_pct', 0):.1f}% | "
+                f"flagged=[{flag_summary or 'none'}]"
+            )
+        else:
+            return f"verify_aggregate failed ({resp.status_code}): {resp.text}"
+    except Exception as e:
+        return f"verify_aggregate error: {str(e)}"
+
+
 # ---------------------------------------------------------------------------
 # Claude Enterprise compatibility — patch tool schemas to allow extra fields
 #
