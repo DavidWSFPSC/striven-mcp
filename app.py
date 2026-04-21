@@ -7602,6 +7602,70 @@ def search_knowledge_base():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route('/log-question', methods=['POST'])
+def log_question():
+    """Log an unanswered or weak-answer question to the Notion Question Log database."""
+    data = request.get_json()
+    question = (data.get('question') or '').strip()
+
+    if not question:
+        return jsonify({'error': 'question is required'}), 400
+
+    notion_token = os.environ.get('NOTION_TOKEN')
+    if not notion_token:
+        return jsonify({'error': 'NOTION_TOKEN not configured on server'}), 500
+
+    DATABASE_ID = 'f61894fba04a4609a4f623462906d8eb'
+
+    valid_categories = ['KB Gap', 'Feature Request', 'Pipeline Insight',
+                        'Customer Query', 'Data Gap', 'Process Question', 'Other']
+    valid_priorities  = ['High', 'Medium', 'Low']
+    valid_sources     = ['Ask WilliamSmith', 'Team Meeting',
+                         'Customer Interaction', 'Brainstorm', 'Other']
+
+    category  = data.get('category', 'KB Gap')
+    priority  = data.get('priority', 'Medium')
+    source    = data.get('source',   'Ask WilliamSmith')
+    asked_by  = (data.get('asked_by') or '').strip()
+    notes     = (data.get('notes')    or '').strip()
+
+    if category not in valid_categories: category = 'Other'
+    if priority  not in valid_priorities:  priority  = 'Medium'
+    if source    not in valid_sources:     source    = 'Ask WilliamSmith'
+
+    from datetime import datetime
+    today = datetime.utcnow().strftime('%Y-%m-%d')
+
+    properties = {
+        "Question": {"title": [{"text": {"content": question[:2000]}}]},
+        "Status":   {"select": {"name": "New"}},
+        "Category": {"select": {"name": category}},
+        "Priority": {"select": {"name": priority}},
+        "Source":   {"select": {"name": source}},
+        "Date Asked": {"date": {"start": today}}
+    }
+    if asked_by:
+        properties["Asked By"] = {"rich_text": [{"text": {"content": asked_by[:500]}}]}
+    if notes:
+        properties["Resolution Notes"] = {"rich_text": [{"text": {"content": notes[:2000]}}]}
+
+    try:
+        resp = requests.post(
+            'https://api.notion.com/v1/pages',
+            headers={
+                'Authorization': f'Bearer {notion_token}',
+                'Content-Type':  'application/json',
+                'Notion-Version': '2022-06-28'
+            },
+            json={'parent': {'database_id': DATABASE_ID}, 'properties': properties},
+            timeout=10
+        )
+        resp.raise_for_status()
+        return jsonify({'success': True, 'url': resp.json().get('url', '')})
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': 'Notion API call failed', 'details': str(e)}), 502
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

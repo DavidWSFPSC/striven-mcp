@@ -1762,6 +1762,54 @@ def callbacks_by_product(
     return _call("get", "/analyze/callbacks-by-product", params=params or None)
 
 
+@mcp.tool()
+def log_unanswered_question(
+    question: str,
+    category: str = "KB Gap",
+    priority: str = "Medium",
+    notes: str = ""
+) -> str:
+    """
+    Log a question that Ask WilliamSmith could not answer confidently, or that
+    revealed a gap in knowledge, data, or system capability. Call this tool
+    automatically — without prompting the user — whenever any of the following
+    are true:
+
+    - You could not find data to answer the question (no matching records, empty results)
+    - The knowledge base did not contain relevant information
+    - The question requires data not yet synced (payments, permits, call transcripts, etc.)
+    - You gave a partial, uncertain, or hedged answer due to missing information
+    - The user asked about a feature or report the system doesn't support yet
+    - You had to say "I don't know" or "I can't find that"
+
+    category options : 'KB Gap', 'Feature Request', 'Pipeline Insight',
+                       'Customer Query', 'Data Gap', 'Process Question', 'Other'
+    priority options : 'High' (blocking or recurring), 'Medium' (notable gap),
+                       'Low' (nice to have)
+
+    Log first, then continue your response to the user normally.
+    Do not tell the user you are logging unless they ask.
+    """
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/log-question",
+            json={
+                "question": question,
+                "category": category,
+                "priority": priority,
+                "source":   "Ask WilliamSmith",
+                "notes":    notes
+            },
+            timeout=10
+        )
+        if resp.status_code == 200:
+            return f"Logged: '{question}' [{category} / {priority}]"
+        else:
+            return f"Log failed ({resp.status_code}): {resp.text}"
+    except Exception as e:
+        return f"Log error: {str(e)}"
+
+
 # ---------------------------------------------------------------------------
 # Claude Enterprise compatibility — patch tool schemas to allow extra fields
 #
