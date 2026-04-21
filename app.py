@@ -44,6 +44,7 @@ import time as _time_mod
 import anthropic
 from flask import Flask, jsonify, request, render_template, Response
 from dotenv import load_dotenv
+import requests
 from requests import HTTPError
 
 from services.striven import StrivenClient
