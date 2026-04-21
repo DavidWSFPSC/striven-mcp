@@ -62,8 +62,10 @@ def _kb_search(query: str, top_k: int = 5) -> dict:
             top_sim = results[0].get("similarity") if results else None
             log_kb_search(
                 query=query,
-                results_count=len(results),
+                top_k=min(top_k, 20),
+                result_count=len(results),
                 top_similarity=top_sim,
+                returned_results=bool(results),
             )
         except Exception:
             pass

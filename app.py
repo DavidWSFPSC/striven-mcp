@@ -65,6 +65,8 @@ from services.supabase_client import (
     query_sales_rep_backlog,
     query_time_to_target,
     _get_client as _sb_client,
+    create_kb_search_log_table_if_not_exists,
+    log_kb_search,
 )
 from services import knowledge as _knowledge
 
@@ -103,6 +105,12 @@ print("StrivenClient initialised — ready to serve live data.", flush=True)
 # Load knowledge base into memory (runs once at startup)
 _knowledge.load_all()
 print("Knowledge base loaded.", flush=True)
+
+# Ensure kb_search_log table exists for KB gap reporting
+try:
+    create_kb_search_log_table_if_not_exists()
+except Exception as _e:
+    print(f"[startup] Warning: could not create kb_search_log table: {_e}", flush=True)
 
 # ---------------------------------------------------------------------------
 # Anthropic client singleton — created once, reused across all requests.
@@ -7596,7 +7604,42 @@ def search_knowledge_base():
             .execute()
         )
 
-        return jsonify({"query": query, "results": result.data or []})
+        results          = result.data or []
+        result_count     = len(results)
+        top_similarity   = results[0].get("similarity") if results else None
+        returned_results = result_count > 0
+
+        try:
+            log_kb_search(
+                query=query,
+                top_k=limit,
+                result_count=result_count,
+                top_similarity=top_similarity,
+                returned_results=returned_results,
+            )
+        except Exception:
+            pass
+
+        if result_count == 0 or (top_similarity is not None and top_similarity < 0.75):
+            try:
+                import requests as _req
+                _base    = os.environ.get("FLASK_API_URL", "http://localhost:5000")
+                priority = "High" if result_count == 0 else "Medium"
+                _req.post(
+                    f"{_base}/log-question",
+                    json={
+                        "question": query,
+                        "category": "KB Gap",
+                        "priority": priority,
+                        "source":   "Ask WilliamSmith",
+                        "notes":    f"KB search returned {result_count} results. Top similarity: {top_similarity}",
+                    },
+                    timeout=5,
+                )
+            except Exception:
+                pass
+
+        return jsonify({"query": query, "results": results})
 
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500

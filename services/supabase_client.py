@@ -540,31 +540,69 @@ def get_chat_logs(limit: int = 100) -> list[dict]:
 # Knowledge-base search logging
 # ---------------------------------------------------------------------------
 
+def create_kb_search_log_table_if_not_exists() -> None:
+    """
+    Create the kb_search_log table if it doesn't exist.
+
+    Attempts DDL via Supabase SQL execution RPC. Falls back silently if the
+    exec_sql RPC is unavailable — create the table manually in that case.
+
+    DDL:
+        CREATE TABLE IF NOT EXISTS kb_search_log (
+            id               BIGSERIAL PRIMARY KEY,
+            query            TEXT NOT NULL,
+            top_k            INTEGER,
+            result_count     INTEGER,
+            top_similarity   FLOAT,
+            returned_results BOOLEAN,
+            asked_at         TIMESTAMPTZ DEFAULT NOW()
+        );
+    """
+    ddl = (
+        "CREATE TABLE IF NOT EXISTS kb_search_log ("
+        "id BIGSERIAL PRIMARY KEY, "
+        "query TEXT NOT NULL, "
+        "top_k INTEGER, "
+        "result_count INTEGER, "
+        "top_similarity FLOAT, "
+        "returned_results BOOLEAN, "
+        "asked_at TIMESTAMPTZ DEFAULT NOW()"
+        ")"
+    )
+    try:
+        _get_client().rpc("exec_sql", {"sql": ddl}).execute()
+    except Exception:
+        pass
+
+
 def log_kb_search(
-    query:          str,
-    results_count:  int,
-    top_similarity: float | None,
+    query:           str,
+    result_count:    int,
+    top_similarity:  float | None,
+    top_k:           int | None = None,
+    returned_results: bool | None = None,
 ) -> None:
     """
     Insert one row into kb_search_log. Called fire-and-forget after every
     search_knowledge_base invocation — failures are silently swallowed so
     they never break the search itself.
 
-    Table DDL (run once in Supabase SQL editor):
-        CREATE TABLE IF NOT EXISTS kb_search_log (
-            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            query           TEXT NOT NULL,
-            results_count   INT NOT NULL,
-            top_similarity  FLOAT,
-            was_helpful     BOOLEAN DEFAULT NULL,
-            searched_at     TIMESTAMPTZ DEFAULT now()
-        );
+    Table schema: kb_search_log
+        id               BIGSERIAL PRIMARY KEY
+        query            TEXT NOT NULL
+        top_k            INTEGER
+        result_count     INTEGER
+        top_similarity   FLOAT
+        returned_results BOOLEAN
+        asked_at         TIMESTAMPTZ DEFAULT NOW()
     """
     try:
         _get_client().table("kb_search_log").insert({
-            "query":          query[:500],
-            "results_count":  results_count,
-            "top_similarity": top_similarity,
+            "query":           query[:500],
+            "top_k":           top_k,
+            "result_count":    result_count,
+            "top_similarity":  top_similarity,
+            "returned_results": returned_results,
         }).execute()
     except Exception:
         pass   # fire-and-forget — never raise
@@ -586,10 +624,10 @@ def query_kb_gaps(days: int = 30) -> dict:
     res = (
         _get_client()
         .table("kb_search_log")
-        .select("query, results_count, top_similarity, searched_at")
-        .gte("searched_at", since)
-        .or_("results_count.eq.0,top_similarity.lt.0.5")
-        .order("searched_at", desc=True)
+        .select("query, result_count, top_similarity, asked_at")
+        .gte("asked_at", since)
+        .or_("result_count.eq.0,top_similarity.lt.0.5")
+        .order("asked_at", desc=True)
         .limit(2000)
         .execute()
     )
@@ -604,8 +642,8 @@ def query_kb_gaps(days: int = 30) -> dict:
         counts[q]["count"] += 1
         if sim is not None:
             counts[q]["top_sim_samples"].append(sim)
-        if r["searched_at"] > counts[q]["last_searched"]:
-            counts[q]["last_searched"] = r["searched_at"]
+        if r["asked_at"] > counts[q]["last_searched"]:
+            counts[q]["last_searched"] = r["asked_at"]
 
     gaps = sorted(
         [
