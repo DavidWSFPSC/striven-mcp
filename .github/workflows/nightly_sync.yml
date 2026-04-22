@@ -9,59 +9,24 @@ on:
 
 jobs:
   sync:
-    name: Full data sync
+    name: Trigger sync on Render
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 5
 
-    env:
-      # services/striven.py (StrivenClient) reads CLIENT_ID / CLIENT_SECRET —
-      # used by the estimates sync step which calls services/sync.py directly.
-      CLIENT_ID:             ${{ secrets.STRIVEN_CLIENT_ID }}
-      CLIENT_SECRET:         ${{ secrets.STRIVEN_CLIENT_SECRET }}
-      # All standalone sync scripts and callback_audit.py read STRIVEN_CLIENT_ID
-      # / STRIVEN_CLIENT_SECRET via their own _get_token() helpers.
-      STRIVEN_CLIENT_ID:     ${{ secrets.STRIVEN_CLIENT_ID }}
-      STRIVEN_CLIENT_SECRET: ${{ secrets.STRIVEN_CLIENT_SECRET }}
-      # Supabase — used by all scripts
-      SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
-      SUPABASE_KEY:          ${{ secrets.SUPABASE_KEY }}
+    # NOTE: All sync scripts now run on Render (stable IP, trusted by Striven).
+    # GitHub Actions shared runner IPs are flagged by Striven's rate limiter on
+    # all endpoints, so we fire a single HTTP trigger to the Render-hosted Flask
+    # app which runs the sync asynchronously in a background thread.
+    #
+    # Required GitHub Actions secrets:
+    #   SYNC_API_KEY — must match the SYNC_API_KEY env var set on the Render
+    #                  service (striven-mcp-v2). Set this in:
+    #                  GitHub → Settings → Secrets → Actions → New repository secret
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      # ── Core data syncs ────────────────────────────────────────────────────
-      # NOTE: estimates sync is intentionally excluded — it fetches 9,300+
-      # individual detail records in parallel and consistently hits Striven's
-      # 429 rate limit on GitHub's shared runners. Estimates are synced via
-      # the sync_estimates MCP tool trigger on Render instead.
-
-      - name: Sync invoices
-        run: python sync_invoices.py
-
-      - name: Sync payments
-        run: python sync_payments.py
-
-      - name: Sync tasks
-        run: python sync_tasks.py
-
-      - name: Sync items (product catalog)
-        run: python sync_items.py
-
-      - name: Sync vendors
-        run: python sync_vendors.py
-
-      - name: Sync employees
-        run: python sync_employees.py
-
-      - name: Sync callbacks (detailed custom-field audit)
-        run: python callback_audit.py
+      - name: Trigger nightly sync on Render
+        run: |
+          curl -X POST https://striven-mcp-v2.onrender.com/admin/run-sync \
+            -H "Authorization: Bearer ${{ secrets.SYNC_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            --fail --max-time 30

@@ -18,6 +18,10 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      # Nightly sync auth token — must match SYNC_API_KEY in GitHub Actions secrets.
+      # Add this manually in the Render dashboard: striven-mcp-v2 → Environment.
+      - key: SYNC_API_KEY
+        sync: false
 
   # -----------------------------------------------------------------------
   # Service 2: MCP HTTP server — Claude.ai remote MCP integration

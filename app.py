@@ -982,6 +982,83 @@ def sync_estimates():
 
 
 # ---------------------------------------------------------------------------
+# Admin trigger — nightly sync (called by GitHub Actions via HTTP)
+# ---------------------------------------------------------------------------
+
+@app.route("/admin/run-sync", methods=["POST"])
+def admin_run_sync():
+    """
+    Trigger the nightly data sync from Striven → Supabase.
+
+    Called by the GitHub Actions nightly workflow. Runs on Render so Striven
+    sees a trusted, stable IP rather than a flagged GitHub Actions runner IP.
+
+    Authentication:
+        Authorization: Bearer <SYNC_API_KEY>
+        SYNC_API_KEY must be set as a Render environment variable and as a
+        GitHub Actions secret.
+
+    Returns 200 immediately; the sync runs in a background thread.
+    Progress is written to stdout (Render logs).
+
+    Scripts run (in order):
+        sync_invoices, sync_payments, sync_tasks, sync_items,
+        sync_vendors, sync_employees
+    NOTE: sync_estimates is intentionally excluded — trigger it separately
+    via the sync_estimates MCP tool or GET /sync-estimates.
+    """
+    import threading
+    import subprocess
+
+    # ── Auth ──────────────────────────────────────────────────────────────────
+    expected_key = os.environ.get("SYNC_API_KEY", "")
+    auth_header  = request.headers.get("Authorization", "")
+    provided_key = auth_header.removeprefix("Bearer ").strip()
+
+    if not expected_key or provided_key != expected_key:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    # ── Background sync ───────────────────────────────────────────────────────
+    scripts = [
+        "sync_invoices.py",
+        "sync_payments.py",
+        "sync_tasks.py",
+        "sync_items.py",
+        "sync_vendors.py",
+        "sync_employees.py",
+    ]
+
+    def _run_all():
+        print("[admin/run-sync] Nightly sync started.", flush=True)
+        for script in scripts:
+            print(f"[admin/run-sync] Running {script} ...", flush=True)
+            try:
+                result = subprocess.run(
+                    ["python", script],
+                    capture_output=False,   # let stdout/stderr flow to Render logs
+                    text=True,
+                    timeout=1800,           # 30 min per script safety cap
+                )
+                if result.returncode == 0:
+                    print(f"[admin/run-sync] {script} completed OK.", flush=True)
+                else:
+                    print(
+                        f"[admin/run-sync] {script} exited with code {result.returncode}.",
+                        flush=True,
+                    )
+            except subprocess.TimeoutExpired:
+                print(f"[admin/run-sync] {script} timed out after 30 min.", flush=True)
+            except Exception as exc:
+                print(f"[admin/run-sync] {script} error: {exc}", flush=True)
+        print("[admin/run-sync] Nightly sync complete.", flush=True)
+
+    t = threading.Thread(target=_run_all, daemon=True)
+    t.start()
+
+    return jsonify({"status": "sync started"}), 200
+
+
+# ---------------------------------------------------------------------------
 # Supabase query endpoints — read-only, Claude-facing
 # ---------------------------------------------------------------------------
 
