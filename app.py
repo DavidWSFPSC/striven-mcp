@@ -2424,6 +2424,122 @@ def kb_gaps():
 
 
 # ---------------------------------------------------------------------------
+# Analytics routes — materialized views (Supabase)
+# ---------------------------------------------------------------------------
+
+@app.route("/analyze/customer-ltv", methods=["GET"])
+def customer_ltv():
+    """
+    Return customer lifetime value from the customer_ltv materialized view.
+
+    Query params (all optional):
+        customer_name  str   — partial name filter (case-insensitive)
+        min_value      float — minimum lifetime value filter
+        limit          int   — max results (default 50)
+        order_by       str   — 'lifetime_value' | 'total_jobs' | 'avg_order_value'
+                               (default: lifetime_value, descending)
+    """
+    from services.supabase_client import _get_client
+
+    limit      = min(int(request.args.get("limit", 50)), 200)
+    order_by   = request.args.get("order_by", "lifetime_value")
+    if order_by not in ("lifetime_value", "total_jobs", "avg_order_value"):
+        order_by = "lifetime_value"
+
+    try:
+        q = _get_client().table("customer_ltv").select("*").order(order_by, desc=True).limit(limit)
+        if request.args.get("customer_name"):
+            q = q.ilike("customer_name", f"%{request.args['customer_name']}%")
+        if request.args.get("min_value"):
+            q = q.gte("lifetime_value", float(request.args["min_value"]))
+        result = q.execute()
+        rows   = result.data or []
+        return jsonify({"count": len(rows), "customers": rows})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/analyze/conversion-rates", methods=["GET"])
+def conversion_rates():
+    """
+    Return estimate-to-win conversion rates from the conversion_rates
+    materialized view, grouped by sales rep and project type.
+
+    Query params (all optional):
+        sales_rep    str — filter by rep name (partial, case-insensitive)
+        project_type str — filter by project type (partial, case-insensitive)
+    """
+    from services.supabase_client import _get_client
+
+    try:
+        q = (
+            _get_client()
+            .table("conversion_rates")
+            .select("*")
+            .order("conversion_rate_pct", desc=True)
+            .limit(200)
+        )
+        if request.args.get("sales_rep"):
+            q = q.ilike("sales_rep_name", f"%{request.args['sales_rep']}%")
+        if request.args.get("project_type"):
+            q = q.ilike("project_type", f"%{request.args['project_type']}%")
+        result = q.execute()
+        rows   = result.data or []
+        return jsonify({"count": len(rows), "rates": rows})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/analyze/task-summary", methods=["GET"])
+def task_summary():
+    """
+    Summarise open tasks from the tasks table, with optional filters.
+
+    Query params (all optional):
+        task_type    str  — filter by task type name (partial, case-insensitive)
+        assigned_to  str  — filter by assignee name (partial, case-insensitive)
+        status       str  — filter by status (partial, e.g. 'open')
+        inactive_only bool — if 'true', only tasks assigned to inactive employees
+        limit        int  — max results (default 100)
+    """
+    from services.supabase_client import _get_client
+
+    limit = min(int(request.args.get("limit", 100)), 500)
+
+    try:
+        q = (
+            _get_client()
+            .table("tasks")
+            .select(
+                "task_id, task_type, assigned_to, assigned_to_is_inactive, "
+                "customer_name, estimate_number, status, due_date, created_date"
+            )
+            .order("created_date", desc=True)
+            .limit(limit)
+        )
+        if request.args.get("task_type"):
+            q = q.ilike("task_type", f"%{request.args['task_type']}%")
+        if request.args.get("assigned_to"):
+            q = q.ilike("assigned_to", f"%{request.args['assigned_to']}%")
+        if request.args.get("status"):
+            q = q.ilike("status", f"%{request.args['status']}%")
+        if request.args.get("inactive_only", "").lower() == "true":
+            q = q.eq("assigned_to_is_inactive", True)
+
+        result = q.execute()
+        rows   = result.data or []
+
+        inactive_count = sum(1 for r in rows if r.get("assigned_to_is_inactive"))
+        return jsonify({
+            "count":          len(rows),
+            "inactive_count": inactive_count,
+            "tasks":          rows,
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
 # Financial data routes — bills, payments (read-only, Striven API)
 # ---------------------------------------------------------------------------
 

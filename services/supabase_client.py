@@ -2059,6 +2059,88 @@ def query_weekly_digest() -> dict:
             "detail":   {"reps": idle_reps},
         })
 
+    # ── Check 5: Tasks assigned to inactive employees ─────────────────────────
+    try:
+        inactive_rows = (
+            _get_client()
+            .table("tasks")
+            .select("task_id, task_type, assigned_to, customer_name, estimate_number, created_date, status")
+            .eq("assigned_to_is_inactive", True)
+            .ilike("status", "%open%")
+            .order("created_date", desc=False)
+            .limit(200)
+            .execute()
+        ).data or []
+
+        if inactive_rows:
+            flags.append({
+                "category": "Assignments",
+                "severity": "high",
+                "summary":  f"{len(inactive_rows)} open task(s) assigned to inactive employee(s)",
+                "detail": {
+                    "count":  len(inactive_rows),
+                    "sample": [
+                        {
+                            "task_type":   r.get("task_type"),
+                            "assigned_to": r.get("assigned_to"),
+                            "customer":    r.get("customer_name"),
+                            "estimate":    r.get("estimate_number"),
+                            "days_old":    _days_since(r["created_date"]),
+                        }
+                        for r in inactive_rows[:15]
+                    ],
+                },
+            })
+    except Exception:
+        pass   # tasks table not yet created — skip gracefully
+
+    # ── Check 6: YoY callback trend (year-to-date vs same period last year) ───
+    try:
+        year_start_this = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        year_start_last = year_start_this.replace(year=year_start_this.year - 1)
+        ytd_cutoff_last = now.replace(year=now.year - 1)   # same calendar day, last year
+
+        ytd_this_res = (
+            _get_client()
+            .table("callback_tasks")
+            .select("task_id", count="exact")
+            .gte("created_date", _iso(year_start_this))
+            .execute()
+        )
+        ytd_this = ytd_this_res.count or 0
+
+        ytd_last_res = (
+            _get_client()
+            .table("callback_tasks")
+            .select("task_id", count="exact")
+            .gte("created_date", _iso(year_start_last))
+            .lte("created_date", _iso(ytd_cutoff_last))
+            .execute()
+        )
+        ytd_last = ytd_last_res.count or 0
+
+        if ytd_last > 0:
+            yoy_pct = round((ytd_this / ytd_last - 1) * 100)
+            if abs(yoy_pct) >= 10:
+                flags.append({
+                    "category": "Callbacks",
+                    "severity": "high" if yoy_pct >= 25 else "medium" if yoy_pct >= 10 else "low",
+                    "summary":  (
+                        f"Callbacks {'up' if yoy_pct > 0 else 'down'} "
+                        f"{abs(yoy_pct)}% YoY "
+                        f"({ytd_this} this YTD vs {ytd_last} last year same period)"
+                    ),
+                    "detail": {
+                        "ytd_this_year":  ytd_this,
+                        "ytd_last_year":  ytd_last,
+                        "yoy_change_pct": yoy_pct,
+                        "year_start":     year_start_this.strftime("%Y-%m-%d"),
+                        "comparison_end": ytd_cutoff_last.strftime("%Y-%m-%d"),
+                    },
+                })
+    except Exception:
+        pass   # callback_tasks table may be empty — skip gracefully
+
     result: dict = {
         "generated_at":             now.isoformat(),
         "flags_count":              len(flags),
@@ -2070,10 +2152,10 @@ def query_weekly_digest() -> dict:
             "stalled_active_estimates",
             "overdue_open_callbacks",
             "rep_pipeline_summary",
+            "inactive_assignee_tasks",
+            "yoy_callback_trend",
         ],
-        "skipped_checks": [
-            "unlinked_payments — no payments table in Supabase",
-        ],
+        "skipped_checks": [],
     }
     if data_quality_note:
         result["data_quality_note"] = data_quality_note

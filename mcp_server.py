@@ -1642,14 +1642,17 @@ def kb_gap_report(days: int = 30) -> dict:
 def weekly_digest() -> dict:
     """
     Generate a weekly business health digest flagging anomalies — callback spikes,
-    stalled estimates, overdue open callbacks, pipeline gaps, and sales rep activity drops.
+    stalled estimates, overdue open callbacks, pipeline gaps, sales rep activity,
+    inactive assignees, and year-over-year callback trends.
     Run this every Monday morning or when asked for a business health check.
 
-    Runs four checks and returns a flags array (empty = all clear):
+    Runs six checks and returns a flags array (empty = all clear):
       - Callback rate spike: this week's new callbacks vs 4-week rolling average
       - Stalled active estimates: jobs in ACTIVE status for 14+ days with no movement
       - Overdue open callbacks: callback tasks still open after 7+ days
-      - Sales rep activity drop: reps with zero new estimates this week after recent activity
+      - Rep pipeline summary: active opportunities and value per sales rep
+      - Inactive assignee tasks: open tasks assigned to deactivated employees
+      - YoY callback trend: year-to-date callbacks vs same period last year
 
     Each flag has: category, severity (low/medium/high), summary, and detail.
 
@@ -1660,8 +1663,99 @@ def weekly_digest() -> dict:
       'Weekly digest'
       'Are there any spikes or issues I should know about?'
       'How does this week compare to recent weeks?'
+      'Do we have tasks assigned to inactive employees?'
     """
     return _call("get", "/analyze/weekly-digest")
+
+
+@mcp.tool()
+def customer_ltv(
+    customer_name: str   = "",
+    min_value:     float = 0.0,
+    limit:         int   = 50,
+    order_by:      str   = "lifetime_value",
+) -> dict:
+    """
+    Return customer lifetime value from the customer_ltv materialized view.
+    Shows total spend, job count, and average order value per customer.
+
+    Use when asked:
+      'Who are our most valuable customers?'
+      'What is the lifetime value of this customer?'
+      'Top 10 customers by revenue'
+      'How many jobs has [customer] had?'
+      'Average order size for our top accounts'
+
+    Args:
+        customer_name: Partial name filter (case-insensitive).
+        min_value:     Minimum lifetime value to include.
+        limit:         Max customers to return (default 50).
+        order_by:      Sort field: 'lifetime_value' | 'total_jobs' | 'avg_order_value'.
+    """
+    params: dict = {"limit": limit, "order_by": order_by}
+    if customer_name: params["customer_name"] = customer_name
+    if min_value:     params["min_value"]     = min_value
+    return _call("get", "/analyze/customer-ltv", params=params)
+
+
+@mcp.tool()
+def conversion_rates(
+    sales_rep:    str = "",
+    project_type: str = "",
+) -> dict:
+    """
+    Return estimate-to-win conversion rates by sales rep and project type,
+    from the conversion_rates materialized view.
+
+    Use when asked:
+      'What is our win rate?'
+      'How many estimates does [rep] convert?'
+      'Conversion rate for gas log installs'
+      'Which rep has the best close rate?'
+      'Show me pipeline conversion by project type'
+
+    Args:
+        sales_rep:    Filter by rep name (partial, case-insensitive).
+        project_type: Filter by project type (partial, case-insensitive).
+    """
+    params: dict = {}
+    if sales_rep:    params["sales_rep"]    = sales_rep
+    if project_type: params["project_type"] = project_type
+    return _call("get", "/analyze/conversion-rates", params=params)
+
+
+@mcp.tool()
+def task_summary(
+    task_type:     str  = "",
+    assigned_to:   str  = "",
+    status:        str  = "",
+    inactive_only: bool = False,
+    limit:         int  = 100,
+) -> dict:
+    """
+    Summarise open tasks from the Supabase tasks table. Includes an
+    inactive_count flag for tasks assigned to deactivated employees.
+
+    Use when asked:
+      'What tasks are open?'
+      'Show me all return trips assigned to John'
+      'Do we have tasks assigned to inactive employees?'
+      'Open service callbacks by technician'
+      'What is the task workload this week?'
+
+    Args:
+        task_type:     Filter by task type name (partial, case-insensitive).
+        assigned_to:   Filter by assignee name (partial, case-insensitive).
+        status:        Filter by status (partial, e.g. 'open').
+        inactive_only: If True, only return tasks assigned to inactive employees.
+        limit:         Max tasks to return (default 100).
+    """
+    params: dict = {"limit": limit}
+    if task_type:     params["task_type"]    = task_type
+    if assigned_to:   params["assigned_to"]  = assigned_to
+    if status:        params["status"]       = status
+    if inactive_only: params["inactive_only"] = "true"
+    return _call("get", "/analyze/task-summary", params=params)
 
 
 @mcp.tool()

@@ -384,12 +384,76 @@ def sync_estimates_to_supabase(limit: int | None = None) -> int:
             for rid, rname in rep_seen.items()
         ])
 
+    # Refresh materialized views that depend on estimates + line_items
+    _refresh_materialized_views()
+
     elapsed = round(time.monotonic() - t_start, 1)
     print(
         f"[sync] Complete — {total_synced} estimates synced in {elapsed}s.",
         flush=True,
     )
     return total_synced
+
+
+def _refresh_materialized_views() -> None:
+    """
+    Refresh Supabase materialized views after an estimates sync.
+
+    Views refreshed:
+      customer_ltv      — lifetime value per customer (total spend, job count, avg order)
+      conversion_rates  — estimate-to-win rates by sales rep and project type
+
+    DDL for these views (run once in Supabase SQL editor):
+
+      -- customer_ltv
+      CREATE MATERIALIZED VIEW IF NOT EXISTS customer_ltv AS
+      SELECT
+          customer_id,
+          customer_name,
+          COUNT(*)                                        AS total_jobs,
+          SUM(total_amount)                               AS lifetime_value,
+          ROUND(AVG(total_amount)::numeric, 2)            AS avg_order_value,
+          MAX(created_date)                               AS last_job_date,
+          MIN(created_date)                               AS first_job_date
+      FROM estimates
+      WHERE status_normalized IN ('ACTIVE', 'COMPLETE')
+      GROUP BY customer_id, customer_name;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_ltv_customer ON customer_ltv(customer_id);
+
+      -- conversion_rates
+      CREATE MATERIALIZED VIEW IF NOT EXISTS conversion_rates AS
+      SELECT
+          sales_rep_name,
+          project_type,
+          COUNT(*)                                        AS total_estimates,
+          SUM(CASE WHEN status_normalized IN ('ACTIVE','COMPLETE') THEN 1 ELSE 0 END)
+                                                          AS won_estimates,
+          ROUND(
+              SUM(CASE WHEN status_normalized IN ('ACTIVE','COMPLETE') THEN 1 ELSE 0 END)
+              * 100.0 / NULLIF(COUNT(*), 0), 1
+          )                                               AS conversion_rate_pct,
+          ROUND(AVG(total_amount)::numeric, 2)            AS avg_deal_size
+      FROM estimates
+      WHERE status_normalized != 'INCOMPLETE'
+      GROUP BY sales_rep_name, project_type;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_rep_type
+          ON conversion_rates(sales_rep_name, project_type);
+    """
+    from services.supabase_client import _get_client
+
+    for view in ("customer_ltv", "conversion_rates"):
+        try:
+            _get_client().rpc(
+                "exec_sql",
+                {"sql": f"REFRESH MATERIALIZED VIEW CONCURRENTLY {view};"},
+            ).execute()
+            print(f"[sync] Refreshed materialized view: {view}", flush=True)
+        except Exception as exc:
+            # exec_sql RPC may not exist — view refresh is best-effort.
+            # Create the view manually in the Supabase SQL editor using the DDL above.
+            print(f"[sync] Could not refresh {view}: {exc}", flush=True)
 
 
 # ---------------------------------------------------------------------------
