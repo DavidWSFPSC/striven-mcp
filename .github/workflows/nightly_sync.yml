@@ -14,8 +14,15 @@ jobs:
     timeout-minutes: 60
 
     env:
+      # services/striven.py (StrivenClient) reads CLIENT_ID / CLIENT_SECRET —
+      # used by the estimates sync step which calls services/sync.py directly.
+      CLIENT_ID:             ${{ secrets.STRIVEN_CLIENT_ID }}
+      CLIENT_SECRET:         ${{ secrets.STRIVEN_CLIENT_SECRET }}
+      # All standalone sync scripts and callback_audit.py read STRIVEN_CLIENT_ID
+      # / STRIVEN_CLIENT_SECRET via their own _get_token() helpers.
       STRIVEN_CLIENT_ID:     ${{ secrets.STRIVEN_CLIENT_ID }}
       STRIVEN_CLIENT_SECRET: ${{ secrets.STRIVEN_CLIENT_SECRET }}
+      # Supabase — used by all scripts
       SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY:          ${{ secrets.SUPABASE_KEY }}
 
