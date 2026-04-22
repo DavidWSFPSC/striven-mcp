@@ -42,7 +42,18 @@ jobs:
       # ── Core data syncs ────────────────────────────────────────────────────
 
       - name: Sync estimates (includes materialized view refresh)
-        run: python -c "from services.sync import sync_estimates_to_supabase; sync_estimates_to_supabase()"
+        run: |
+          for attempt in 1 2; do
+            echo "--- Estimates sync attempt $attempt ---"
+            python -c "from services.sync import sync_estimates_to_supabase; sync_estimates_to_supabase()" && break
+            if [ "$attempt" -lt 2 ]; then
+              echo "Attempt $attempt failed — waiting 60 s before retry..."
+              sleep 60
+            else
+              echo "Estimates sync failed after 2 attempts."
+              exit 1
+            fi
+          done
 
       - name: Sync invoices
         run: python sync_invoices.py

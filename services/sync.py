@@ -59,6 +59,8 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import requests
+
 from services.striven import StrivenClient
 from services.supabase_client import (
     upsert_full_estimates,
@@ -72,7 +74,7 @@ from services.supabase_client import (
 # ---------------------------------------------------------------------------
 
 SEARCH_PAGE_SIZE = 100      # stubs fetched per search call (Striven max)
-DETAIL_WORKERS   = 8        # parallel GET /sales-orders/{id} calls per page
+DETAIL_WORKERS   = 3        # parallel GET /sales-orders/{id} calls per page
 UPSERT_BATCH     = 200      # rows per Supabase upsert call
 
 # Status normalization — maps Striven status id → business lifecycle bucket
@@ -299,11 +301,28 @@ def sync_estimates_to_supabase(limit: int | None = None) -> int:
         errors  = 0
 
         def _fetch(est_id: int) -> dict | None:
-            try:
-                return client.get_estimate(est_id)
-            except Exception as exc:
-                print(f"[sync] GET {est_id} failed: {exc}", flush=True)
-                return None
+            for attempt in range(4):  # attempts 0, 1, 2, 3
+                try:
+                    return client.get_estimate(est_id)
+                except requests.HTTPError as exc:
+                    if exc.response is not None and exc.response.status_code == 429:
+                        if attempt < 3:
+                            wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                            print(
+                                f"[sync] GET {est_id} rate-limited (429); "
+                                f"retrying in {wait}s (attempt {attempt + 1}/3)",
+                                flush=True,
+                            )
+                            time.sleep(wait)
+                            continue
+                        print(f"[sync] GET {est_id} gave up after 3 retries (429).", flush=True)
+                        return None
+                    print(f"[sync] GET {est_id} failed (HTTP {exc.response.status_code if exc.response is not None else '?'}): {exc}", flush=True)
+                    return None
+                except Exception as exc:
+                    print(f"[sync] GET {est_id} failed: {exc}", flush=True)
+                    return None
+            return None  # unreachable but satisfies type checker
 
         with ThreadPoolExecutor(max_workers=DETAIL_WORKERS) as pool:
             futures = {pool.submit(_fetch, eid): eid for eid in ids}
