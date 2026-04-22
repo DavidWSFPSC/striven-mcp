@@ -74,7 +74,7 @@ from services.supabase_client import (
 # ---------------------------------------------------------------------------
 
 SEARCH_PAGE_SIZE = 100      # stubs fetched per search call (Striven max)
-DETAIL_WORKERS   = 3        # parallel GET /sales-orders/{id} calls per page
+DETAIL_WORKERS   = 8        # parallel GET /sales-orders/{id} calls per page
 UPSERT_BATCH     = 200      # rows per Supabase upsert call
 
 # Status normalization — maps Striven status id → business lifecycle bucket

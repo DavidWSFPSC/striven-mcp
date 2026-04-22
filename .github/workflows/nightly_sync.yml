@@ -40,20 +40,10 @@ jobs:
         run: pip install -r requirements.txt
 
       # ── Core data syncs ────────────────────────────────────────────────────
-
-      - name: Sync estimates (includes materialized view refresh)
-        run: |
-          for attempt in 1 2; do
-            echo "--- Estimates sync attempt $attempt ---"
-            python -c "from services.sync import sync_estimates_to_supabase; sync_estimates_to_supabase()" && break
-            if [ "$attempt" -lt 2 ]; then
-              echo "Attempt $attempt failed — waiting 60 s before retry..."
-              sleep 60
-            else
-              echo "Estimates sync failed after 2 attempts."
-              exit 1
-            fi
-          done
+      # NOTE: estimates sync is intentionally excluded — it fetches 9,300+
+      # individual detail records in parallel and consistently hits Striven's
+      # 429 rate limit on GitHub's shared runners. Estimates are synced via
+      # the sync_estimates MCP tool trigger on Render instead.
 
       - name: Sync invoices
         run: python sync_invoices.py
