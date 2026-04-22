@@ -120,9 +120,13 @@ def _transform(r: dict) -> dict:
     last  = r.get("lastName")  or r.get("LastName")  or ""
     full  = r.get("name") or r.get("Name") or " ".join(filter(None, [first, last])) or None
 
+    # /v1/employees does not return an isActive field — all returned records
+    # are treated as active. The endpoint does not expose inactive employees.
     is_active = r.get("isActive")
     if is_active is None:
         is_active = r.get("IsActive")
+    if is_active is None:
+        is_active = True   # default: active when field absent
 
     return {
         "employee_id": r.get("id") or r.get("Id"),

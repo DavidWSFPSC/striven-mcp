@@ -113,7 +113,13 @@ def _fetch_all_items(token: str) -> list[dict]:
 
 def _transform(r: dict) -> dict:
     item_type = r.get("itemType") or r.get("ItemType") or {}
-    category  = r.get("category") or r.get("Category") or {}
+    # API returns glCategory (nested obj) for category; no flat category field
+    gl_cat    = r.get("glCategory") or r.get("GlCategory") or r.get("category") or r.get("Category") or {}
+
+    # is_active: API uses "active" (bool), not "isActive"
+    is_active = r.get("active")
+    if is_active is None:
+        is_active = r.get("isActive") if r.get("isActive") is not None else r.get("IsActive")
 
     return {
         "item_id":     r.get("id") or r.get("Id"),
@@ -124,14 +130,14 @@ def _transform(r: dict) -> dict:
             if isinstance(item_type, dict) else str(item_type) if item_type else None
         ),
         "category": (
-            category.get("name") or category.get("Name")
-            if isinstance(category, dict) else str(category) if category else None
+            gl_cat.get("name") or gl_cat.get("Name")
+            if isinstance(gl_cat, dict) else str(gl_cat) if gl_cat else None
         ),
         "price":     (
             r.get("price") or r.get("Price")
             or r.get("unitPrice") or r.get("UnitPrice")
         ),
-        "is_active":   r.get("isActive") if r.get("isActive") is not None else r.get("IsActive"),
+        "is_active":   is_active,
         "synced_at":   datetime.now(timezone.utc).isoformat(),
     }
 

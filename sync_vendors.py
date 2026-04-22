@@ -110,14 +110,22 @@ def _fetch_all_vendors(token: str) -> list[dict]:
 
 
 def _transform(r: dict) -> dict:
+    # Status is a nested object: {"id": int, "name": "Active"|"Inactive"|...}
+    status      = r.get("status") or r.get("Status") or {}
+    status_name = (status.get("name") or status.get("Name") or "").strip().lower()
+    # Derive is_active from status name; flat isActive overrides if present
+    is_active = r.get("isActive") if r.get("isActive") is not None else r.get("IsActive")
+    if is_active is None:
+        is_active = (status_name == "active") if status_name else None
+
     return {
         "vendor_id":    r.get("id") or r.get("Id"),
         "name":         r.get("name") or r.get("Name"),
         "number":       r.get("number") or r.get("Number"),
         "email":        r.get("email") or r.get("Email"),
-        "phone":        r.get("phone") or r.get("Phone"),
+        "phone":        r.get("phoneNumber") or r.get("phone") or r.get("Phone"),
         "contact_name": r.get("contactName") or r.get("ContactName"),
-        "is_active":    r.get("isActive") if r.get("isActive") is not None else r.get("IsActive"),
+        "is_active":    is_active,
         "synced_at":    datetime.now(timezone.utc).isoformat(),
     }
 

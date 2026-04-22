@@ -152,7 +152,8 @@ def _transform(p: dict) -> dict:
         "customer_id":     customer.get("id") or customer.get("Id"),
         "customer_name":   customer.get("name") or customer.get("Name"),
         "amount":          (
-            p.get("amount") or p.get("Amount")
+            p.get("paymentAmount") or p.get("PaymentAmount")
+            or p.get("amount") or p.get("Amount")
             or p.get("total") or p.get("Total")
         ),
         "payment_date":    (
@@ -161,7 +162,8 @@ def _transform(p: dict) -> dict:
         ),
         "payment_method":  method_name,
         "reference_number": (
-            p.get("reference") or p.get("Reference")
+            p.get("referenceNumber") or p.get("ReferenceNumber")
+            or p.get("reference") or p.get("Reference")
             or p.get("checkNumber") or p.get("CheckNumber")
         ),
         "memo":            p.get("memo") or p.get("Memo"),
