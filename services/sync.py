@@ -462,16 +462,15 @@ def _refresh_materialized_views() -> None:
     """
     from services.supabase_client import _get_client
 
-    for view in ("customer_ltv", "conversion_rates"):
+    for view, rpc_fn in (
+        ("customer_ltv",     "refresh_customer_ltv"),
+        ("conversion_rates", "refresh_conversion_rates"),
+    ):
         try:
-            _get_client().rpc(
-                "exec_sql",
-                {"sql": f"REFRESH MATERIALIZED VIEW CONCURRENTLY {view};"},
-            ).execute()
+            _get_client().rpc(rpc_fn, {}).execute()
             print(f"[sync] Refreshed materialized view: {view}", flush=True)
         except Exception as exc:
-            # exec_sql RPC may not exist — view refresh is best-effort.
-            # Create the view manually in the Supabase SQL editor using the DDL above.
+            # Named RPC functions must exist in Supabase — see DDL comment above.
             print(f"[sync] Could not refresh {view}: {exc}", flush=True)
 
 
