@@ -468,7 +468,14 @@ def missing_portal_flag():
 
     Streams through all records page-by-page (no RAM accumulation).
     Also reachable at /portal-flag-audit.
+
+    Authentication: Bearer <SYNC_API_KEY> required (same key as nightly sync).
     """
+    expected_key = os.environ.get("SYNC_API_KEY", "")
+    provided_key = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if not expected_key or provided_key != expected_key:
+        return jsonify({"error": "Unauthorized"}), 401
+
     try:
         return jsonify(_run_portal_flag_audit())
     except HTTPError as exc:
@@ -1026,6 +1033,7 @@ def admin_run_sync():
         "sync_items.py",
         "sync_vendors.py",
         "sync_employees.py",
+        "sync_customer_locations.py",
     ]
 
     def _run_all():
