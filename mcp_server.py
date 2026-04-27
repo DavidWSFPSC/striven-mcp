@@ -296,6 +296,49 @@ Status codes:
   25 = In Progress
   27 = Completed
 
+TOOL ROUTING PRIORITY — ALWAYS FOLLOW THIS ORDER
+-------------------------------------------------
+Before calling any tool, determine which tier can answer the question.
+Call the lowest-numbered tier that can answer it. Never skip tiers.
+
+TIER 1 — Knowledge Base (search_knowledge_base)
+  Call this FIRST for ANY question about:
+    - Product specs, dimensions, clearances, BTU ratings
+    - Installation procedures or requirements (any brand or model)
+    - Venting, gas line, or combustion air specs
+    - Warranty policies or service procedures
+    - Troubleshooting any symptom or brand
+    - Company policies, CSR procedures, HR documents
+    - Mortar mixes, refractory specs, hearth materials
+    - Permits, code requirements, estimating standards
+    - Price books, vendor documents, marketing materials
+    - Builder books or construction phase documentation
+  If the top result has similarity >= 0.75, return that answer
+  and do NOT call any further tools unless the user asks for data.
+
+TIER 2 — Supabase Cached Data (fast, no rate limits)
+  Use BEFORE any live Striven call when the question is about:
+    - Estimate counts, high-value jobs, brand/product summaries
+    - AR totals, open invoices, payment history
+    - Callback intelligence, return trip analysis
+    - Customer lifetime value, conversion rates
+    - Task summaries, items catalog, vendor list
+  Tier 2 tools: count_estimates, high_value_estimates, brand_summary,
+    search_by_product, search_callback_insights, callbacks_by_product,
+    invoice_ar_summary, search_invoices, time_to_preview, customer_ltv,
+    conversion_rates, task_summary, search_items, search_vendors,
+    search_payments, search_estimates_by_customer, jobs_by_location,
+    high_value_estimates, analyze_callback_causes, weekly_digest
+
+TIER 3 — Live Striven API (only when Tier 1 and 2 cannot answer)
+  Use ONLY when cached data is insufficient or real-time accuracy is needed:
+    - Real-time estimate status, custom fields, pipeline status
+    - Portal flag audit, stuck job analysis
+    - Invoice lookup tied to a specific estimate
+  Tier 3 tools: search_estimates, search_by_pipeline_status,
+    portal_flag_audit, analyze_stuck_jobs, get_invoices_by_estimate,
+    search_return_trips, backlog_by_rep, invoice_audit
+
 TOOLS AVAILABLE
 ---------------
 - count_estimates              → total records in database
@@ -406,7 +449,9 @@ def _call(method: str, path: str, **kwargs) -> dict:
 @mcp.tool()
 def count_estimates() -> dict:
     """
-    Get the total number of estimates stored in the database.
+    TIER 2 — Supabase. Get the total number of estimates stored in the database.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Use when asked:
       'How many estimates do we have?'
@@ -418,8 +463,10 @@ def count_estimates() -> dict:
 @mcp.tool()
 def high_value_estimates() -> dict:
     """
-    Return up to 25 estimates where the total value exceeds $10,000,
-    sorted from highest to lowest.
+    TIER 2 — Supabase. Return up to 25 estimates where the total value exceeds
+    $10,000, sorted from highest to lowest.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Use when asked:
       'Show me our biggest jobs'
@@ -460,7 +507,9 @@ def search_estimates(
     page: int = 1,
 ) -> dict:
     """
-    Search estimates by status, date range, or estimate name/number.
+    TIER 3 — Striven Live API. Search estimates by status, date range, or
+    estimate name/number. This tool calls the Striven API live — only use
+    if Supabase cached tools (Tier 2) cannot answer the question.
     Calls the Striven API directly — use sparingly to avoid rate limits.
 
     IMPORTANT — DO NOT use this tool for product or brand searches.
@@ -533,7 +582,9 @@ def get_estimate_by_id(estimate_id: int) -> dict:
 @mcp.tool()
 def portal_flag_audit() -> dict:
     """
-    Audit all estimates and return those missing the Customer Portal display flag.
+    TIER 3 — Striven Live API. Audit all estimates and return those missing the
+    Customer Portal display flag. This tool calls the Striven API live — only
+    use if Supabase cached tools (Tier 2) cannot answer the question.
 
     The "Do not show items on estimate in the Customer Portal display" field
     must be set to true on every estimate. This tool finds every record where
@@ -677,8 +728,10 @@ def jobs_by_location(location: str, year: int = 0) -> dict:
 @mcp.tool()
 def time_to_preview() -> dict:
     """
-    Get the average and median number of days from estimate creation to the
-    first site preview / inspection task being scheduled.
+    TIER 2 — Supabase. Get the average and median number of days from estimate
+    creation to the first site preview / inspection task being scheduled.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Measures the gap between when an estimate is created in Striven and when
     a Site Inspections/Preview task (task type 15) is logged against it.
@@ -711,8 +764,10 @@ def search_by_product(
     limit:   int = 50,
 ) -> dict:
     """
-    Search estimates by product or service keyword in line items, with optional
-    filters for zip code, status, and year.
+    TIER 2 — Supabase. Search estimates by product or service keyword in line
+    items, with optional filters for zip code, status, and year.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Searches both item_name (product SKU) and description (free-text notes)
     fields across all estimate line items, then joins to the estimate record.
@@ -820,7 +875,9 @@ def search_by_product(
 @mcp.tool()
 def get_invoices_by_estimate(estimate_id: int) -> dict:
     """
-    Return all invoices linked to a specific estimate / sales order.
+    TIER 3 — Striven Live API (hybrid). Return all invoices linked to a
+    specific estimate / sales order. This tool calls the Striven API live —
+    only use if Supabase cached tools (Tier 2) cannot answer the question.
 
     Cross-references the estimate against Striven invoices to show what has
     been billed, the invoice status, total, and any outstanding balance.
@@ -892,7 +949,10 @@ def invoice_audit(year: int = 0, limit: int = 50) -> dict:
 @mcp.tool()
 def brand_summary(year: int = 0, zip: str = "", min_jobs: int = 1) -> dict:
     """
-    Return a ranked leaderboard of all WilliamSmith brands by job count and revenue.
+    TIER 2 — Supabase. Return a ranked leaderboard of all WilliamSmith brands
+    by job count and revenue.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Scans every brand we carry against estimate line items and returns a sorted
     table — who we install most, total revenue per brand, and most common status.
@@ -943,8 +1003,10 @@ def brand_summary(year: int = 0, zip: str = "", min_jobs: int = 1) -> dict:
 @mcp.tool()
 def search_by_pipeline_status(status: str, limit: int = 200) -> dict:
     """
-    Find all active (Approved or In-Progress) estimates that match a specific
-    pipeline/operational status based on custom field values in Striven.
+    TIER 3 — Striven Live API. Find all active (Approved or In-Progress)
+    estimates that match a specific pipeline/operational status based on
+    custom field values in Striven. This tool calls the Striven API live —
+    only use if Supabase cached tools (Tier 2) cannot answer the question.
 
     Use when asked:
       'Show me jobs that are ready to schedule'
@@ -1052,8 +1114,10 @@ def search_callback_insights(
     limit:    int = 500,
 ) -> dict:
     """
-    Query the callback and return-trip task database to surface operational
-    intelligence about rework, callbacks, and return visits.
+    TIER 2 — Supabase. Query the callback and return-trip task database to
+    surface operational intelligence about rework, callbacks, and return visits.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Data covers 1,395+ tasks of these types:
       - Installer: Return Trip (Unplanned) / Punch Work
@@ -1208,7 +1272,10 @@ def search_invoices_live(
 @mcp.tool()
 def invoice_ar_summary() -> dict:
     """
-    Return a full accounts-receivable aging summary from the Supabase invoices table.
+    TIER 2 — Supabase. Return a full accounts-receivable aging summary from
+    the Supabase invoices table.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Aggregates all open-balance invoices into aging buckets and surfaces the
     oldest unpaid invoice. Run sync_invoices.py first to refresh the data.
@@ -1241,8 +1308,10 @@ def search_invoices(
     limit:         int   = 50,
 ) -> dict:
     """
-    Search open invoices in the Supabase invoices table with optional filters,
-    sorted by days outstanding (oldest first).
+    TIER 2 — Supabase. Search open invoices in the Supabase invoices table
+    with optional filters, sorted by days outstanding (oldest first).
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Use when asked:
       'Show me overdue invoices for [customer]'
@@ -1322,7 +1391,9 @@ def search_payments(
     page_size:   int = 25,
 ) -> dict:
     """
-    Search payments received from customers.
+    TIER 2 — Supabase. Search payments received from customers.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Use when asked:
       'What payments have we received?'
@@ -1350,7 +1421,9 @@ def search_payments(
 @mcp.tool()
 def search_items(keyword: str = "", page_size: int = 25) -> dict:
     """
-    Search the product and service catalog.
+    TIER 2 — Supabase. Search the product and service catalog.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Use when asked:
       'What products do we sell?'
@@ -1370,7 +1443,9 @@ def search_items(keyword: str = "", page_size: int = 25) -> dict:
 @mcp.tool()
 def search_vendors(name: str = "", page_size: int = 25) -> dict:
     """
-    Search vendors we purchase from.
+    TIER 2 — Supabase. Search vendors we purchase from.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Use when asked:
       'Who are our vendors?'
@@ -1449,7 +1524,9 @@ def search_opportunities(
 @mcp.tool()
 def analyze_stuck_jobs(limit: int = 50) -> dict:
     """
-    Identify jobs that are stuck across Quoted, Approved, and In Progress.
+    TIER 3 — Striven Live API. Identify jobs that are stuck across Quoted,
+    Approved, and In Progress. This tool calls the Striven API live — only
+    use if Supabase cached tools (Tier 2) cannot answer the question.
 
     Stuck thresholds:
       Quoted      > 7 days  — no customer follow-up
@@ -1579,7 +1656,16 @@ def analyze_job_pipeline(
 @mcp.tool()
 def search_knowledge_base(query: str, top_k: int = 5) -> dict:
     """
+    TIER 1 — CALL THIS FIRST for any question about products, procedures,
+    installation specs, troubleshooting, or company policy.
+
     Semantic search across the WilliamSmith Fireplaces internal knowledge base.
+    This tool queries Supabase directly (no Striven API call) and should be
+    the FIRST tool called for any question that could be answered by an
+    internal document, manual, spec sheet, or company procedure.
+
+    If the top result has similarity >= 0.75, return the KB answer and do NOT
+    call any further tools unless the user explicitly asks for live data.
 
     Searches 17,000+ embedded chunks from 756 internal documents including:
       - Installation manuals (Isokern, Heat & Glo, Empire, Dimplex, Element4, Astria, etc.)
@@ -1595,7 +1681,7 @@ def search_knowledge_base(query: str, top_k: int = 5) -> dict:
       - Price books and vendor documents
       - Marketing materials
 
-    Use when asked about:
+    Call this FIRST when asked about:
       - How to install a specific fireplace model
       - Product specs, dimensions, clearances, BTU ratings
       - Isokern or masonry fireplace requirements
@@ -1676,8 +1762,10 @@ def customer_ltv(
     order_by:      str   = "lifetime_value",
 ) -> dict:
     """
-    Return customer lifetime value from the customer_ltv materialized view.
-    Shows total spend, job count, and average order value per customer.
+    TIER 2 — Supabase. Return customer lifetime value from the customer_ltv
+    materialized view. Shows total spend, job count, and average order value.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Use when asked:
       'Who are our most valuable customers?'
@@ -1704,8 +1792,10 @@ def conversion_rates(
     project_type: str = "",
 ) -> dict:
     """
-    Return estimate-to-win conversion rates by sales rep and project type,
-    from the conversion_rates materialized view.
+    TIER 2 — Supabase. Return estimate-to-win conversion rates by sales rep
+    and project type, from the conversion_rates materialized view.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Use when asked:
       'What is our win rate?'
@@ -1733,8 +1823,10 @@ def task_summary(
     limit:         int  = 100,
 ) -> dict:
     """
-    Summarise open tasks from the Supabase tasks table. Includes an
-    inactive_count flag for tasks assigned to deactivated employees.
+    TIER 2 — Supabase. Summarise open tasks from the Supabase tasks table.
+    Includes an inactive_count flag for tasks assigned to deactivated employees.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Use when asked:
       'What tasks are open?'
@@ -1829,7 +1921,10 @@ def callbacks_by_product(
     callback_type: str | None = None,
 ) -> dict:
     """
-    Analyze which fireplace makes and models generate the most callbacks and return trips.
+    TIER 2 — Supabase. Analyze which fireplace makes and models generate the
+    most callbacks and return trips.
+    This tool queries Supabase directly — use this BEFORE making any live
+    Striven API calls for this type of question.
 
     Joins callback task records to estimate line items to identify problem products
     by brand and model. Only counts line items priced over $500 so accessories,

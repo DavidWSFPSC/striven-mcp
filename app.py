@@ -1058,6 +1058,87 @@ def admin_run_sync():
     return jsonify({"status": "sync started"}), 200
 
 
+@app.route("/admin/run-sync-estimates", methods=["POST"])
+def admin_run_sync_estimates():
+    """
+    Trigger a full estimates sync from Striven → Supabase.
+
+    Called by the GitHub Actions nightly workflow (separate step from run-sync).
+    Runs on Render so Striven sees a trusted IP. Returns 200 immediately;
+    the sync runs in a background thread. Progress written to Render logs.
+
+    Authentication:
+        Authorization: Bearer <SYNC_API_KEY>
+    """
+    import threading
+
+    expected_key = os.environ.get("SYNC_API_KEY", "")
+    auth_header  = request.headers.get("Authorization", "")
+    provided_key = auth_header.removeprefix("Bearer ").strip()
+
+    if not expected_key or provided_key != expected_key:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    def _run():
+        print("[admin/run-sync-estimates] Estimates sync started.", flush=True)
+        try:
+            n = sync_estimates_to_supabase(limit=None)
+            print(f"[admin/run-sync-estimates] Completed — {n} records synced.", flush=True)
+        except Exception as exc:
+            print(f"[admin/run-sync-estimates] ERROR: {exc}", flush=True)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    return jsonify({"status": "estimates sync started"}), 200
+
+
+@app.route("/admin/run-sync-kb", methods=["POST"])
+def admin_run_sync_kb():
+    """
+    Trigger a knowledge base sync from Notion → Supabase (embeddings).
+
+    Called by the GitHub Actions nightly workflow. Runs sync_knowledge_base.py
+    in a background thread on Render. Returns 200 immediately.
+    Progress and errors are written to Render logs.
+
+    Authentication:
+        Authorization: Bearer <SYNC_API_KEY>
+    """
+    import threading
+    import subprocess
+
+    expected_key = os.environ.get("SYNC_API_KEY", "")
+    auth_header  = request.headers.get("Authorization", "")
+    provided_key = auth_header.removeprefix("Bearer ").strip()
+
+    if not expected_key or provided_key != expected_key:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    def _run():
+        print("[admin/run-sync-kb] Knowledge base sync started.", flush=True)
+        try:
+            result = subprocess.run(
+                ["python", "sync_knowledge_base.py"],
+                capture_output=False,
+                text=True,
+                timeout=3600,   # KB sync can take up to 60 min for large corpora
+            )
+            if result.returncode == 0:
+                print("[admin/run-sync-kb] Knowledge base sync completed OK.", flush=True)
+            else:
+                print(f"[admin/run-sync-kb] sync_knowledge_base.py exited with code {result.returncode}.", flush=True)
+        except subprocess.TimeoutExpired:
+            print("[admin/run-sync-kb] sync_knowledge_base.py timed out after 60 min.", flush=True)
+        except Exception as exc:
+            print(f"[admin/run-sync-kb] ERROR: {exc}", flush=True)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    return jsonify({"status": "knowledge base sync started"}), 200
+
+
 # ---------------------------------------------------------------------------
 # Supabase query endpoints — read-only, Claude-facing
 # ---------------------------------------------------------------------------

@@ -1,5 +1,9 @@
 name: Nightly Striven → Supabase Sync
 
+# Full nightly sync covers: invoices, payments, tasks, items, vendors,
+# employees (via /admin/run-sync), then estimates (via /admin/run-sync-estimates),
+# then knowledge base from Notion (via /admin/run-sync-kb).
+
 on:
   schedule:
     # 2:00 AM Eastern = 07:00 UTC (EST) / 06:00 UTC (EDT)
@@ -11,7 +15,7 @@ jobs:
   sync:
     name: Trigger sync on Render
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     # NOTE: All sync scripts now run on Render (stable IP, trusted by Striven).
     # GitHub Actions shared runner IPs are flagged by Striven's rate limiter on
@@ -24,9 +28,23 @@ jobs:
     #                  GitHub → Settings → Secrets → Actions → New repository secret
 
     steps:
-      - name: Trigger nightly sync on Render
+      - name: Trigger nightly core sync on Render
         run: |
           curl -X POST https://striven-mcp-v2.onrender.com/admin/run-sync \
+            -H "Authorization: Bearer ${{ secrets.SYNC_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            --fail --max-time 30
+
+      - name: Trigger estimates sync on Render
+        run: |
+          curl -X POST https://striven-mcp-v2.onrender.com/admin/run-sync-estimates \
+            -H "Authorization: Bearer ${{ secrets.SYNC_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            --fail --max-time 30
+
+      - name: Trigger knowledge base sync on Render
+        run: |
+          curl -X POST https://striven-mcp-v2.onrender.com/admin/run-sync-kb \
             -H "Authorization: Bearer ${{ secrets.SYNC_API_KEY }}" \
             -H "Content-Type: application/json" \
             --fail --max-time 30
