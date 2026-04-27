@@ -2321,3 +2321,289 @@ def query_callback_causes(
         },
         "sample_work_notes": sample_work_notes,
     }
+
+
+# ---------------------------------------------------------------------------
+# Conversion funnel — stage-by-stage win rates by rep and project type
+# ---------------------------------------------------------------------------
+
+def query_conversion_funnel(
+    rep:          str | None = None,
+    project_type: str | None = None,
+    year:         int | None = None,
+) -> dict:
+    """
+    True funnel analysis: Quoted → Pending Approval → Approved → In Progress → Completed.
+
+    Queries the estimates table directly (not the materialized view) for full
+    stage-by-stage granularity. Supports filtering by rep, project type, and year.
+
+    Returns per-rep and per-project-type breakdowns with stage counts, conversion
+    rates between consecutive stages, and avg deal size by rep.
+    """
+    from collections import defaultdict
+    from datetime import datetime, timezone
+
+    # Status buckets in funnel order (19=Quoted, 20=PendingApproval, 22=Approved,
+    # 25=InProgress, 27=Completed, 18=Incomplete — excluded from funnel)
+    FUNNEL_ORDER = [
+        ("Quoted",           19),
+        ("Pending Approval", 20),
+        ("Approved",         22),
+        ("In Progress",      25),
+        ("Completed",        27),
+    ]
+    FUNNEL_IDS = {sid for _, sid in FUNNEL_ORDER}
+
+    q = (
+        _get_client()
+        .table("estimates")
+        .select(
+            "estimate_id, sales_rep_name, project_type, "
+            "status_id, status_raw, total_amount, created_date"
+        )
+        .in_("status_id", list(FUNNEL_IDS))
+        .order("created_date", desc=True)
+        .limit(10000)
+    )
+    if rep:
+        q = q.ilike("sales_rep_name", f"%{rep}%")
+    if project_type:
+        q = q.ilike("project_type", f"%{project_type}%")
+    if year:
+        q = (
+            q.gte("created_date", f"{year}-01-01T00:00:00+00:00")
+             .lt("created_date",  f"{year + 1}-01-01T00:00:00+00:00")
+        )
+
+    rows = (q.execute()).data or []
+    total = len(rows)
+
+    # ── Overall funnel counts ────────────────────────────────────────────────
+    stage_counts: dict[str, int] = {label: 0 for label, _ in FUNNEL_ORDER}
+    stage_ids = {sid: label for label, sid in FUNNEL_ORDER}
+
+    for r in rows:
+        sid = r.get("status_id")
+        if sid in stage_ids:
+            stage_counts[stage_ids[sid]] += 1
+
+    # Cumulative at or past each stage (e.g. Approved includes In Progress + Completed)
+    cumulative: dict[str, int] = {}
+    running = 0
+    for label, _ in reversed(FUNNEL_ORDER):
+        running += stage_counts[label]
+        cumulative[label] = running
+
+    # Stage-to-stage conversion rates
+    funnel_stages = []
+    for i, (label, _) in enumerate(FUNNEL_ORDER):
+        prev_label = FUNNEL_ORDER[i - 1][0] if i > 0 else None
+        prev_cum   = cumulative.get(prev_label, total) if prev_label else total
+        this_cum   = cumulative[label]
+        rate       = round(this_cum / prev_cum * 100, 1) if prev_cum > 0 else None
+        funnel_stages.append({
+            "stage":           label,
+            "at_or_past":      this_cum,
+            "stage_only":      stage_counts[label],
+            "pct_of_total":    round(this_cum / total * 100, 1) if total else None,
+            "conversion_from_prev": rate,
+        })
+
+    # ── By rep breakdown ─────────────────────────────────────────────────────
+    rep_data: dict[str, dict] = defaultdict(lambda: {
+        "by_stage": defaultdict(int),
+        "amounts":  [],
+    })
+    for r in rows:
+        rep_name = (r.get("sales_rep_name") or "Unassigned").strip() or "Unassigned"
+        sid      = r.get("status_id")
+        label    = stage_ids.get(sid, "Unknown")
+        rep_data[rep_name]["by_stage"][label] += 1
+        amt = r.get("total_amount")
+        if amt:
+            rep_data[rep_name]["amounts"].append(float(amt))
+
+    by_rep = []
+    for rep_name, d in sorted(rep_data.items()):
+        total_rep   = sum(d["by_stage"].values())
+        completed   = d["by_stage"].get("Completed", 0)
+        approved_up = sum(
+            d["by_stage"].get(s, 0)
+            for s in ("Approved", "In Progress", "Completed")
+        )
+        amounts     = d["amounts"]
+        by_rep.append({
+            "rep":              rep_name,
+            "total":            total_rep,
+            "completed":        completed,
+            "win_rate_pct":     round(completed / total_rep * 100, 1) if total_rep else None,
+            "approval_rate_pct": round(approved_up / total_rep * 100, 1) if total_rep else None,
+            "avg_deal_size":    round(sum(amounts) / len(amounts), 2) if amounts else None,
+            "by_stage":         dict(d["by_stage"]),
+        })
+    by_rep.sort(key=lambda x: -(x["completed"] or 0))
+
+    # ── By project type breakdown ────────────────────────────────────────────
+    pt_data: dict[str, dict] = defaultdict(lambda: defaultdict(int))
+    for r in rows:
+        pt  = (r.get("project_type") or "Unspecified").strip() or "Unspecified"
+        sid = r.get("status_id")
+        pt_data[pt][stage_ids.get(sid, "Unknown")] += 1
+
+    by_project_type = [
+        {
+            "project_type": pt,
+            "total":        sum(counts.values()),
+            "completed":    counts.get("Completed", 0),
+            "win_rate_pct": round(
+                counts.get("Completed", 0) / sum(counts.values()) * 100, 1
+            ) if sum(counts.values()) else None,
+            "by_stage":     dict(counts),
+        }
+        for pt, counts in sorted(pt_data.items(), key=lambda x: -x[1].get("Completed", 0))
+    ]
+
+    return {
+        "total_estimates": total,
+        "funnel":          funnel_stages,
+        "by_rep":          by_rep,
+        "by_project_type": by_project_type,
+        "filters": {
+            "rep":          rep,
+            "project_type": project_type,
+            "year":         year,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Time to close — days from quote created to order_date (approval proxy)
+# ---------------------------------------------------------------------------
+
+def query_time_to_close(
+    rep:          str | None = None,
+    project_type: str | None = None,
+    year:         int | None = None,
+) -> dict:
+    """
+    Measure how long it takes estimates to move from created → approved/closed.
+
+    Uses order_date as the approval proxy (Striven sets this when an estimate
+    becomes an approved order). Estimates without an order_date are excluded.
+
+    Returns median and average days-to-close, broken down by rep and project type.
+    """
+    from statistics import median, mean
+
+    q = (
+        _get_client()
+        .table("estimates")
+        .select(
+            "estimate_id, estimate_number, sales_rep_name, project_type, "
+            "status_id, total_amount, created_date, order_date"
+        )
+        .in_("status_id", [22, 25, 27])   # Approved, In Progress, Completed
+        .not_.is_("order_date", "null")    # must have been approved
+        .order("created_date", desc=True)
+        .limit(5000)
+    )
+    if rep:
+        q = q.ilike("sales_rep_name", f"%{rep}%")
+    if project_type:
+        q = q.ilike("project_type", f"%{project_type}%")
+    if year:
+        q = (
+            q.gte("created_date", f"{year}-01-01T00:00:00+00:00")
+             .lt("created_date",  f"{year + 1}-01-01T00:00:00+00:00")
+        )
+
+    rows = (q.execute()).data or []
+
+    def _days(r: dict) -> float | None:
+        try:
+            created  = r.get("created_date")  or ""
+            approved = r.get("order_date")     or ""
+            if not created or not approved:
+                return None
+            from datetime import datetime
+            c = datetime.fromisoformat(created.replace("Z",  "+00:00"))
+            a = datetime.fromisoformat(approved.replace("Z", "+00:00"))
+            d = (a - c).days
+            return d if d >= 0 else None
+        except Exception:
+            return None
+
+    all_days = [d for r in rows if (d := _days(r)) is not None]
+
+    if not all_days:
+        return {
+            "total_with_approval_date": 0,
+            "note": "No estimates with order_date found. order_date is only set when Striven records an approved order.",
+            "filters": {"rep": rep, "project_type": project_type, "year": year},
+        }
+
+    # ── Overall stats ────────────────────────────────────────────────────────
+    overall = {
+        "count":          len(all_days),
+        "median_days":    round(median(all_days), 1),
+        "avg_days":       round(mean(all_days), 1),
+        "min_days":       min(all_days),
+        "max_days":       max(all_days),
+    }
+
+    # ── By rep ───────────────────────────────────────────────────────────────
+    from collections import defaultdict
+    rep_days: dict[str, list[float]] = defaultdict(list)
+    for r in rows:
+        d = _days(r)
+        if d is not None:
+            rep_name = (r.get("sales_rep_name") or "Unassigned").strip() or "Unassigned"
+            rep_days[rep_name].append(d)
+
+    by_rep = sorted(
+        [
+            {
+                "rep":         rep_name,
+                "count":       len(days),
+                "median_days": round(median(days), 1),
+                "avg_days":    round(mean(days), 1),
+            }
+            for rep_name, days in rep_days.items()
+        ],
+        key=lambda x: x["median_days"],
+    )
+
+    # ── By project type ───────────────────────────────────────────────────────
+    pt_days: dict[str, list[float]] = defaultdict(list)
+    for r in rows:
+        d = _days(r)
+        if d is not None:
+            pt = (r.get("project_type") or "Unspecified").strip() or "Unspecified"
+            pt_days[pt].append(d)
+
+    by_project_type = sorted(
+        [
+            {
+                "project_type": pt,
+                "count":        len(days),
+                "median_days":  round(median(days), 1),
+                "avg_days":     round(mean(days), 1),
+            }
+            for pt, days in pt_days.items()
+        ],
+        key=lambda x: x["median_days"],
+    )
+
+    return {
+        "total_with_approval_date": len(all_days),
+        "overall":          overall,
+        "by_rep":           by_rep,
+        "by_project_type":  by_project_type,
+        "filters": {
+            "rep":          rep,
+            "project_type": project_type,
+            "year":         year,
+        },
+        "note": "order_date used as approval-date proxy. Only estimates with status Approved/In Progress/Completed and a recorded order_date are included.",
+    }

@@ -2135,6 +2135,66 @@ def verify_aggregate(
         return f"verify_aggregate error: {str(e)}"
 
 
+@mcp.tool()
+def conversion_funnel(
+    rep:          str | None = None,
+    project_type: str | None = None,
+    year:         int | None = None,
+) -> dict:
+    """
+    Stage-by-stage conversion funnel: Quoted → Pending Approval → Approved →
+    In Progress → Completed. Shows win rates and drop-off at each stage.
+
+    Use this to answer questions like:
+      - "What is Janine's close rate?"
+      - "How does the gas log funnel compare to fireplace installs?"
+      - "Which rep has the best approval rate?"
+      - "Show me the 2025 conversion funnel"
+
+    Args:
+        rep:          Filter to one sales rep (partial name match).
+        project_type: Filter to one project type (partial match, e.g. "gas log").
+        year:         Filter by estimate created year (e.g. 2025).
+
+    Returns per-rep and per-project-type win rates, stage counts, and avg deal size.
+    """
+    params: dict = {}
+    if rep:          params["rep"]          = rep
+    if project_type: params["project_type"] = project_type
+    if year:         params["year"]         = year
+    return _call("get", "/analyze/conversion-funnel", params=params or None)
+
+
+@mcp.tool()
+def time_to_close(
+    rep:          str | None = None,
+    project_type: str | None = None,
+    year:         int | None = None,
+) -> dict:
+    """
+    Median days from estimate created → approved order, broken down by rep and
+    project type. Uses order_date as the approval-date proxy.
+
+    Use this to answer questions like:
+      - "How long does it take us to close a deal?"
+      - "Which rep closes fastest?"
+      - "How long from quote to signed job on gas log installs?"
+
+    Args:
+        rep:          Filter to one sales rep (partial name match).
+        project_type: Filter to one project type.
+        year:         Filter by estimate created year.
+
+    Only estimates with status Approved/In Progress/Completed AND a recorded
+    order_date are included. Estimates still in Quoted/Pending are excluded.
+    """
+    params: dict = {}
+    if rep:          params["rep"]          = rep
+    if project_type: params["project_type"] = project_type
+    if year:         params["year"]         = year
+    return _call("get", "/analyze/time-to-close", params=params or None)
+
+
 # ---------------------------------------------------------------------------
 # Claude Enterprise compatibility — patch tool schemas to allow extra fields
 #

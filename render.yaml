@@ -22,6 +22,11 @@ services:
       # Add this manually in the Render dashboard: striven-mcp-v2 → Environment.
       - key: SYNC_API_KEY
         sync: false
+      # Slack incoming webhook URL for Monday morning digest.
+      # Create at: api.slack.com/apps → Incoming Webhooks → Add New Webhook to Workspace
+      # Add manually in Render dashboard: striven-mcp-v2 → Environment.
+      - key: SLACK_WEBHOOK_URL
+        sync: false
 
   # -----------------------------------------------------------------------
   # Service 2: MCP HTTP server — Claude.ai remote MCP integration

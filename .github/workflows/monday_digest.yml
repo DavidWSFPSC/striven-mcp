@@ -1,0 +1,32 @@
+name: Monday Morning Digest → Slack
+
+# Sends the weekly business health digest to Slack every Monday at 8:00 AM ET.
+# Calls /admin/send-weekly-digest on the Render-hosted Flask API, which runs
+# query_weekly_digest() and formats + POSTs the result to SLACK_WEBHOOK_URL.
+#
+# Required secrets (set in GitHub → Settings → Secrets → Actions):
+#   SYNC_API_KEY     — same key used by nightly sync (auth for Flask admin endpoints)
+#
+# Required Render env var (set in striven-mcp-v2 service → Environment):
+#   SLACK_WEBHOOK_URL — incoming webhook URL from Slack App config
+
+on:
+  schedule:
+    # 8:00 AM ET = 13:00 UTC (EST) / 12:00 UTC (EDT)
+    # Running at 13:00 UTC covers both EST and EDT without seasonal adjustment.
+    - cron: "0 13 * * 1"
+  workflow_dispatch:   # allow manual trigger from the Actions tab
+
+jobs:
+  send-digest:
+    name: Send weekly digest to Slack
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Send weekly digest
+        run: |
+          curl -X POST https://striven-mcp-v2.onrender.com/admin/send-weekly-digest \
+            -H "Authorization: Bearer ${{ secrets.SYNC_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            --fail --max-time 60

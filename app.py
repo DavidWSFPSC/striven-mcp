@@ -2557,6 +2557,143 @@ def weekly_digest():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/analyze/conversion-funnel", methods=["GET"])
+def conversion_funnel():
+    """
+    Stage-by-stage conversion funnel: Quoted → Approved → Completed.
+
+    Queries the estimates table directly for true funnel granularity.
+    Returns per-rep and per-project-type win rates.
+
+    Query params (all optional):
+        rep          — filter by sales rep name (partial, case-insensitive)
+        project_type — filter by project type (partial, case-insensitive)
+        year         — filter by estimate created year (e.g. 2025)
+    """
+    from services.supabase_client import query_conversion_funnel
+
+    rep          = request.args.get("rep") or None
+    project_type = request.args.get("project_type") or None
+    year_raw     = request.args.get("year")
+    year         = int(year_raw) if year_raw and year_raw.isdigit() else None
+
+    try:
+        return jsonify(query_conversion_funnel(rep=rep, project_type=project_type, year=year))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/analyze/time-to-close", methods=["GET"])
+def time_to_close():
+    """
+    Days from estimate created → approved (order_date), by rep and project type.
+
+    Uses order_date as an approval-date proxy — Striven sets this when an
+    estimate becomes a confirmed order. Only estimates with status Approved /
+    In Progress / Completed and a recorded order_date are included.
+
+    Query params (all optional):
+        rep          — filter by sales rep name (partial, case-insensitive)
+        project_type — filter by project type
+        year         — filter by estimate created year
+    """
+    from services.supabase_client import query_time_to_close
+
+    rep          = request.args.get("rep") or None
+    project_type = request.args.get("project_type") or None
+    year_raw     = request.args.get("year")
+    year         = int(year_raw) if year_raw and year_raw.isdigit() else None
+
+    try:
+        return jsonify(query_time_to_close(rep=rep, project_type=project_type, year=year))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/admin/send-weekly-digest", methods=["POST"])
+def send_weekly_digest():
+    """
+    Generate the weekly digest and push it to Slack.
+
+    Requires:
+        Authorization: Bearer <SYNC_API_KEY>
+        SLACK_WEBHOOK_URL env var set on the Render service.
+
+    Called by the Monday morning GitHub Actions workflow.
+    Returns 200 with {"status": "sent"} on success.
+    """
+    import json as _json
+    import urllib.request as _urllib_req
+    from datetime import datetime, timezone
+    from services.supabase_client import query_weekly_digest
+
+    # ── Auth ─────────────────────────────────────────────────────────────────
+    expected_key = os.environ.get("SYNC_API_KEY", "")
+    provided_key = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if not expected_key or provided_key != expected_key:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "")
+    if not webhook_url:
+        return jsonify({"error": "SLACK_WEBHOOK_URL not configured"}), 500
+
+    try:
+        digest = query_weekly_digest()
+    except Exception as exc:
+        return jsonify({"error": f"Digest generation failed: {exc}"}), 500
+
+    # ── Format Slack message ──────────────────────────────────────────────────
+    now_str  = datetime.now(timezone.utc).strftime("%A %B %-d, %Y")
+    flags    = digest.get("flags", [])
+    pipeline = digest.get("pipeline_by_type_and_rep", {})
+    rep_summ = digest.get("rep_summary", [])
+
+    severity_emoji = {"high": "🔴", "medium": "🟡", "low": "🔵"}
+
+    lines = [f"*WilliamSmith Fireplaces — Weekly Digest* | {now_str}", ""]
+
+    if not flags:
+        lines.append("✅ No anomalies flagged this week. Everything looks healthy.")
+    else:
+        lines.append(f"*{len(flags)} flag(s) this week:*")
+        for f in flags:
+            emoji = severity_emoji.get(f.get("severity", ""), "⚪")
+            lines.append(f"{emoji} *{f.get('category')}* — {f.get('summary')}")
+
+    # Pipeline snapshot
+    if rep_summ:
+        lines += ["", "*Active Pipeline by Rep:*"]
+        for r in rep_summ[:8]:
+            val = r.get("pipeline_value", 0)
+            lines.append(
+                f"  • {r['rep']}: {r['active_jobs']} jobs "
+                f"(${val:,.0f})"
+            )
+
+    lines += ["", "_Ask WilliamSmith for full details_"]
+    message = {"text": "\n".join(lines)}
+
+    # ── POST to Slack ─────────────────────────────────────────────────────────
+    try:
+        payload = _json.dumps(message).encode("utf-8")
+        req     = _urllib_req.Request(
+            webhook_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with _urllib_req.urlopen(req, timeout=10) as resp:
+            slack_status = resp.status
+    except Exception as exc:
+        return jsonify({"error": f"Slack POST failed: {exc}"}), 500
+
+    return jsonify({
+        "status":      "sent",
+        "flags_count": len(flags),
+        "slack_status": slack_status,
+    })
+
+
 @app.route("/analyze/kb-gaps", methods=["GET"])
 def kb_gaps():
     """
