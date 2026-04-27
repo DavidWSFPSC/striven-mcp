@@ -22,10 +22,13 @@ services:
       # Add this manually in the Render dashboard: striven-mcp-v2 → Environment.
       - key: SYNC_API_KEY
         sync: false
-      # Slack incoming webhook URL for Monday morning digest.
-      # Create at: api.slack.com/apps → Incoming Webhooks → Add New Webhook to Workspace
-      # Add manually in Render dashboard: striven-mcp-v2 → Environment.
-      - key: SLACK_WEBHOOK_URL
+      # Notion integration token + parent page ID for Monday morning digest.
+      # Token: notion.so/my-integrations → New integration → copy "Internal Integration Secret"
+      # Page ID: open the target Notion page → Share → Copy link → extract the 32-char ID
+      # Add both manually in Render dashboard: striven-mcp-v2 → Environment.
+      - key: NOTION_TOKEN
+        sync: false
+      - key: NOTION_DIGEST_PAGE_ID
         sync: false
 
   # -----------------------------------------------------------------------

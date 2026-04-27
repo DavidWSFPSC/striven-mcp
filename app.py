@@ -2613,84 +2613,143 @@ def time_to_close():
 @app.route("/admin/send-weekly-digest", methods=["POST"])
 def send_weekly_digest():
     """
-    Generate the weekly digest and push it to Slack.
+    Generate the weekly digest and create a new page in Notion.
+
+    Each Monday creates a new child page under NOTION_DIGEST_PAGE_ID with
+    a full formatted digest: flags, pipeline by rep, and pipeline matrix.
 
     Requires:
         Authorization: Bearer <SYNC_API_KEY>
-        SLACK_WEBHOOK_URL env var set on the Render service.
+        NOTION_TOKEN           — Notion integration token (secret_...)
+        NOTION_DIGEST_PAGE_ID  — ID of the Notion page to create digests under
 
     Called by the Monday morning GitHub Actions workflow.
-    Returns 200 with {"status": "sent"} on success.
+    Returns 200 with {"status": "created", "notion_page_url": "..."} on success.
     """
     import json as _json
     import urllib.request as _urllib_req
     from datetime import datetime, timezone
     from services.supabase_client import query_weekly_digest
 
-    # ── Auth ─────────────────────────────────────────────────────────────────
+    # ── Auth ──────────────────────────────────────────────────────────────────
     expected_key = os.environ.get("SYNC_API_KEY", "")
     provided_key = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     if not expected_key or provided_key != expected_key:
         return jsonify({"error": "Unauthorized"}), 401
 
-    webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "")
-    if not webhook_url:
-        return jsonify({"error": "SLACK_WEBHOOK_URL not configured"}), 500
+    notion_token   = os.environ.get("NOTION_TOKEN", "")
+    parent_page_id = os.environ.get("NOTION_DIGEST_PAGE_ID", "")
+    if not notion_token or not parent_page_id:
+        return jsonify({"error": "NOTION_TOKEN and NOTION_DIGEST_PAGE_ID must be set"}), 500
 
     try:
         digest = query_weekly_digest()
     except Exception as exc:
         return jsonify({"error": f"Digest generation failed: {exc}"}), 500
 
-    # ── Format Slack message ──────────────────────────────────────────────────
-    now_str  = datetime.now(timezone.utc).strftime("%A %B %-d, %Y")
+    # ── Build Notion blocks ───────────────────────────────────────────────────
+    now      = datetime.now(timezone.utc)
+    now_str  = now.strftime("%A %B %-d, %Y")
     flags    = digest.get("flags", [])
-    pipeline = digest.get("pipeline_by_type_and_rep", {})
     rep_summ = digest.get("rep_summary", [])
 
     severity_emoji = {"high": "🔴", "medium": "🟡", "low": "🔵"}
 
-    lines = [f"*WilliamSmith Fireplaces — Weekly Digest* | {now_str}", ""]
+    def _text(content: str, bold: bool = False) -> dict:
+        ann = {"bold": bold} if bold else {}
+        return {"type": "text", "text": {"content": content}, "annotations": ann}
 
+    def _paragraph(*parts) -> dict:
+        return {"object": "block", "type": "paragraph",
+                "paragraph": {"rich_text": list(parts)}}
+
+    def _bullet(content: str) -> dict:
+        return {"object": "block", "type": "bulleted_list_item",
+                "bulleted_list_item": {"rich_text": [_text(content)]}}
+
+    def _heading(content: str, level: int = 2) -> dict:
+        t = f"heading_{level}"
+        return {"object": "block", "type": t, t: {"rich_text": [_text(content)]}}
+
+    def _divider() -> dict:
+        return {"object": "block", "type": "divider", "divider": {}}
+
+    blocks: list[dict] = []
+
+    # Flags section
+    blocks.append(_heading("🚦 Flags This Week", level=2))
     if not flags:
-        lines.append("✅ No anomalies flagged this week. Everything looks healthy.")
+        blocks.append(_paragraph(_text("✅ No anomalies flagged. Everything looks healthy.")))
     else:
-        lines.append(f"*{len(flags)} flag(s) this week:*")
         for f in flags:
             emoji = severity_emoji.get(f.get("severity", ""), "⚪")
-            lines.append(f"{emoji} *{f.get('category')}* — {f.get('summary')}")
+            cat   = f.get("category", "")
+            summ  = f.get("summary", "")
+            blocks.append(_bullet(f"{emoji} {cat} — {summ}"))
 
-    # Pipeline snapshot
+            # Detail bullets (sample items if present)
+            detail = f.get("detail", {})
+            sample = detail.get("sample", [])
+            for s in sample[:5]:
+                line = "  · " + "  |  ".join(
+                    f"{k}: {v}" for k, v in s.items() if v is not None
+                )
+                blocks.append(_bullet(line))
+
+    blocks.append(_divider())
+
+    # Pipeline by rep
     if rep_summ:
-        lines += ["", "*Active Pipeline by Rep:*"]
-        for r in rep_summ[:8]:
-            val = r.get("pipeline_value", 0)
-            lines.append(
-                f"  • {r['rep']}: {r['active_jobs']} jobs "
-                f"(${val:,.0f})"
-            )
+        blocks.append(_heading("📋 Active Pipeline by Rep", level=2))
+        for r in rep_summ[:10]:
+            val  = r.get("pipeline_value", 0)
+            jobs = r.get("active_jobs", 0)
+            blocks.append(_bullet(
+                f"{r['rep']}: {jobs} active job{'s' if jobs != 1 else ''} — ${val:,.0f}"
+            ))
+        blocks.append(_divider())
 
-    lines += ["", "_Ask WilliamSmith for full details_"]
-    message = {"text": "\n".join(lines)}
+    blocks.append(_paragraph(
+        _text("Open Ask WilliamSmith for a deeper breakdown on any flag above.", bold=False)
+    ))
 
-    # ── POST to Slack ─────────────────────────────────────────────────────────
+    # ── Create Notion page ────────────────────────────────────────────────────
+    page_title = f"Weekly Digest — {now_str}"
+    payload    = {
+        "parent":     {"type": "page_id", "page_id": parent_page_id},
+        "properties": {
+            "title": {
+                "title": [{"type": "text", "text": {"content": page_title}}]
+            }
+        },
+        "children": blocks,
+    }
+
     try:
-        payload = _json.dumps(message).encode("utf-8")
-        req     = _urllib_req.Request(
-            webhook_url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
+        req_data = _json.dumps(payload).encode("utf-8")
+        req      = _urllib_req.Request(
+            "https://api.notion.com/v1/pages",
+            data=req_data,
+            headers={
+                "Authorization":  f"Bearer {notion_token}",
+                "Content-Type":   "application/json",
+                "Notion-Version": "2022-06-28",
+            },
             method="POST",
         )
-        with _urllib_req.urlopen(req, timeout=10) as resp:
-            slack_status = resp.status
+        with _urllib_req.urlopen(req, timeout=15) as resp:
+            notion_resp = _json.loads(resp.read().decode("utf-8"))
     except Exception as exc:
-        return jsonify({"error": f"Slack POST failed: {exc}"}), 500
+        return jsonify({"error": f"Notion API call failed: {exc}"}), 500
+
+    notion_page_id  = notion_resp.get("id", "")
+    notion_page_url = notion_resp.get("url", "")
 
     return jsonify({
-        "status":      "sent",
-        "flags_count": len(flags),
-        "slack_status": slack_status,
+        "status":          "created",
+        "flags_count":     len(flags),
+        "notion_page_id":  notion_page_id,
+        "notion_page_url": notion_page_url,
     })
 
 
