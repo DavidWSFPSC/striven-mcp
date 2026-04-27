@@ -2595,13 +2595,13 @@ def customer_ltv():
         min_value      float — minimum lifetime revenue filter
         limit          int   — max results (default 50)
         order_by       str   — 'lifetime_revenue' | 'completed_jobs' | 'avg_job_value'
-                               (default: lifetime_revenue, descending)
+                               | 'total_estimates' (default: lifetime_revenue, descending)
     """
     from services.supabase_client import _get_client
 
     limit      = min(int(request.args.get("limit", 50)), 200)
     order_by   = request.args.get("order_by", "lifetime_revenue")
-    if order_by not in ("lifetime_revenue", "completed_jobs", "avg_job_value"):
+    if order_by not in ("lifetime_revenue", "completed_jobs", "avg_job_value", "total_estimates"):
         order_by = "lifetime_revenue"
 
     try:
