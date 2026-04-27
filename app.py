@@ -2637,10 +2637,10 @@ def send_weekly_digest():
     if not expected_key or provided_key != expected_key:
         return jsonify({"error": "Unauthorized"}), 401
 
-    notion_token   = os.environ.get("NOTION_API_KEY") or os.environ.get("NOTION_TOKEN", "")
+    notion_token   = os.environ.get("NOTION_API_KEY", "")
     parent_page_id = os.environ.get("NOTION_DIGEST_PAGE_ID", "")
     if not notion_token or not parent_page_id:
-        return jsonify({"error": "NOTION_API_KEY (or NOTION_TOKEN) and NOTION_DIGEST_PAGE_ID must be set"}), 500
+        return jsonify({"error": "NOTION_API_KEY and NOTION_DIGEST_PAGE_ID must be set"}), 500
 
     try:
         digest = query_weekly_digest()
