@@ -80,6 +80,13 @@ PAGE_SIZE      = 100   # Striven v2 max per page
 DETAIL_WORKERS = 10    # parallel GET /v2/tasks/{id} calls
 UPSERT_BATCH   = 500
 
+# Task type IDs that belong in callback_tasks (confirmed from live Striven data)
+CALLBACK_TYPE_IDS = {
+    71:  "Installer: Return Trip",
+    72:  "Service: Return Trip",
+    124: "Service: Call Back",
+}
+
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -252,6 +259,50 @@ def _upsert(client, records: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Callback tasks — secondary upsert into callback_tasks table
+# ---------------------------------------------------------------------------
+
+def _to_callback_row(t: dict) -> dict:
+    """
+    Map a raw Striven task detail → callback_tasks schema.
+    callback_tasks uses task_status (not status) and includes customer_id.
+    """
+    task_type   = t.get("type")        or t.get("Type")        or {}
+    status      = t.get("status")      or t.get("Status")      or {}
+    sales_order = t.get("salesOrder")  or t.get("SalesOrder")  or {}
+    customer    = t.get("customer")    or t.get("Customer")     or {}
+    assignments = t.get("assignments") or t.get("Assignments")  or []
+
+    assigned_to = "Unassigned"
+    if assignments:
+        first       = assignments[0]
+        assigned_to = first.get("name") or first.get("Name") or "Unassigned"
+
+    return {
+        "task_id":        t.get("id")              or t.get("Id"),
+        "task_type_id":   task_type.get("id")      or task_type.get("Id"),
+        "task_type":      task_type.get("name")    or task_type.get("Name"),
+        "task_status":    status.get("name")       or status.get("Name"),
+        "assigned_to":    assigned_to,
+        "customer_id":    customer.get("id")       or customer.get("Id"),
+        "customer_name":  customer.get("name")     or customer.get("Name"),
+        "estimate_id":    sales_order.get("id")    or sales_order.get("Id"),
+        "estimate_number": sales_order.get("number") or sales_order.get("Number"),
+        "created_date":   t.get("dateCreated")     or t.get("DateCreated"),
+        "due_date":       t.get("dueDateTime")     or t.get("DueDateTime"),
+        "synced_at":      datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _upsert_callbacks(client, records: list[dict]) -> None:
+    """Upsert callback-type tasks into the callback_tasks table."""
+    for i in range(0, len(records), UPSERT_BATCH):
+        batch = records[i : i + UPSERT_BATCH]
+        client.table("callback_tasks").upsert(batch, on_conflict="task_id").execute()
+        print(f"[callback_upsert] Rows {i + 1}–{i + len(batch)} written.", flush=True)
+
+
+# ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 
@@ -304,11 +355,37 @@ def main() -> None:
     records = [_transform(t) for t in details]
     records = [r for r in records if r.get("task_id")]
 
+    # Build callback_tasks rows from raw details (before transform discards customer_id)
+    callback_raws = [
+        t for t in details
+        if ((t.get("type") or t.get("Type") or {}).get("id")
+            or (t.get("type") or t.get("Type") or {}).get("Id"))
+        in CALLBACK_TYPE_IDS
+    ]
+    callback_records = [_to_callback_row(t) for t in callback_raws]
+    callback_records = [r for r in callback_records if r.get("task_id")]
+
     if not args.no_supabase:
         sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
         _upsert(sb, records)
 
+        if callback_records:
+            print(
+                f"[sync] Writing {len(callback_records):,} callback tasks "
+                f"to callback_tasks table...",
+                flush=True,
+            )
+            _upsert_callbacks(sb, callback_records)
+            print(f"[sync] callback_tasks upsert complete.", flush=True)
+        else:
+            print("[sync] No callback-type tasks found in this sync.", flush=True)
+
     _report(records)
+    print(
+        f"\n[sync] Callbacks synced to callback_tasks: {len(callback_records):,} "
+        f"(types 71/72/124)",
+        flush=True,
+    )
     print(f"\nTotal runtime: {round(time.monotonic() - t_start, 1)}s", flush=True)
     if args.limit:
         print(f"[sample mode — only {args.limit} stubs scanned]")
