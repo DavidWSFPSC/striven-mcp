@@ -1746,9 +1746,10 @@ def query_callbacks_by_product(
             if key not in product_desc:
                 product_desc[key] = (li.get("description") or "").strip()
 
-    # ── Step 5: units sold per product (completed estimates containing that line item)
-    units_sold_map: dict[str, int] = {}
-    for name in product_task_ids.keys():
+    # ── Step 5: units sold per product (parallelised — one query per product name)
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _units_sold_for(name: str) -> tuple[str, int]:
         try:
             li_q = (
                 _get_client()
@@ -1770,9 +1771,15 @@ def query_callbacks_by_product(
                     .execute()
                 )
                 sold += est_q.count or 0
-            units_sold_map[name] = sold
+            return name, sold
         except Exception:
-            units_sold_map[name] = 0
+            return name, 0
+
+    units_sold_map: dict[str, int] = {}
+    product_names = list(product_task_ids.keys())
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        for pname, sold in ex.map(_units_sold_for, product_names):
+            units_sold_map[pname] = sold
 
     # ── Step 6: build ranked list with deduplication metadata and callback rates
     def _rate_label(pct: float | None) -> str | None:
@@ -1792,12 +1799,11 @@ def query_callbacks_by_product(
         assoc  = product_task_assoc[name]
         sold   = units_sold_map.get(name, 0)
         rate   = round(unique / sold * 100, 1) if sold > 0 else None
+        desc_full = (product_desc.get(name) or "").strip()
         entry: dict = {
             "item_name":             name,
-            "description":           product_desc.get(name, ""),
-            "callback_count":        unique,           # kept for backward compat
+            "description":           desc_full[:80] + "…" if len(desc_full) > 80 else desc_full,
             "unique_callback_tasks": unique,
-            "association_count":     assoc,
             "units_sold":            sold,
             "callback_rate_pct":     rate,
             "rate_interpretation":   _rate_label(rate),

@@ -2493,12 +2493,18 @@ def callbacks_by_product():
     min_price_raw = request.args.get("min_price")
     min_price = float(min_price_raw) if min_price_raw else 500.0
 
+    top_raw = request.args.get("top")
+    top: int = int(top_raw) if top_raw and top_raw.isdigit() else 30
+
     try:
         result = query_callbacks_by_product(
             year=year,
             callback_type=callback_type,
             min_price=min_price,
         )
+        # Slim before sending to MCP — cap list and drop verbose prose fields
+        result["by_product"] = result.get("by_product", [])[:top]
+        result.pop("double_count_note", None)
         return jsonify(result)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
