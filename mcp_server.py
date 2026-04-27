@@ -243,7 +243,7 @@ def _search_invoices_supabase(
 # ---------------------------------------------------------------------------
 
 BASE_URL = os.environ.get("FLASK_API_URL", "https://striven-mcp-v2.onrender.com")
-TIMEOUT  = 30  # seconds — allow for cold-start latency on Render free tier
+TIMEOUT  = 120  # seconds — Render free tier cold starts can take 50+ seconds
 
 # ---------------------------------------------------------------------------
 # MCP server — identity + standing instructions for Claude
