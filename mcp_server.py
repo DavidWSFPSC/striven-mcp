@@ -2167,7 +2167,7 @@ class HealthMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope.get("type") == "http" and scope.get("path") == "/health":
+        if scope.get("type") == "http" and scope.get("path") in ("/health", "/"):
             response = JSONResponse({"status": "ok", "service": "striven-mcp-server"})
             await response(scope, receive, send)
         else:

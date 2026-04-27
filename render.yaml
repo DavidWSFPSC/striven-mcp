@@ -32,6 +32,7 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python mcp_server.py
+    healthCheckPath: /health
     envVars:
       - key: FLASK_API_URL
         value: https://striven-mcp-v2.onrender.com
