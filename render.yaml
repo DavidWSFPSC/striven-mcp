@@ -22,11 +22,10 @@ services:
       # Add this manually in the Render dashboard: striven-mcp-v2 → Environment.
       - key: SYNC_API_KEY
         sync: false
-      # Notion integration token + parent page ID for Monday morning digest.
-      # Token: notion.so/my-integrations → New integration → copy "Internal Integration Secret"
-      # Page ID: open the target Notion page → Share → Copy link → extract the 32-char ID
-      # Add both manually in Render dashboard: striven-mcp-v2 → Environment.
-      - key: NOTION_TOKEN
+      # Notion API key + parent page ID for Monday morning digest.
+      # Copy NOTION_API_KEY value from striven-mcp-server → Environment into this service.
+      # Page ID is fixed: the Weekly Digests page under the Ask WilliamSmith System Hub.
+      - key: NOTION_API_KEY
         sync: false
       - key: NOTION_DIGEST_PAGE_ID
         sync: false
