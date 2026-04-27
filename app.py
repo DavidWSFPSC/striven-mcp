@@ -2605,7 +2605,7 @@ def customer_ltv():
         order_by = "lifetime_revenue"
 
     try:
-        q = _get_client().table("customer_ltv").select("*").order(order_by, desc=True).limit(limit)
+        q = _get_client().table("customer_ltv").select("*").order(order_by, desc=True, nullsfirst=False).limit(limit)
         if request.args.get("customer_name"):
             q = q.ilike("customer_name", f"%{request.args['customer_name']}%")
         if request.args.get("min_value"):
