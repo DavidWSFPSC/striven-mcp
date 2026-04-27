@@ -1759,7 +1759,7 @@ def customer_ltv(
     customer_name: str   = "",
     min_value:     float = 0.0,
     limit:         int   = 50,
-    order_by:      str   = "lifetime_value",
+    order_by:      str   = "lifetime_revenue",
 ) -> dict:
     """
     TIER 2 — Supabase. Return customer lifetime value from the customer_ltv
@@ -1776,9 +1776,9 @@ def customer_ltv(
 
     Args:
         customer_name: Partial name filter (case-insensitive).
-        min_value:     Minimum lifetime value to include.
+        min_value:     Minimum lifetime_revenue to include.
         limit:         Max customers to return (default 50).
-        order_by:      Sort field: 'lifetime_value' | 'total_jobs' | 'avg_order_value'.
+        order_by:      Sort field: 'lifetime_revenue' | 'completed_jobs' | 'avg_job_value'.
     """
     params: dict = {"limit": limit, "order_by": order_by}
     if customer_name: params["customer_name"] = customer_name
@@ -1788,29 +1788,27 @@ def customer_ltv(
 
 @mcp.tool()
 def conversion_rates(
-    sales_rep:    str = "",
-    project_type: str = "",
+    sales_rep: str = "",
 ) -> dict:
     """
     TIER 2 — Supabase. Return estimate-to-win conversion rates by sales rep
-    and project type, from the conversion_rates materialized view.
+    and month, from the conversion_rates materialized view.
+    Columns: sales_rep_name, month, total_quoted, converted,
+             conversion_rate_pct, converted_revenue.
     This tool queries Supabase directly — use this BEFORE making any live
     Striven API calls for this type of question.
 
     Use when asked:
       'What is our win rate?'
       'How many estimates does [rep] convert?'
-      'Conversion rate for gas log installs'
       'Which rep has the best close rate?'
-      'Show me pipeline conversion by project type'
+      'Show me conversion rates by rep'
 
     Args:
-        sales_rep:    Filter by rep name (partial, case-insensitive).
-        project_type: Filter by project type (partial, case-insensitive).
+        sales_rep: Filter by rep name (partial, case-insensitive).
     """
     params: dict = {}
-    if sales_rep:    params["sales_rep"]    = sales_rep
-    if project_type: params["project_type"] = project_type
+    if sales_rep: params["sales_rep"] = sales_rep
     return _call("get", "/analyze/conversion-rates", params=params)
 
 

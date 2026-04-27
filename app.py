@@ -2592,24 +2592,24 @@ def customer_ltv():
 
     Query params (all optional):
         customer_name  str   — partial name filter (case-insensitive)
-        min_value      float — minimum lifetime value filter
+        min_value      float — minimum lifetime revenue filter
         limit          int   — max results (default 50)
-        order_by       str   — 'lifetime_value' | 'total_jobs' | 'avg_order_value'
-                               (default: lifetime_value, descending)
+        order_by       str   — 'lifetime_revenue' | 'completed_jobs' | 'avg_job_value'
+                               (default: lifetime_revenue, descending)
     """
     from services.supabase_client import _get_client
 
     limit      = min(int(request.args.get("limit", 50)), 200)
-    order_by   = request.args.get("order_by", "lifetime_value")
-    if order_by not in ("lifetime_value", "total_jobs", "avg_order_value"):
-        order_by = "lifetime_value"
+    order_by   = request.args.get("order_by", "lifetime_revenue")
+    if order_by not in ("lifetime_revenue", "completed_jobs", "avg_job_value"):
+        order_by = "lifetime_revenue"
 
     try:
         q = _get_client().table("customer_ltv").select("*").order(order_by, desc=True).limit(limit)
         if request.args.get("customer_name"):
             q = q.ilike("customer_name", f"%{request.args['customer_name']}%")
         if request.args.get("min_value"):
-            q = q.gte("lifetime_value", float(request.args["min_value"]))
+            q = q.gte("lifetime_revenue", float(request.args["min_value"]))
         result = q.execute()
         rows   = result.data or []
         return jsonify({"count": len(rows), "customers": rows})
@@ -2621,11 +2621,12 @@ def customer_ltv():
 def conversion_rates():
     """
     Return estimate-to-win conversion rates from the conversion_rates
-    materialized view, grouped by sales rep and project type.
+    materialized view, grouped by sales rep and month.
+    Columns: sales_rep_name, month, total_quoted, converted,
+             conversion_rate_pct, converted_revenue.
 
     Query params (all optional):
-        sales_rep    str — filter by rep name (partial, case-insensitive)
-        project_type str — filter by project type (partial, case-insensitive)
+        sales_rep str — filter by rep name (partial, case-insensitive)
     """
     from services.supabase_client import _get_client
 
@@ -2639,8 +2640,6 @@ def conversion_rates():
         )
         if request.args.get("sales_rep"):
             q = q.ilike("sales_rep_name", f"%{request.args['sales_rep']}%")
-        if request.args.get("project_type"):
-            q = q.ilike("project_type", f"%{request.args['project_type']}%")
         result = q.execute()
         rows   = result.data or []
         return jsonify({"count": len(rows), "rates": rows})
