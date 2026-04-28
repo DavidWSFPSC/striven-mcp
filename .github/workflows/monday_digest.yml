@@ -1,6 +1,6 @@
-name: Monday Morning Digest → Notion
+name: Daily Digest → Notion
 
-# Creates a weekly digest page in Notion every Monday at 8:00 AM ET.
+# Creates a daily digest page in Notion every morning at 8:00 AM ET.
 # Calls /admin/send-weekly-digest on the Render-hosted Flask API, which runs
 # query_weekly_digest() and creates a new page under NOTION_DIGEST_PAGE_ID.
 #
@@ -14,18 +14,17 @@ name: Monday Morning Digest → Notion
 on:
   schedule:
     # 8:00 AM ET = 13:00 UTC (EST) / 12:00 UTC (EDT)
-    # Running at 13:00 UTC covers both EST and EDT without seasonal adjustment.
-    - cron: "0 13 * * 1"
+    - cron: "0 13 * * *"
   workflow_dispatch:   # allow manual trigger from the Actions tab
 
 jobs:
   send-digest:
-    name: Send weekly digest to Notion
+    name: Send daily digest to Notion
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: Send weekly digest
+      - name: Send daily digest
         run: |
           curl -X POST https://striven-mcp-v2.onrender.com/admin/send-weekly-digest \
             -H "Authorization: Bearer ${{ secrets.SYNC_API_KEY }}" \

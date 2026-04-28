@@ -1926,7 +1926,7 @@ def query_weekly_digest() -> dict:
         .eq("status_normalized", "ACTIVE")
         .lt("created_date", _iso(fourteen_ago))
         .order("created_date", desc=True)
-        .limit(100)
+        .limit(2000)
         .execute()
     ).data or []
 
