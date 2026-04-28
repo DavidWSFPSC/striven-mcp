@@ -1916,6 +1916,19 @@ def query_weekly_digest() -> dict:
         })
 
     # ── Check 2: Stalled active estimates (created > 14 days ago) ────────────
+    # Use count="exact" for the real total, then fetch only a small sample for display.
+    # PostgREST caps rows returned at 1000 regardless of .limit(), so len(rows)
+    # would always report a round number if there are more than 1000 records.
+    stalled_count_res = (
+        _get_client()
+        .table("estimates")
+        .select("estimate_id", count="exact")
+        .eq("status_normalized", "ACTIVE")
+        .lt("created_date", _iso(fourteen_ago))
+        .execute()
+    )
+    stalled_total = stalled_count_res.count or 0
+
     stalled_rows = (
         _get_client()
         .table("estimates")
@@ -1926,17 +1939,17 @@ def query_weekly_digest() -> dict:
         .eq("status_normalized", "ACTIVE")
         .lt("created_date", _iso(fourteen_ago))
         .order("created_date", desc=True)
-        .limit(2000)
+        .limit(10)   # sample only — real count comes from stalled_total
         .execute()
     ).data or []
 
-    if stalled_rows:
+    if stalled_total > 0:
         flags.append({
             "category": "Pipeline",
             "severity": "medium",
-            "summary":  f"{len(stalled_rows)} active estimate(s) haven't progressed in 14+ days",
+            "summary":  f"{stalled_total} active estimate(s) haven't progressed in 14+ days",
             "detail": {
-                "count":  len(stalled_rows),
+                "count":  stalled_total,
                 "sample": [
                     {
                         "estimate":     r["estimate_number"],
