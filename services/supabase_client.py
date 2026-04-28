@@ -1998,50 +1998,130 @@ def query_weekly_digest() -> dict:
             },
         })
 
-    # ── 2b: Approved with no install date scheduled ────────────────────────────
-    no_date_count_res = (
-        _get_client()
-        .table("estimates")
-        .select("estimate_id", count="exact")
-        .eq("status_raw", "Approved")
-        .is_("target_date", "null")
-        .execute()
-    )
-    no_date_total = no_date_count_res.count or 0
+    # ── 2b: Approved + deposit paid but no install date scheduled ─────────────
+    #
+    # "Deposit paid" = at least one invoice linked to this estimate exists in
+    # the invoices table where total_amount > 0 AND open_balance < total_amount
+    # (i.e. a partial or full payment has been applied).
+    #
+    # Strategy (no server-side JOIN in Supabase Python client):
+    #   1. Get all approved estimate_ids
+    #   2. Get all invoice estimate_ids where a payment has been applied
+    #   3. Python intersection = approved with deposit
+    #   4. From those, filter for ones with no target_date
 
-    no_date_sample_rows = (
-        _get_client()
-        .table("estimates")
-        .select(
-            "estimate_number, customer_name, sales_rep_name, created_date, total_amount"
+    try:
+        # Get estimate_ids of invoices with a payment applied
+        # (total_amount is positive and open_balance is less than total_amount)
+        deposit_inv_res = (
+            _get_client()
+            .table("invoices")
+            .select("estimate_id, total_amount, open_balance")
+            .not_.is_("estimate_id", "null")
+            .gt("total_amount", 0)
+            .limit(5000)
+            .execute()
         )
-        .eq("status_raw", "Approved")
-        .is_("target_date", "null")
-        .order("created_date")            # oldest first
-        .limit(10)
-        .execute()
-    ).data or []
+        deposit_inv_rows = deposit_inv_res.data or []
 
-    if no_date_total > 0:
-        flags.append({
-            "category": "Operations",
-            "severity": "medium",
-            "summary":  f"{no_date_total} Approved job(s) have no install date scheduled",
-            "detail": {
-                "count":  no_date_total,
-                "action": "Set a target install date once deposit is confirmed",
-                "sample": [
-                    {
-                        "estimate":      r["estimate_number"],
-                        "customer":      r["customer_name"],
-                        "rep":           r.get("sales_rep_name"),
-                        "days_approved": _days_since(r["created_date"]),
-                        "value":         r.get("total_amount"),
-                    }
-                    for r in no_date_sample_rows[:10]
-                ],
-            },
-        })
+        # estimate_ids where at least one invoice has been partially/fully paid
+        deposit_paid_eids = {
+            r["estimate_id"]
+            for r in deposit_inv_rows
+            if r.get("estimate_id") and (
+                (r.get("open_balance") or 0) < (r.get("total_amount") or 0)
+            )
+        }
+
+        # Approved estimates that have a deposit and no install date
+        no_date_deposit_rows = [
+            r for r in approved_rows
+            if r.get("estimate_id") in deposit_paid_eids and not r.get("target_date")
+        ]
+        no_date_deposit_total = len(no_date_deposit_rows)
+
+        # Get the exact count with a server-side query for accurate totals
+        approved_eids_with_deposit = list(deposit_paid_eids & {r["estimate_id"] for r in approved_rows})
+        no_date_deposit_total_exact = 0
+        if approved_eids_with_deposit:
+            no_date_count_res = (
+                _get_client()
+                .table("estimates")
+                .select("estimate_id", count="exact")
+                .eq("status_raw", "Approved")
+                .is_("target_date", "null")
+                .in_("estimate_id", approved_eids_with_deposit[:500])  # PostgREST IN limit
+                .execute()
+            )
+            no_date_deposit_total_exact = no_date_count_res.count or no_date_deposit_total
+
+        if no_date_deposit_total_exact > 0:
+            flags.append({
+                "category": "Operations",
+                "severity": "high",
+                "summary":  (
+                    f"{no_date_deposit_total_exact} Approved job(s) have a deposit collected "
+                    f"but no install date scheduled"
+                ),
+                "detail": {
+                    "count":  no_date_deposit_total_exact,
+                    "action": "Schedule the install date — deposit is already in",
+                    "sample": [
+                        {
+                            "estimate":      r["estimate_number"],
+                            "customer":      r["customer_name"],
+                            "rep":           r.get("sales_rep_name"),
+                            "days_approved": _days_since(r["created_date"]),
+                            "value":         r.get("total_amount"),
+                        }
+                        for r in no_date_deposit_rows[:10]
+                    ],
+                },
+            })
+        else:
+            # Fall back to "no install date" (any approved, deposit unknown)
+            # if invoices table hasn't been seeded yet with estimate_id
+            no_date_count_res = (
+                _get_client()
+                .table("estimates")
+                .select("estimate_id", count="exact")
+                .eq("status_raw", "Approved")
+                .is_("target_date", "null")
+                .execute()
+            )
+            no_date_total = no_date_count_res.count or 0
+            no_date_sample_rows = (
+                _get_client()
+                .table("estimates")
+                .select("estimate_number, customer_name, sales_rep_name, created_date, total_amount")
+                .eq("status_raw", "Approved")
+                .is_("target_date", "null")
+                .order("created_date")
+                .limit(10)
+                .execute()
+            ).data or []
+            if no_date_total > 0:
+                flags.append({
+                    "category": "Operations",
+                    "severity": "medium",
+                    "summary":  f"{no_date_total} Approved job(s) have no install date scheduled",
+                    "detail": {
+                        "count":  no_date_total,
+                        "action": "Set a target install date once deposit is confirmed",
+                        "sample": [
+                            {
+                                "estimate":      r["estimate_number"],
+                                "customer":      r["customer_name"],
+                                "rep":           r.get("sales_rep_name"),
+                                "days_approved": _days_since(r["created_date"]),
+                                "value":         r.get("total_amount"),
+                            }
+                            for r in no_date_sample_rows[:10]
+                        ],
+                    },
+                })
+    except Exception:
+        pass   # invoices table may not have estimate_id yet — skip gracefully
 
     # ── 2c: In Progress past target date ──────────────────────────────────────
     overdue_ip_count_res = (
