@@ -2613,17 +2613,18 @@ def time_to_close():
 @app.route("/admin/send-weekly-digest", methods=["POST"])
 def send_weekly_digest():
     """
-    Generate the weekly digest and create a new page in Notion.
+    Generate the daily digest and create a new page in Notion.
 
-    Each Monday creates a new child page under NOTION_DIGEST_PAGE_ID with
-    a full formatted digest: flags, pipeline by rep, and pipeline matrix.
+    Creates a new child page under NOTION_DIGEST_PAGE_ID each morning with
+    a full formatted digest: operational pipeline flags, callbacks flags,
+    pipeline by rep, and pipeline matrix.
 
     Requires:
         Authorization: Bearer <SYNC_API_KEY>
-        NOTION_TOKEN           — Notion integration token (secret_...)
+        NOTION_API_KEY         — Notion integration token (secret_...)
         NOTION_DIGEST_PAGE_ID  — ID of the Notion page to create digests under
 
-    Called by the Monday morning GitHub Actions workflow.
+    Called by the daily morning GitHub Actions workflow.
     Returns 200 with {"status": "created", "notion_page_url": "..."} on success.
     """
     import json as _json
@@ -2685,7 +2686,21 @@ def send_weekly_digest():
 
     def _fmt_sample_flag(s: dict, category: str) -> str:
         """Format one sample item cleanly based on its flag category."""
-        if category == "Pipeline":
+        if category == "Operations":
+            est  = s.get("estimate", "")
+            cust = s.get("customer", "")
+            rep  = s.get("rep") or ""
+            val  = s.get("value")
+            val_str = f"  ${val:,.0f}" if val else ""
+            # Overdue In Progress jobs show target date + days overdue
+            if s.get("days_overdue") is not None:
+                tgt     = s.get("target_date") or ""
+                overdue = s.get("days_overdue", 0)
+                return f"{est} · {cust} · {rep} · install {tgt} ({overdue}d overdue){val_str}"
+            # Approved jobs show how long they've been sitting
+            days_approved = s.get("days_approved", "")
+            return f"{est} · {cust} · {rep} · {days_approved}d in Approved{val_str}"
+        elif category == "Pipeline":
             est  = s.get("estimate", "")
             cust = s.get("customer", "")
             rep  = s.get("rep", "")
@@ -2712,7 +2727,7 @@ def send_weekly_digest():
     blocks: list[dict] = []
 
     # ── Flags ────────────────────────────────────────────────────────────────
-    blocks.append(_heading("🚦 Flags This Week", level=2))
+    blocks.append(_heading("🚦 Operational Flags", level=2))
     if not flags:
         blocks.append(_paragraph(_text("✅ No anomalies flagged. Everything looks healthy.")))
     else:
@@ -2779,7 +2794,7 @@ def send_weekly_digest():
     ))
 
     # ── Create Notion page ────────────────────────────────────────────────────
-    page_title = f"Weekly Digest — {now_str}"
+    page_title = f"Daily Digest — {now_str}"
     payload    = {
         "parent":     {"type": "page_id", "page_id": parent_page_id},
         "properties": {

@@ -1867,7 +1867,6 @@ def query_weekly_digest() -> dict:
     now          = datetime.now(timezone.utc)
     week_start   = now - timedelta(days=7)
     four_wks_ago = now - timedelta(days=35)
-    fourteen_ago = now - timedelta(days=14)
 
     def _iso(dt: datetime) -> str:
         return dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
@@ -1915,52 +1914,194 @@ def query_weekly_digest() -> dict:
             },
         })
 
-    # ── Check 2: Stalled active estimates (created > 14 days ago) ────────────
-    # Use count="exact" for the real total, then fetch only a small sample for display.
-    # PostgREST caps rows returned at 1000 regardless of .limit(), so len(rows)
-    # would always report a round number if there are more than 1000 records.
-    stalled_count_res = (
+    # ── Checks 2a / 2b / 2c: Operational pipeline flags ─────────────────────
+    #
+    # Three actionable buckets replace the old generic "stalled" flag:
+    #
+    #   2a) Approved — no preview task created yet
+    #       Requires a site preview before scheduling install; these jobs are
+    #       blocked until someone creates the preview task.
+    #
+    #   2b) Approved — no install date scheduled (target_date is null)
+    #       Jobs that have been approved but haven't had an install date set.
+    #       Likely waiting on deposit confirmation or crew availability.
+    #
+    #   2c) In Progress — past their target/install date
+    #       Jobs that are still open past the scheduled install date.
+    #       These are ready to close out and final-invoice.
+
+    from datetime import date as _date
+
+    today_str = _date.today().isoformat()
+
+    # Pull all Approved estimates (up to 1000 — enough for the Python anti-join)
+    approved_rows = (
+        _get_client()
+        .table("estimates")
+        .select(
+            "estimate_id, estimate_number, customer_name, "
+            "sales_rep_name, created_date, target_date, total_amount"
+        )
+        .eq("status_raw", "Approved")
+        .order("created_date")            # oldest first so samples surface the longest-waiting jobs
+        .limit(1000)
+        .execute()
+    ).data or []
+
+    # ── 2a: Approved with no preview task ─────────────────────────────────────
+    # Collect all estimate_ids that already have a preview task
+    try:
+        preview_task_res = (
+            _get_client()
+            .table("tasks")
+            .select("estimate_id")
+            .ilike("task_type", "%preview%")
+            .not_.is_("estimate_id", "null")
+            .limit(5000)
+            .execute()
+        )
+        preview_eids = {r["estimate_id"] for r in (preview_task_res.data or [])}
+    except Exception:
+        preview_eids = set()
+
+    no_preview_rows = [r for r in approved_rows if r.get("estimate_id") not in preview_eids]
+    # Exact total via a separate count query (avoids PostgREST's 1000-row cap)
+    no_preview_count_res = (
         _get_client()
         .table("estimates")
         .select("estimate_id", count="exact")
-        .eq("status_normalized", "ACTIVE")
-        .lt("created_date", _iso(fourteen_ago))
+        .eq("status_raw", "Approved")
         .execute()
     )
-    stalled_total = stalled_count_res.count or 0
+    # Subtract the preview_eids we know about from the total approved count
+    approved_total = no_preview_count_res.count or len(approved_rows)
+    no_preview_total = max(0, approved_total - len(preview_eids & {r["estimate_id"] for r in approved_rows}))
 
-    stalled_rows = (
+    if no_preview_total > 0:
+        flags.append({
+            "category": "Operations",
+            "severity": "medium",
+            "summary":  f"{no_preview_total} Approved job(s) have no preview task created yet",
+            "detail": {
+                "count":       no_preview_total,
+                "action":      "Create a Preview task so the site visit can be scheduled",
+                "sample": [
+                    {
+                        "estimate":       r["estimate_number"],
+                        "customer":       r["customer_name"],
+                        "rep":            r.get("sales_rep_name"),
+                        "days_approved":  _days_since(r["created_date"]),
+                        "value":          r.get("total_amount"),
+                    }
+                    for r in no_preview_rows[:10]
+                ],
+            },
+        })
+
+    # ── 2b: Approved with no install date scheduled ────────────────────────────
+    no_date_count_res = (
+        _get_client()
+        .table("estimates")
+        .select("estimate_id", count="exact")
+        .eq("status_raw", "Approved")
+        .is_("target_date", "null")
+        .execute()
+    )
+    no_date_total = no_date_count_res.count or 0
+
+    no_date_sample_rows = (
+        _get_client()
+        .table("estimates")
+        .select(
+            "estimate_number, customer_name, sales_rep_name, created_date, total_amount"
+        )
+        .eq("status_raw", "Approved")
+        .is_("target_date", "null")
+        .order("created_date")            # oldest first
+        .limit(10)
+        .execute()
+    ).data or []
+
+    if no_date_total > 0:
+        flags.append({
+            "category": "Operations",
+            "severity": "medium",
+            "summary":  f"{no_date_total} Approved job(s) have no install date scheduled",
+            "detail": {
+                "count":  no_date_total,
+                "action": "Set a target install date once deposit is confirmed",
+                "sample": [
+                    {
+                        "estimate":      r["estimate_number"],
+                        "customer":      r["customer_name"],
+                        "rep":           r.get("sales_rep_name"),
+                        "days_approved": _days_since(r["created_date"]),
+                        "value":         r.get("total_amount"),
+                    }
+                    for r in no_date_sample_rows[:10]
+                ],
+            },
+        })
+
+    # ── 2c: In Progress past target date ──────────────────────────────────────
+    overdue_ip_count_res = (
+        _get_client()
+        .table("estimates")
+        .select("estimate_id", count="exact")
+        .eq("status_raw", "In Progress")
+        .not_.is_("target_date", "null")
+        .lt("target_date", today_str)
+        .execute()
+    )
+    overdue_ip_total = overdue_ip_count_res.count or 0
+
+    overdue_ip_rows = (
         _get_client()
         .table("estimates")
         .select(
             "estimate_number, customer_name, sales_rep_name, "
-            "status_normalized, status_raw, project_type, created_date, total_amount"
+            "target_date, total_amount, created_date"
         )
-        .eq("status_normalized", "ACTIVE")
-        .lt("created_date", _iso(fourteen_ago))
-        .order("created_date", desc=True)
-        .limit(10)   # sample only — real count comes from stalled_total
+        .eq("status_raw", "In Progress")
+        .not_.is_("target_date", "null")
+        .lt("target_date", today_str)
+        .order("target_date")             # most overdue first
+        .limit(10)
         .execute()
     ).data or []
 
-    if stalled_total > 0:
+    def _days_overdue_from_target(date_str: str | None) -> int:
+        """Days past the target_date (positive = overdue)."""
+        if not date_str:
+            return 0
+        try:
+            from datetime import date as _d
+            td = _d.fromisoformat(date_str[:10])
+            return max(0, (_d.today() - td).days)
+        except Exception:
+            return 0
+
+    if overdue_ip_total > 0:
         flags.append({
-            "category": "Pipeline",
-            "severity": "medium",
-            "summary":  f"{stalled_total} active estimate(s) haven't progressed in 14+ days",
+            "category": "Operations",
+            "severity": "high" if overdue_ip_total >= 5 else "medium",
+            "summary":  (
+                f"{overdue_ip_total} In Progress job(s) are past their install date "
+                f"— ready to complete and final invoice"
+            ),
             "detail": {
-                "count":  stalled_total,
+                "count":  overdue_ip_total,
+                "action": "Complete the job in Striven and send the final invoice",
                 "sample": [
                     {
-                        "estimate":     r["estimate_number"],
-                        "customer":     r["customer_name"],
-                        "rep":          r.get("sales_rep_name"),
-                        "stage":        r.get("status_raw"),
-                        "project_type": r.get("project_type"),
-                        "days_old":     _days_since(r["created_date"]),
-                        "value":        r.get("total_amount"),
+                        "estimate":      r["estimate_number"],
+                        "customer":      r["customer_name"],
+                        "rep":           r.get("sales_rep_name"),
+                        "target_date":   r["target_date"][:10] if r.get("target_date") else None,
+                        "days_overdue":  _days_overdue_from_target(r.get("target_date")),
+                        "value":         r.get("total_amount"),
                     }
-                    for r in stalled_rows[:10]
+                    for r in overdue_ip_rows[:10]
                 ],
             },
         })
@@ -2168,7 +2309,9 @@ def query_weekly_digest() -> dict:
         "rep_summary":              rep_summary,
         "checks_run": [
             "callback_rate_spike",
-            "stalled_active_estimates",
+            "approved_no_preview_task",
+            "approved_no_install_date",
+            "in_progress_past_target_date",
             "overdue_open_callbacks",
             "rep_pipeline_summary",
             "inactive_assignee_tasks",
