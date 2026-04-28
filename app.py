@@ -2655,6 +2655,15 @@ def send_weekly_digest():
 
     severity_emoji = {"high": "🔴", "medium": "🟡", "low": "🔵"}
 
+    # Stage display order and short labels
+    STAGE_ORDER = ["Quoted", "Pending Approval", "Approved", "In Progress"]
+    STAGE_SHORT = {
+        "Quoted":           "Quoted",
+        "Pending Approval": "Pending",
+        "Approved":         "Approved",
+        "In Progress":      "In Progress",
+    }
+
     def _text(content: str, bold: bool = False) -> dict:
         ann = {"bold": bold} if bold else {}
         return {"type": "text", "text": {"content": content}, "annotations": ann}
@@ -2663,9 +2672,9 @@ def send_weekly_digest():
         return {"object": "block", "type": "paragraph",
                 "paragraph": {"rich_text": list(parts)}}
 
-    def _bullet(content: str) -> dict:
+    def _bullet(content: str, bold: bool = False) -> dict:
         return {"object": "block", "type": "bulleted_list_item",
-                "bulleted_list_item": {"rich_text": [_text(content)]}}
+                "bulleted_list_item": {"rich_text": [_text(content, bold=bold)]}}
 
     def _heading(content: str, level: int = 2) -> dict:
         t = f"heading_{level}"
@@ -2674,43 +2683,99 @@ def send_weekly_digest():
     def _divider() -> dict:
         return {"object": "block", "type": "divider", "divider": {}}
 
+    def _fmt_sample_flag(s: dict, category: str) -> str:
+        """Format one sample item cleanly based on its flag category."""
+        if category == "Pipeline":
+            est  = s.get("estimate", "")
+            cust = s.get("customer", "")
+            rep  = s.get("rep", "")
+            days = s.get("days_old", "")
+            val  = s.get("value")
+            val_str = f"  ${val:,.0f}" if val else ""
+            return f"{est} · {cust} · {rep} · {days}d old{val_str}"
+        elif category == "Callbacks":
+            task = s.get("task_type", "")
+            asgn = s.get("assigned_to", "")
+            cust = s.get("customer", "")
+            days = s.get("days_open", "")
+            return f"{task} · {asgn} · {cust} · {days}d open"
+        elif category == "Assignments":
+            task = s.get("task_type") or ""
+            asgn = s.get("assigned_to", "")
+            cust = s.get("customer") or ""
+            days = s.get("days_old", "")
+            parts = [x for x in [asgn, task or None, cust or None] if x]
+            return "  ".join(parts) + (f" · {days}d old" if days else "")
+        else:
+            return "  ·  ".join(str(v) for v in s.values() if v is not None)
+
     blocks: list[dict] = []
 
-    # Flags section
+    # ── Flags ────────────────────────────────────────────────────────────────
     blocks.append(_heading("🚦 Flags This Week", level=2))
     if not flags:
         blocks.append(_paragraph(_text("✅ No anomalies flagged. Everything looks healthy.")))
     else:
         for f in flags:
-            emoji = severity_emoji.get(f.get("severity", ""), "⚪")
-            cat   = f.get("category", "")
-            summ  = f.get("summary", "")
-            blocks.append(_bullet(f"{emoji} {cat} — {summ}"))
+            emoji    = severity_emoji.get(f.get("severity", ""), "⚪")
+            cat      = f.get("category", "")
+            summ     = f.get("summary", "")
+            # Flag headline — bold
+            blocks.append(_bullet(f"{emoji}  {cat} — {summ}", bold=True))
 
-            # Detail bullets (sample items if present)
+            # Up to 3 clean sample lines, indented as plain text paragraphs
             detail = f.get("detail", {})
             sample = detail.get("sample", [])
-            for s in sample[:5]:
-                line = "  · " + "  |  ".join(
-                    f"{k}: {v}" for k, v in s.items() if v is not None
-                )
-                blocks.append(_bullet(line))
+            for s in sample[:3]:
+                line = _fmt_sample_flag(s, cat)
+                blocks.append({
+                    "object": "block",
+                    "type":   "paragraph",
+                    "paragraph": {
+                        "rich_text": [_text(f"      {line}")],
+                        "color": "gray",
+                    },
+                })
 
     blocks.append(_divider())
 
-    # Pipeline by rep
+    # ── Pipeline by rep ───────────────────────────────────────────────────────
     if rep_summ:
         blocks.append(_heading("📋 Active Pipeline by Rep", level=2))
+        blocks.append(_paragraph(
+            _text("Active = Quoted + Pending Approval + Approved + In Progress", bold=False)
+        ))
+
         for r in rep_summ[:10]:
-            val  = r.get("pipeline_value", 0)
-            jobs = r.get("active_jobs", 0)
+            val      = r.get("pipeline_value", 0)
+            jobs     = r.get("active_jobs", 0)
+            by_stage = r.get("by_stage", {})
+
+            # Stage breakdown string: Quoted 50 · Approved 30 · In Progress 20
+            stage_parts = [
+                f"{STAGE_SHORT[s]} {by_stage[s]}"
+                for s in STAGE_ORDER
+                if by_stage.get(s, 0) > 0
+            ]
+            stage_str = "  ·  ".join(stage_parts) if stage_parts else "no stage data"
+
             blocks.append(_bullet(
-                f"{r['rep']}: {jobs} active job{'s' if jobs != 1 else ''} — ${val:,.0f}"
+                f"{r['rep']}  —  {jobs} jobs  ·  ${val:,.0f}",
+                bold=True,
             ))
+            blocks.append({
+                "object": "block",
+                "type":   "paragraph",
+                "paragraph": {
+                    "rich_text": [_text(f"      {stage_str}")],
+                    "color": "gray",
+                },
+            })
+
         blocks.append(_divider())
 
     blocks.append(_paragraph(
-        _text("Open Ask WilliamSmith for a deeper breakdown on any flag above.", bold=False)
+        _text("Open Ask WilliamSmith for a deeper breakdown on any flag above.")
     ))
 
     # ── Create Notion page ────────────────────────────────────────────────────
