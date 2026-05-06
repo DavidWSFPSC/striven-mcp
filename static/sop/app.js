@@ -1,16 +1,9 @@
 // WSF SOP Framework — app.js
-// Base: app.jsx (canonical read-only viewer)
-// Step 3A additions: WORKER_URL constant + ConnectionBanner
-// Step 3B will add: editable fields, notion-bridge, autosave
-//
-// To enable Notion persistence (Step 3B):
-//   1. Deploy cloudflare/worker.js and get the Worker URL
-//   2. Replace WORKER_URL below with that URL
-//   3. Notion overlay fields will automatically activate
+// Step 3B-2: Wired to Cloudflare Worker with live Notion persistence
 
-const WORKER_URL = ""; // e.g. "https://wsf-sop-worker.YOUR_ACCOUNT.workers.dev"
+const WORKER_URL = "https://wsf-sop-worker.david-warren.workers.dev";
 
-const { useState, useMemo, useEffect, useRef } = React;
+const { useState, useMemo, useEffect, useRef, useCallback } = React;
 const { TweaksPanel, useTweaks, TweakSection, TweakRadio, TweakToggle, TweakSelect } = window;
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
@@ -23,13 +16,257 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "filterPhase": "all"
 }/*EDITMODE-END*/;
 
+// ---------- notion data hook ----------
+function useNotionData() {
+  const [overlays, setOverlays] = useState({});
+  const [loadState, setLoadState] = useState(WORKER_URL ? "loading" : "disabled");
+  const [loadError, setLoadError] = useState("");
+  const [saveStates, setSaveStates] = useState({});
+
+  useEffect(() => {
+    if (!WORKER_URL) return;
+    fetch(`${WORKER_URL}/steps`)
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(data => {
+        const map = {};
+        (data.steps || []).forEach(s => { map[s.step_id] = s; });
+        setOverlays(map);
+        setLoadState("loaded");
+      })
+      .catch(err => {
+        setLoadState("error");
+        setLoadError(err.message);
+      });
+  }, []);
+
+  const saveField = useCallback((stepId, field, value) => {
+    const key = `${stepId}-${field}`;
+    setSaveStates(prev => ({ ...prev, [key]: "saving" }));
+    fetch(`${WORKER_URL}/steps/${stepId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ field, value }),
+    })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(data => {
+        if (data.overlay) {
+          setOverlays(prev => ({ ...prev, [stepId]: data.overlay }));
+        }
+        setSaveStates(prev => ({ ...prev, [key]: "saved" }));
+        setTimeout(() => setSaveStates(prev => {
+          const next = { ...prev };
+          if (next[key] === "saved") next[key] = "idle";
+          return next;
+        }), 2500);
+      })
+      .catch(() => {
+        setSaveStates(prev => ({ ...prev, [key]: "error" }));
+      });
+  }, []);
+
+  const getSaveState = useCallback(
+    (stepId, field) => saveStates[`${stepId}-${field}`] || "idle",
+    [saveStates]
+  );
+
+  return { overlays, loadState, loadError, saveField, getSaveState };
+}
+
 // ---------- connection banner ----------
-function ConnectionBanner() {
-  if (WORKER_URL) return null;
+function ConnectionBanner({ loadState, loadError }) {
+  if (loadState === "loaded") return null;
+  if (loadState === "disabled") {
+    return (
+      <div className="connection-banner">
+        Collaboration save is not connected — viewing local SOP framework only.
+        Set <code>WORKER_URL</code> in app.js to enable live Notion persistence.
+      </div>
+    );
+  }
+  if (loadState === "loading") {
+    return <div className="connection-banner loading">Loading Notion overlays…</div>;
+  }
   return (
-    <div className="connection-banner">
-      Collaboration save is not connected yet — viewing local SOP framework only.
-      Set <code>WORKER_URL</code> in app.js to enable live Notion persistence.
+    <div className="connection-banner error">
+      Notion overlay failed to load ({loadError}) — fields are read-only.
+    </div>
+  );
+}
+
+// ---------- save badge ----------
+function SaveBadge({ state }) {
+  if (state === "saving") return <span className="save-badge saving">saving…</span>;
+  if (state === "saved")  return <span className="save-badge saved">saved ✓</span>;
+  if (state === "error")  return <span className="save-badge error">error</span>;
+  return <span className="save-badge" />;
+}
+
+// ---------- editable field ----------
+function EditableField({ stepId, field, notionValue, placeholder, multiline, isSelect, isNumber, saveField, getSaveState }) {
+  const saveState = getSaveState(stepId, field);
+  const [local, setLocal] = useState(() => {
+    if (field === "updated_by" && !notionValue) {
+      return localStorage.getItem("wsf_editor_name") || "";
+    }
+    return notionValue != null ? String(notionValue) : "";
+  });
+  const focused = useRef(false);
+
+  useEffect(() => {
+    if (!focused.current) {
+      let v = notionValue != null ? String(notionValue) : "";
+      if (field === "updated_by" && !v) v = localStorage.getItem("wsf_editor_name") || "";
+      setLocal(v);
+    }
+  }, [notionValue, field]);
+
+  if (isSelect) {
+    const OPTIONS = ["", "Draft", "Review", "Ratified", "Deprecated"];
+    return (
+      <div className="editable-wrap">
+        <select
+          className="editable-select"
+          value={local}
+          onChange={e => {
+            const val = e.target.value;
+            setLocal(val);
+            saveField(stepId, field, val);
+          }}
+        >
+          {OPTIONS.map(o => (
+            <option key={o} value={o}>{o || "— select —"}</option>
+          ))}
+        </select>
+        <SaveBadge state={saveState} />
+      </div>
+    );
+  }
+
+  const handleFocus = () => {
+    focused.current = true;
+    if (field === "updated_by" && !local) {
+      setLocal(localStorage.getItem("wsf_editor_name") || "");
+    }
+  };
+
+  const handleBlur = e => {
+    focused.current = false;
+    const val = e.target.value;
+    const current = notionValue != null ? String(notionValue) : "";
+    if (val !== current) {
+      if (field === "updated_by") localStorage.setItem("wsf_editor_name", val);
+      saveField(stepId, field, val);
+    }
+  };
+
+  if (multiline) {
+    return (
+      <div className="editable-wrap">
+        <textarea
+          className="editable-textarea"
+          value={local}
+          placeholder={placeholder || ""}
+          rows={3}
+          onChange={e => setLocal(e.target.value)}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
+        />
+        <SaveBadge state={saveState} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="editable-wrap">
+      <input
+        className="editable-input"
+        type={isNumber ? "number" : "text"}
+        value={local}
+        placeholder={placeholder || ""}
+        onChange={e => setLocal(e.target.value)}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+      />
+      <SaveBadge state={saveState} />
+    </div>
+  );
+}
+
+// ---------- notion fields section ----------
+function NotionFieldsSection({ step, overlay, saveField, getSaveState, loadState }) {
+  if (loadState === "disabled") return null;
+
+  if (loadState === "loading") {
+    return (
+      <div className="notion-fields">
+        <div className="notion-fields-header">
+          <span className="notion-fields-title">Notion overlay</span>
+          <span className="notion-fields-hint">loading…</span>
+        </div>
+      </div>
+    );
+  }
+
+  const ov = overlay || {};
+
+  return (
+    <div className="notion-fields">
+      <div className="notion-fields-header">
+        <span className="notion-fields-title">Notion overlay</span>
+        {loadState === "error" && (
+          <span className="save-badge error" style={{ visibility: "visible", opacity: 1 }}>Notion unreachable</span>
+        )}
+      </div>
+      <div className="notion-fields-grid">
+        <div className="notion-field-row">
+          <span className="notion-field-label">Status</span>
+          <EditableField stepId={step.n} field="status" notionValue={ov.status} isSelect saveField={saveField} getSaveState={getSaveState} />
+        </div>
+        <div className="notion-field-row">
+          <span className="notion-field-label">Updated By</span>
+          <EditableField stepId={step.n} field="updated_by" notionValue={ov.updated_by} placeholder="Your name" saveField={saveField} getSaveState={getSaveState} />
+        </div>
+        <div className="notion-field-row">
+          <span className="notion-field-label">Step Owner</span>
+          <EditableField stepId={step.n} field="owner_person" notionValue={ov.owner_person} placeholder={step.owner.person || ""} saveField={saveField} getSaveState={getSaveState} />
+        </div>
+        <div className="notion-field-row">
+          <span className="notion-field-label">Backup</span>
+          <EditableField stepId={step.n} field="backup_person" notionValue={ov.backup_person} placeholder={step.owner.backup || ""} saveField={saveField} getSaveState={getSaveState} />
+        </div>
+        <div className="notion-field-row">
+          <span className="notion-field-label">Handoff To Step #</span>
+          <EditableField stepId={step.n} field="clean_handoff_to" notionValue={ov.clean_handoff_to != null ? String(ov.clean_handoff_to) : ""} placeholder={step.handoff ? String(step.handoff.to) : ""} isNumber saveField={saveField} getSaveState={getSaveState} />
+        </div>
+        <div className="notion-field-row">
+          <span className="notion-field-label">Friction / Risk</span>
+          <EditableField stepId={step.n} field="friction_risk" notionValue={ov.friction_risk} placeholder="Known blockers…" saveField={saveField} getSaveState={getSaveState} />
+        </div>
+      </div>
+      <div className="notion-fields-wide">
+        <div className="notion-field-row">
+          <span className="notion-field-label">Done Means (override)</span>
+          <EditableField stepId={step.n} field="done_means" notionValue={ov.done_means} placeholder={step.done || ""} multiline saveField={saveField} getSaveState={getSaveState} />
+        </div>
+        <div className="notion-field-row">
+          <span className="notion-field-label">Required Inputs</span>
+          <EditableField stepId={step.n} field="required_inputs" notionValue={ov.required_inputs} placeholder="What must arrive for this step to start…" multiline saveField={saveField} getSaveState={getSaveState} />
+        </div>
+        <div className="notion-field-row">
+          <span className="notion-field-label">Required Outputs</span>
+          <EditableField stepId={step.n} field="required_outputs" notionValue={ov.required_outputs} placeholder="What must leave this step…" multiline saveField={saveField} getSaveState={getSaveState} />
+        </div>
+        <div className="notion-field-row">
+          <span className="notion-field-label">Team Notes</span>
+          <EditableField stepId={step.n} field="discussion" notionValue={ov.discussion} placeholder="Thread / team discussion…" multiline saveField={saveField} getSaveState={getSaveState} />
+        </div>
+        {step.decision && (
+          <div className="notion-field-row decision-answer-field">
+            <span className="notion-field-label decision-answer-label">Decision Answer</span>
+            <EditableField stepId={step.n} field="decision_answer" notionValue={ov.decision_answer} placeholder="Leadership answer to the open decision…" multiline saveField={saveField} getSaveState={getSaveState} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -75,11 +312,14 @@ function FieldRow({ label, children, mono }) {
   );
 }
 
-// ---------- step card (expandable) ----------
-function StepCard({ step, expanded, onToggle, showSystems, showGuardrails, showSubsteps, density }) {
+// ---------- step card ----------
+function StepCard({ step, expanded, onToggle, showSystems, showGuardrails, showSubsteps, density, overlay, saveField, getSaveState, loadState }) {
   const next = step.handoff ? STEPS.find(s => s.n === step.handoff.to) : null;
   return (
-    <div className={`step-card ${expanded ? "expanded" : ""} ${density} ${step.decision ? "has-decision" : ""}`}>
+    <div
+      className={`step-card ${expanded ? "expanded" : ""} ${density} ${step.decision ? "has-decision" : ""}`}
+      data-step={step.n}
+    >
       <div className="step-head" onClick={onToggle}>
         <StepNumber n={step.n} decision={step.decision} />
         <div className="step-title-block">
@@ -181,6 +421,14 @@ function StepCard({ step, expanded, onToggle, showSystems, showGuardrails, showS
               </div>
             </div>
           )}
+
+          <NotionFieldsSection
+            step={step}
+            overlay={overlay}
+            saveField={saveField}
+            getSaveState={getSaveState}
+            loadState={loadState}
+          />
         </div>
       )}
     </div>
@@ -188,7 +436,7 @@ function StepCard({ step, expanded, onToggle, showSystems, showGuardrails, showS
 }
 
 // ---------- timeline view ----------
-function TimelineView({ tweaks, expanded, setExpanded, filtered }) {
+function TimelineView({ tweaks, expanded, setExpanded, filtered, overlays, saveField, getSaveState, loadState }) {
   const byPhase = useMemo(() => {
     const m = {};
     PHASES.forEach(p => { m[p.id] = []; });
@@ -226,6 +474,10 @@ function TimelineView({ tweaks, expanded, setExpanded, filtered }) {
                   showGuardrails={tweaks.showGuardrails}
                   showSubsteps={tweaks.showSubsteps}
                   density={tweaks.density}
+                  overlay={overlays[step.n]}
+                  saveField={saveField}
+                  getSaveState={getSaveState}
+                  loadState={loadState}
                 />
               ))}
             </div>
@@ -382,7 +634,7 @@ function DocView({ filtered }) {
 }
 
 // ---------- open decisions panel ----------
-function DecisionsPanel({ open, onClose }) {
+function DecisionsPanel({ open, onClose, overlays, saveField, getSaveState, loadState }) {
   if (!open) return null;
   return (
     <div className="decisions-overlay" onClick={onClose}>
@@ -393,8 +645,11 @@ function DecisionsPanel({ open, onClose }) {
         </header>
         <p className="decisions-lede">
           Steps below need leadership input before the SOP can be considered "ratified." Each is a single, focused question.
-          {!WORKER_URL && (
-            <span className="decisions-notice"> Answers cannot be saved until Worker is connected (Step 3B).</span>
+          {loadState === "disabled" && (
+            <span className="decisions-notice"> Answers cannot be saved until Worker is connected.</span>
+          )}
+          {loadState === "error" && (
+            <span className="decisions-notice"> Notion unreachable — answers cannot be saved.</span>
           )}
         </p>
         <ol className="decisions-list">
@@ -404,6 +659,20 @@ function DecisionsPanel({ open, onClose }) {
               <div className="decision-body">
                 <h4>{d.title}</h4>
                 <p>{d.question}</p>
+                {loadState === "loaded" && (
+                  <div className="decision-answer-field">
+                    <span className="notion-field-label decision-answer-label">Answer</span>
+                    <EditableField
+                      stepId={d.n}
+                      field="decision_answer"
+                      notionValue={overlays[d.n] ? overlays[d.n].decision_answer : ""}
+                      placeholder="Leadership answer to the open decision…"
+                      multiline
+                      saveField={saveField}
+                      getSaveState={getSaveState}
+                    />
+                  </div>
+                )}
               </div>
             </li>
           ))}
@@ -508,6 +777,7 @@ function App() {
   const [view, setView] = useState(tweaks.view || "timeline");
   const [expanded, setExpanded] = useState(new Set([1]));
   const [decisionsOpen, setDecisionsOpen] = useState(false);
+  const { overlays, loadState, loadError, saveField, getSaveState } = useNotionData();
 
   const filtered = useMemo(() => {
     return STEPS.filter(s => {
@@ -526,7 +796,7 @@ function App() {
         setView={setView}
         openDecisions={() => setDecisionsOpen(true)}
       />
-      <ConnectionBanner />
+      <ConnectionBanner loadState={loadState} loadError={loadError} />
       <FilterBar tweaks={tweaks} setTweak={setTweak} />
       <main className="app-main">
         {view === "timeline" && (
@@ -536,6 +806,10 @@ function App() {
               expanded={expanded}
               setExpanded={setExpanded}
               filtered={filtered}
+              overlays={overlays}
+              saveField={saveField}
+              getSaveState={getSaveState}
+              loadState={loadState}
             />
           </TimelineWrap>
         )}
@@ -543,7 +817,14 @@ function App() {
         {view === "kanban" && <KanbanView   filtered={filtered} setExpanded={setExpanded} setView={setView} />}
         {view === "doc"    && <DocView      filtered={filtered} />}
       </main>
-      <DecisionsPanel open={decisionsOpen} onClose={() => setDecisionsOpen(false)} />
+      <DecisionsPanel
+        open={decisionsOpen}
+        onClose={() => setDecisionsOpen(false)}
+        overlays={overlays}
+        saveField={saveField}
+        getSaveState={getSaveState}
+        loadState={loadState}
+      />
       <TweaksPanel title="Tweaks">
         <TweakSection title="View">
           <TweakSelect tweaks={tweaks} setTweak={setTweak} k="view" label="Mode" options={[

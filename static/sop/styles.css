@@ -661,3 +661,161 @@ body {
   font-size: 11px;
   color: var(--warn);
 }
+
+/* ================== NOTION EDITABLE FIELDS ================== */
+.notion-fields {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+.notion-fields-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.notion-fields-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.notion-fields-hint {
+  font-size: 11px;
+  color: var(--ink-4);
+  font-style: italic;
+}
+.notion-fields-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 24px;
+  margin-bottom: 10px;
+}
+@media (max-width: 700px) {
+  .notion-fields-grid { grid-template-columns: 1fr; }
+}
+.notion-fields-wide {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.notion-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.notion-field-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.decision-answer-field {
+  border-top: 1px dashed var(--decision);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+.decision-answer-label { color: var(--decision) !important; }
+
+/* editable controls */
+.editable-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.editable-input,
+.editable-select {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 6px 9px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  transition: border-color 120ms, background 120ms;
+}
+.editable-input:focus,
+.editable-select:focus {
+  outline: none;
+  border-color: var(--accent-line);
+  background: var(--paper);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.editable-select { cursor: pointer; }
+.editable-textarea {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 6px 9px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  resize: vertical;
+  line-height: 1.5;
+  transition: border-color 120ms, background 120ms;
+}
+.editable-textarea:focus {
+  outline: none;
+  border-color: var(--accent-line);
+  background: var(--paper);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* save badge */
+.save-badge {
+  flex-shrink: 0;
+  align-self: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 3px 7px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  white-space: nowrap;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 200ms;
+}
+.save-badge.saving {
+  visibility: visible;
+  opacity: 1;
+  background: var(--bg-tint);
+  border-color: var(--line);
+  color: var(--ink-3);
+  animation: saving-pulse 1s infinite;
+}
+.save-badge.saved {
+  visibility: visible;
+  opacity: 1;
+  background: oklch(0.55 0.12 145 / 0.10);
+  border-color: oklch(0.55 0.12 145 / 0.35);
+  color: oklch(0.45 0.10 145);
+}
+.save-badge.error {
+  visibility: visible;
+  opacity: 1;
+  background: var(--decision-soft);
+  border-color: oklch(0.55 0.18 25 / 0.3);
+  color: var(--decision);
+}
+@keyframes saving-pulse {
+  0%, 100% { opacity: 0.6; }
+  50%       { opacity: 1; }
+}
+
+/* connection banner variants */
+.connection-banner.loading {
+  background: oklch(0.55 0.06 240 / 0.08);
+  border-bottom-color: oklch(0.55 0.06 240 / 0.3);
+  color: var(--ink-3);
+}
+.connection-banner.error {
+  background: var(--decision-soft);
+  border-bottom-color: oklch(0.55 0.18 25 / 0.4);
+  color: var(--decision);
+}
