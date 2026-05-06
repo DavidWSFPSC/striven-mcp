@@ -7382,9 +7382,21 @@ def _execute_tool(name: str, tool_input: dict) -> dict:
 
 
 @app.route("/", methods=["GET"])
+def hub():
+    """WSF Hub landing page."""
+    return render_template("hub.html")
+
+
+@app.route("/ask", methods=["GET"])
 def chat_ui():
     """Serve the WilliamSmith chat interface."""
     return render_template("index.html")
+
+
+@app.route("/sop", methods=["GET"])
+def sop():
+    """SOP collaboration framework (Step 3 will wire Notion)."""
+    return render_template("sop.html")
 
 
 @app.route("/logs", methods=["GET"])
