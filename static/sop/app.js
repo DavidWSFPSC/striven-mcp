@@ -64,12 +64,37 @@ function useNotionData() {
       });
   }, []);
 
+  const appendField = useCallback((stepId, field, value) => {
+    const key = `${stepId}-${field}`;
+    setSaveStates(prev => ({ ...prev, [key]: "saving" }));
+    fetch(`${WORKER_URL}/steps/${stepId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ field, value, append: true }),
+    })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(data => {
+        if (data.overlay) {
+          setOverlays(prev => ({ ...prev, [stepId]: data.overlay }));
+        }
+        setSaveStates(prev => ({ ...prev, [key]: "saved" }));
+        setTimeout(() => setSaveStates(prev => {
+          const next = { ...prev };
+          if (next[key] === "saved") next[key] = "idle";
+          return next;
+        }), 2500);
+      })
+      .catch(() => {
+        setSaveStates(prev => ({ ...prev, [key]: "error" }));
+      });
+  }, []);
+
   const getSaveState = useCallback(
     (stepId, field) => saveStates[`${stepId}-${field}`] || "idle",
     [saveStates]
   );
 
-  return { overlays, loadState, loadError, saveField, getSaveState };
+  return { overlays, loadState, loadError, saveField, appendField, getSaveState };
 }
 
 // ---------- connection banner ----------
@@ -192,8 +217,75 @@ function EditableField({ stepId, field, notionValue, placeholder, multiline, isS
   );
 }
 
+// ---------- owner suggestion field ----------
+function OwnerSuggestionField({ step, overlay, saveField, appendField, getSaveState }) {
+  const [input, setInput] = useState("");
+  const appendState = getSaveState(step.n, "suggested_owner_person");
+
+  const suggestions = (overlay?.suggested_owner_person || "")
+    .split("\n")
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  const handleAdd = () => {
+    const text = input.trim();
+    if (!text) return;
+    const editorName = localStorage.getItem("wsf_editor_name") || "";
+    const entry = editorName ? `${editorName} — ${text}` : text;
+    appendField(step.n, "suggested_owner_person", entry);
+    setInput("");
+  };
+
+  const handleKeyDown = e => {
+    if (e.key === "Enter") { e.preventDefault(); handleAdd(); }
+  };
+
+  return (
+    <div className="owner-suggestion-wrap">
+      <div className="notion-field-row">
+        <span className="notion-field-label">Suggested Step Owner</span>
+        <div className="suggestion-list">
+          {suggestions.length === 0
+            ? <span className="suggestion-list-empty">No suggestions yet — add one below</span>
+            : suggestions.map((s, i) => (
+                <div key={i} className="suggestion-entry">· {s}</div>
+              ))
+          }
+        </div>
+        <div className="suggestion-input-row">
+          <input
+            className="suggestion-input"
+            type="text"
+            value={input}
+            placeholder="Role or name suggestion…"
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+          />
+          <button
+            className="suggestion-btn"
+            onClick={handleAdd}
+            disabled={!input.trim() || appendState === "saving"}
+          >Add</button>
+          <SaveBadge state={appendState} />
+        </div>
+      </div>
+      <div className="notion-field-row decided-owner-field">
+        <span className="notion-field-label decided-owner-label">Decided Step Owner</span>
+        <EditableField
+          stepId={step.n}
+          field="decided_owner_person"
+          notionValue={overlay?.decided_owner_person}
+          placeholder={step.owner.person || ""}
+          saveField={saveField}
+          getSaveState={getSaveState}
+        />
+      </div>
+    </div>
+  );
+}
+
 // ---------- notion fields section ----------
-function NotionFieldsSection({ step, overlay, saveField, getSaveState, loadState }) {
+function NotionFieldsSection({ step, overlay, saveField, appendField, getSaveState, loadState }) {
   if (loadState === "disabled") return null;
 
   if (loadState === "loading") {
@@ -218,6 +310,13 @@ function NotionFieldsSection({ step, overlay, saveField, getSaveState, loadState
         )}
       </div>
       <div className="notion-fields-grid">
+        <OwnerSuggestionField
+          step={step}
+          overlay={ov}
+          saveField={saveField}
+          appendField={appendField}
+          getSaveState={getSaveState}
+        />
         <div className="notion-field-row">
           <span className="notion-field-label">Status</span>
           <EditableField stepId={step.n} field="status" notionValue={ov.status} isSelect saveField={saveField} getSaveState={getSaveState} />
@@ -225,10 +324,6 @@ function NotionFieldsSection({ step, overlay, saveField, getSaveState, loadState
         <div className="notion-field-row">
           <span className="notion-field-label">Updated By</span>
           <EditableField stepId={step.n} field="updated_by" notionValue={ov.updated_by} placeholder="Your name" saveField={saveField} getSaveState={getSaveState} />
-        </div>
-        <div className="notion-field-row">
-          <span className="notion-field-label">Step Owner</span>
-          <EditableField stepId={step.n} field="owner_person" notionValue={ov.owner_person} placeholder={step.owner.person || ""} saveField={saveField} getSaveState={getSaveState} />
         </div>
         <div className="notion-field-row">
           <span className="notion-field-label">Backup</span>
@@ -313,7 +408,7 @@ function FieldRow({ label, children, mono }) {
 }
 
 // ---------- step card ----------
-function StepCard({ step, expanded, onToggle, showSystems, showGuardrails, showSubsteps, density, overlay, saveField, getSaveState, loadState }) {
+function StepCard({ step, expanded, onToggle, showSystems, showGuardrails, showSubsteps, density, overlay, saveField, appendField, getSaveState, loadState }) {
   const next = step.handoff ? STEPS.find(s => s.n === step.handoff.to) : null;
   return (
     <div
@@ -426,6 +521,7 @@ function StepCard({ step, expanded, onToggle, showSystems, showGuardrails, showS
             step={step}
             overlay={overlay}
             saveField={saveField}
+            appendField={appendField}
             getSaveState={getSaveState}
             loadState={loadState}
           />
@@ -436,7 +532,7 @@ function StepCard({ step, expanded, onToggle, showSystems, showGuardrails, showS
 }
 
 // ---------- timeline view ----------
-function TimelineView({ tweaks, expanded, setExpanded, filtered, overlays, saveField, getSaveState, loadState }) {
+function TimelineView({ tweaks, expanded, setExpanded, filtered, overlays, saveField, appendField, getSaveState, loadState }) {
   const byPhase = useMemo(() => {
     const m = {};
     PHASES.forEach(p => { m[p.id] = []; });
@@ -476,6 +572,7 @@ function TimelineView({ tweaks, expanded, setExpanded, filtered, overlays, saveF
                   density={tweaks.density}
                   overlay={overlays[step.n]}
                   saveField={saveField}
+                  appendField={appendField}
                   getSaveState={getSaveState}
                   loadState={loadState}
                 />
@@ -777,7 +874,7 @@ function App() {
   const [view, setView] = useState(tweaks.view || "timeline");
   const [expanded, setExpanded] = useState(new Set([1]));
   const [decisionsOpen, setDecisionsOpen] = useState(false);
-  const { overlays, loadState, loadError, saveField, getSaveState } = useNotionData();
+  const { overlays, loadState, loadError, saveField, appendField, getSaveState } = useNotionData();
 
   const filtered = useMemo(() => {
     return STEPS.filter(s => {
@@ -808,6 +905,7 @@ function App() {
               filtered={filtered}
               overlays={overlays}
               saveField={saveField}
+              appendField={appendField}
               getSaveState={getSaveState}
               loadState={loadState}
             />

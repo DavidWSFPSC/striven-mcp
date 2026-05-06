@@ -25,6 +25,8 @@ const ALLOWED_ORIGINS = [
 const EDITABLE_FIELDS = new Set([
   "owner_person",
   "backup_person",
+  "suggested_owner_person",
+  "decided_owner_person",
   "status",
   "decision_answer",
   "discussion",
@@ -39,17 +41,19 @@ const EDITABLE_FIELDS = new Set([
 // Map from our field names → Notion property names in the database.
 // Keep in sync with the database schema in cloudflare/README.md.
 const FIELD_TO_NOTION = {
-  owner_person:    "owner_person",
-  backup_person:   "backup_person",
-  status:          "status",
-  decision_answer: "decision_answer",
-  discussion:      "discussion",
-  done_means:      "done_means",
-  required_inputs: "required_inputs",
-  required_outputs:"required_outputs",
-  clean_handoff_to:"clean_handoff_to",
-  friction_risk:   "friction_risk",
-  updated_by:      "updated_by",
+  owner_person:           "owner_person",
+  backup_person:          "backup_person",
+  suggested_owner_person: "suggested_owner_person",
+  decided_owner_person:   "decided_owner_person",
+  status:                 "status",
+  decision_answer:        "decision_answer",
+  discussion:             "discussion",
+  done_means:             "done_means",
+  required_inputs:        "required_inputs",
+  required_outputs:       "required_outputs",
+  clean_handoff_to:       "clean_handoff_to",
+  friction_risk:          "friction_risk",
+  updated_by:             "updated_by",
 };
 
 const NOTION_API = "https://api.notion.com/v1";
@@ -123,19 +127,21 @@ function buildNotionPatch(field, value) {
 function pageToOverlay(page) {
   const p = page.properties;
   return {
-    notionPageId:    page.id,
-    step_id:         number(p.step_id),
-    owner_person:    richText(p.owner_person),
-    backup_person:   richText(p.backup_person),
-    status:          select(p.status),
-    decision_answer: richText(p.decision_answer),
-    discussion:      richText(p.discussion),
-    done_means:      richText(p.done_means),
-    required_inputs: richText(p.required_inputs),
-    required_outputs:richText(p.required_outputs),
-    clean_handoff_to:number(p.clean_handoff_to),
-    friction_risk:   richText(p.friction_risk),
-    updated_by:      richText(p.updated_by),
+    notionPageId:           page.id,
+    step_id:                number(p.step_id),
+    owner_person:           richText(p.owner_person),
+    backup_person:          richText(p.backup_person),
+    suggested_owner_person: richText(p.suggested_owner_person),
+    decided_owner_person:   richText(p.decided_owner_person),
+    status:                 select(p.status),
+    decision_answer:        richText(p.decision_answer),
+    discussion:             richText(p.discussion),
+    done_means:             richText(p.done_means),
+    required_inputs:        richText(p.required_inputs),
+    required_outputs:       richText(p.required_outputs),
+    clean_handoff_to:       number(p.clean_handoff_to),
+    friction_risk:          richText(p.friction_risk),
+    updated_by:             richText(p.updated_by),
   };
 }
 
@@ -186,7 +192,7 @@ async function handlePatchStep(stepId, request, env, origin) {
     return json({ error: "Invalid JSON body." }, 400, origin);
   }
 
-  const { field, value } = body;
+  const { field, value, append } = body;
 
   if (!field || !EDITABLE_FIELDS.has(field)) {
     return json({
@@ -216,8 +222,16 @@ async function handlePatchStep(stepId, request, env, origin) {
     return json({ error: `No Notion page found for step_id ${stepNum}.` }, 404, origin);
   }
 
+  // For append mode, build the combined value server-side from the already-fetched page.
+  // This avoids stale-cache overwrites without an extra Notion round-trip.
+  let writeValue = value;
+  if (append && field === "suggested_owner_person") {
+    const existing = richText(page.properties.suggested_owner_person);
+    writeValue = existing ? existing + "\n" + value : value;
+  }
+
   // Patch the property.
-  const patch = buildNotionPatch(field, value);
+  const patch = buildNotionPatch(field, writeValue);
   const patchRes = await fetch(`${NOTION_API}/pages/${page.id}`, {
     method: "PATCH",
     headers: notionHeaders(env.NOTION_TOKEN),
