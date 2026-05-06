@@ -223,7 +223,7 @@ function OwnerSuggestionField({ step, overlay, saveField, appendField, getSaveSt
   const appendState = getSaveState(step.n, "suggested_owner_person");
 
   const suggestions = (overlay?.suggested_owner_person || "")
-    .split("\n")
+    .split(/\r?\n/)
     .map(s => s.trim())
     .filter(Boolean);
 
@@ -231,7 +231,7 @@ function OwnerSuggestionField({ step, overlay, saveField, appendField, getSaveSt
     const text = input.trim();
     if (!text) return;
     const editorName = localStorage.getItem("wsf_editor_name") || "";
-    const entry = editorName ? `${editorName} — ${text}` : text;
+    const entry = editorName ? `${editorName} - ${text}` : text;
     appendField(step.n, "suggested_owner_person", entry);
     setInput("");
   };
@@ -248,7 +248,7 @@ function OwnerSuggestionField({ step, overlay, saveField, appendField, getSaveSt
           {suggestions.length === 0
             ? <span className="suggestion-list-empty">No suggestions yet — add one below</span>
             : suggestions.map((s, i) => (
-                <div key={i} className="suggestion-entry">· {s}</div>
+                <div key={i} className="suggestion-entry">{s}</div>
               ))
           }
         </div>

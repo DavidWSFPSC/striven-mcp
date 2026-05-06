@@ -830,23 +830,28 @@ body {
 .suggestion-list {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  min-height: 22px;
-  padding: 6px 9px;
-  background: var(--bg-tint);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
-  font-size: 12px;
-  color: var(--ink);
-  line-height: 1.55;
+  gap: 5px;
+  min-height: 28px;
+  padding: 6px 0;
 }
 .suggestion-list-empty {
   font-style: italic;
   color: var(--ink-4);
   font-size: 11px;
+  padding: 4px 8px;
 }
 .suggestion-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent-line);
+  border-radius: var(--radius);
+  font-size: 12px;
   color: var(--ink-2);
+  line-height: 1.4;
 }
 .suggestion-input-row {
   display: flex;
