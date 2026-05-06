@@ -58,8 +58,20 @@ After creating the database, copy the database ID from the Notion URL:
 ### Prerequisites
 
 ```
-npm install -g wrangler
-wrangler login
+npm install -g wrangler   # Wrangler v3+
+wrangler login            # one-time browser auth
+```
+
+### wrangler.toml
+
+`wrangler.toml` is already committed alongside this file. It pins the worker
+name, entry point, and compatibility date so every `wrangler` command picks
+them up automatically — no extra flags needed.
+
+```toml
+name = "wsf-sop-worker"
+main = "worker.js"
+compatibility_date = "2024-01-01"
 ```
 
 ### Steps
@@ -67,27 +79,43 @@ wrangler login
 ```bash
 cd cloudflare
 
-# 1. Initialize a Wrangler project (first time only)
-wrangler init wsf-sop-worker --no-bundle
-# When prompted, choose "existing worker" and point to worker.js
-
-# 2. Add secrets (values from Render / .env)
+# 1. Add secrets — you will be prompted to paste each value
 wrangler secret put NOTION_TOKEN
-# paste the value of NOTION_API_KEY from Render striven-mcp-v2 env vars
+# Paste: the value of NOTION_API_KEY from Render striven-mcp-v2 env vars
 
 wrangler secret put NOTION_DATABASE_ID
-# paste the database ID from the Notion URL
+# Paste: the database ID from the Notion URL (32-char hex, before ?v=)
 
-# 3. Deploy
-wrangler deploy worker.js --name wsf-sop-worker --compatibility-date 2024-01-01
+# 2. Deploy
+wrangler deploy
 
-# 4. Note the Worker URL printed after deploy, e.g.:
+# 3. Note the Worker URL printed after deploy, e.g.:
 #    https://wsf-sop-worker.YOUR_ACCOUNT.workers.dev
 ```
 
+### Verify — test GET /steps
+
+```bash
+curl https://wsf-sop-worker.YOUR_ACCOUNT.workers.dev/steps
+```
+
+Expected: a JSON object with a `steps` array of 21 items, each containing
+`step_id` (1–21) and empty strings for all editable fields.
+
+```json
+{
+  "steps": [
+    { "notionPageId": "...", "step_id": 1, "owner_person": "", ... },
+    ...
+  ]
+}
+```
+
+If you see 21 objects, the Worker and Notion database are wired correctly.
+
 ### Wire the Worker URL
 
-After deploy, set `WORKER_URL` in `static/sop/app.js`:
+After a successful `GET /steps`, set `WORKER_URL` in `static/sop/app.js`:
 
 ```js
 const WORKER_URL = "https://wsf-sop-worker.YOUR_ACCOUNT.workers.dev";
