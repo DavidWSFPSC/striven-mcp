@@ -7390,7 +7390,7 @@ def hub():
 @app.route("/ask", methods=["GET"])
 def chat_ui():
     """Serve the WilliamSmith chat interface."""
-    return render_template("index.html")
+    return render_template("ask.html")
 
 
 @app.route("/sop", methods=["GET"])

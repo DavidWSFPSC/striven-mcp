@@ -1,0 +1,1434 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WSF Hub — Internal Tools</title>
+<meta name="description" content="Internal hub for WilliamSmith Fireplaces employees." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,500;0,8..60,600;1,8..60,500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* Colors — warm paper / dark ink, orange action accent matched to customer site */
+    --bg:           #f6f1ea;        /* warm paper */
+    --bg-elev:      #fbf8f3;        /* card surface */
+    --bg-sunk:      #ede6dc;        /* recessed wells */
+    --ink:          #1c1714;        /* near-black, warm */
+    --ink-2:        #4a423b;        /* secondary text */
+    --ink-3:        #8b8278;        /* tertiary / labels */
+    --rule:         #e2d8c8;        /* divider lines */
+    --rule-strong:  #c8bba5;
+    --accent:       #e07a2c;        /* WSF orange */
+    --accent-deep:  #b85d18;
+    --accent-soft:  #f6e3d0;
+    --ok:           #4f7a3a;
+    --warn:         #c08a1a;
+    --bad:          #b04a2c;
+
+    --radius-sm: 6px;
+    --radius:    10px;
+    --radius-lg: 14px;
+
+    --font-ui:    'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-display: 'Source Serif 4', 'Source Serif Pro', Georgia, serif;
+    --font-mono:  'JetBrains Mono', ui-monospace, Menlo, monospace;
+
+    --shadow-sm: 0 1px 0 rgba(28,23,20,0.04), 0 1px 2px rgba(28,23,20,0.04);
+    --shadow:    0 1px 0 rgba(28,23,20,0.04), 0 4px 12px rgba(28,23,20,0.06);
+    --shadow-lg: 0 1px 0 rgba(28,23,20,0.04), 0 12px 32px rgba(28,23,20,0.10);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    min-height: 100vh;
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  /* Subtle paper grain — very low contrast diagonal stripes */
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    pointer-events: none;
+    background-image: repeating-linear-gradient(
+      135deg,
+      rgba(28,23,20,0.012) 0 1px,
+      transparent 1px 6px
+    );
+    z-index: 0;
+  }
+
+  /* ─── Gate ─── */
+  .gate {
+    position: fixed; inset: 0;
+    z-index: 50;
+    display: grid; place-items: center;
+    background: var(--bg);
+    transition: opacity .35s ease, visibility .35s;
+  }
+  .gate.hidden { opacity: 0; visibility: hidden; }
+  .gate-card {
+    width: min(420px, calc(100% - 32px));
+    background: var(--bg-elev);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    padding: 36px 32px 28px;
+    box-shadow: var(--shadow-lg);
+    text-align: left;
+  }
+  .gate-mark {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 28px;
+  }
+  .gate-mark .logo-glyph { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; box-shadow: 0 2px 8px rgba(28,23,20,0.15); }
+  .gate-mark span {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .gate h1 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 26px;
+    line-height: 1.2;
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+  .gate p {
+    color: var(--ink-2);
+    font-size: 14px;
+    margin: 0 0 22px;
+    line-height: 1.5;
+  }
+  .gate-form { display: flex; flex-direction: column; gap: 10px; }
+  .gate-input {
+    width: 100%;
+    height: 44px;
+    padding: 0 14px;
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    font: 500 15px var(--font-ui);
+    color: var(--ink);
+    outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .gate-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(224,122,44,0.15);
+  }
+  .gate-input.error {
+    border-color: var(--bad);
+    animation: shake .35s;
+  }
+  @keyframes shake {
+    0%,100%{ transform: translateX(0); }
+    25%{ transform: translateX(-4px); }
+    75%{ transform: translateX(4px); }
+  }
+  .gate-btn {
+    height: 44px;
+    border: 0;
+    border-radius: var(--radius);
+    background: var(--ink);
+    color: var(--bg);
+    font: 600 14px var(--font-ui);
+    letter-spacing: 0.01em;
+    cursor: pointer;
+    transition: background .15s, transform .05s;
+  }
+  .gate-btn:hover { background: #2a2320; }
+  .gate-btn:active { transform: translateY(1px); }
+  .gate-foot {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    color: var(--ink-3);
+    display: flex; justify-content: space-between;
+  }
+  .gate-error {
+    color: var(--bad);
+    font-size: 12.5px;
+    min-height: 16px;
+    margin: 4px 2px 0;
+  }
+
+  /* ─── App shell ─── */
+  .app {
+    position: relative;
+    z-index: 1;
+    min-height: 100vh;
+    display: flex; flex-direction: column;
+    opacity: 0;
+    transition: opacity .4s ease;
+  }
+  .app.ready { opacity: 1; }
+
+  /* Header */
+  header {
+    border-bottom: 1px solid var(--rule);
+    background: rgba(246,241,234,0.85);
+    backdrop-filter: blur(8px);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .header-inner {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 14px 28px;
+    display: flex; align-items: center; gap: 24px;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    text-decoration: none;
+    color: inherit;
+  }
+  .logo-glyph {
+    width: 36px; height: 36px;
+    flex: 0 0 auto;
+    border-radius: 6px;
+    object-fit: cover;
+    box-shadow: 0 1px 3px rgba(28,23,20,0.18);
+  }
+  .gate-mark .logo-glyph { width: 56px; height: 56px; }
+  .brand-name {
+    display: flex; flex-direction: column; line-height: 1;
+  }
+  .brand-name .word {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 17px;
+    letter-spacing: -0.005em;
+  }
+  .brand-name .sub {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-top: 4px;
+  }
+
+  .header-meta {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 14px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-2);
+  }
+  .header-date {
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .status-row { display: flex; gap: 8px; }
+  .status-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 9px 5px 8px;
+    background: var(--bg-elev);
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    color: var(--ink-2);
+    cursor: default;
+    transition: border-color .15s;
+  }
+  .status-chip:hover { border-color: var(--rule-strong); }
+  .status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 0 2px rgba(79,122,58,0.18);
+    flex: 0 0 auto;
+  }
+  .status-chip.warn .status-dot { background: var(--warn); box-shadow: 0 0 0 2px rgba(192,138,26,0.18); }
+  .status-chip.bad  .status-dot { background: var(--bad);  box-shadow: 0 0 0 2px rgba(176,74,44,0.18); }
+
+  /* Hero */
+  main {
+    flex: 1;
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 64px 28px 80px;
+    width: 100%;
+  }
+
+  .hero {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 12px;
+    background: var(--accent-soft);
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent-deep);
+    margin-bottom: 20px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--accent);
+  }
+  h1.hero-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(34px, 5vw, 48px);
+    line-height: 1.08;
+    letter-spacing: -0.018em;
+    margin: 0 0 14px;
+    color: var(--ink);
+    text-wrap: balance;
+  }
+  h1.hero-title em {
+    font-style: italic;
+    color: var(--accent-deep);
+    font-weight: 500;
+  }
+  .hero-sub {
+    font-size: 15.5px;
+    color: var(--ink-2);
+    margin: 0 auto;
+    max-width: 540px;
+    line-height: 1.55;
+    text-wrap: pretty;
+  }
+
+  /* Search label */
+  .search-label {
+    text-align: center;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 28px;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    margin: 12px 0 0;
+  }
+
+  /* Search */
+  .search-wrap {
+    margin: 36px auto 0;
+    max-width: 720px;
+    position: relative;
+  }
+  .search-shell {
+    background: var(--bg-elev);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    transition: border-color .15s, box-shadow .15s;
+    overflow: hidden;
+  }
+  .search-shell:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px rgba(224,122,44,0.12), var(--shadow);
+  }
+  .search-input-row {
+    display: flex; align-items: stretch;
+  }
+  .search-icon {
+    display: grid; place-items: center;
+    padding-left: 18px;
+    color: var(--ink-3);
+    flex: 0 0 auto;
+  }
+  .search-input {
+    flex: 1;
+    border: 0;
+    background: transparent;
+    padding: 18px 14px 18px 12px;
+    font: 400 16px var(--font-ui);
+    color: var(--ink);
+    outline: none;
+    resize: none;
+    line-height: 1.5;
+    font-family: var(--font-ui);
+    min-height: 56px;
+    max-height: 200px;
+  }
+  .search-input::placeholder { color: var(--ink-3); }
+  .search-actions {
+    display: flex; align-items: flex-end;
+    padding: 10px 10px 10px 0;
+  }
+  .ask-btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    height: 40px;
+    padding: 0 16px 0 14px;
+    background: var(--accent);
+    border: 0;
+    color: white;
+    border-radius: 8px;
+    font: 600 13.5px var(--font-ui);
+    cursor: pointer;
+    transition: background .15s, transform .05s;
+    letter-spacing: 0.005em;
+  }
+  .ask-btn:hover { background: var(--accent-deep); }
+  .ask-btn:active { transform: translateY(1px); }
+  .ask-btn:disabled { background: var(--rule-strong); cursor: not-allowed; }
+  .ask-btn svg { transition: transform .2s; }
+  .ask-btn:hover svg { transform: translateX(2px); }
+
+  .search-foot {
+    border-top: 1px solid var(--rule);
+    padding: 10px 16px;
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--ink-3);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .search-foot .kbd {
+    display: inline-flex; gap: 4px;
+  }
+  .kbd-key {
+    font-family: var(--font-mono);
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--ink-2);
+    font-size: 10px;
+  }
+
+  /* Suggestion chips */
+  .suggestions {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    justify-content: center;
+    margin-top: 18px;
+  }
+  .suggest-chip {
+    background: transparent;
+    border: 1px dashed var(--rule-strong);
+    color: var(--ink-2);
+    padding: 7px 12px;
+    border-radius: 999px;
+    font: 500 12.5px var(--font-ui);
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .suggest-chip:hover {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    border-style: solid;
+    color: var(--accent-deep);
+  }
+
+  /* Section heading */
+  .section {
+    margin-top: 64px;
+  }
+  .section-head {
+    display: flex; align-items: baseline; gap: 12px;
+    margin-bottom: 18px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .section-num {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .section-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 18px;
+    letter-spacing: -0.005em;
+    color: var(--ink);
+  }
+  .section-meta {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .section-meta a {
+    color: var(--ink-3);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--ink-3);
+    transition: color .15s, border-color .15s;
+  }
+  .section-meta a:hover { color: var(--accent); border-color: var(--accent); }
+  .section-meta button {
+    background: transparent; border: 0;
+    font: inherit; color: inherit;
+    cursor: pointer; padding: 0;
+    border-bottom: 1px dotted currentColor;
+  }
+  .section-meta button:hover { color: var(--accent); }
+
+  /* Tools grid */
+  .tools-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    grid-auto-rows: min-content;
+    align-items: start;
+    gap: 14px;
+  }
+  @media (min-width: 880px) {
+    .tools-grid { grid-template-columns: repeat(4, 1fr); }
+  }
+  @media (max-width: 520px) {
+    .tools-grid { grid-template-columns: 1fr; }
+    .header-meta .header-date { display: none; }
+  }
+  .tool-card {
+    display: flex; flex-direction: column;
+    background: var(--bg-elev);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    padding: 22px 22px 20px;
+    text-decoration: none;
+    color: inherit;
+    transition: border-color .15s, transform .15s, box-shadow .15s;
+    position: relative;
+    min-height: 168px;
+    align-self: start;
+  }
+  .tool-card:hover {
+    border-color: var(--rule-strong);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow);
+  }
+  .tool-icon {
+    width: 36px; height: 36px;
+    border-radius: 9px;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    display: grid; place-items: center;
+    margin-bottom: 14px;
+    transition: background .2s, color .2s;
+  }
+  .tool-card:hover .tool-icon {
+    background: var(--accent);
+    color: white;
+  }
+  .tool-name {
+    font: 600 15.5px var(--font-ui);
+    letter-spacing: -0.005em;
+    margin-bottom: 4px;
+  }
+  .tool-desc {
+    font-size: 13px;
+    color: var(--ink-2);
+    line-height: 1.45;
+    flex: 1;
+  }
+  .tool-sublist {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+    display: flex; flex-direction: column; gap: 4px;
+    font: 500 11.5px var(--font-mono);
+    color: var(--ink-3);
+    letter-spacing: 0.01em;
+  }
+  .tool-sublist li {
+    display: flex; align-items: center; gap: 7px;
+    line-height: 1.35;
+  }
+  .tool-sublist li::before {
+    content: "";
+    width: 4px; height: 4px;
+    border-radius: 50%;
+    background: var(--rule-strong);
+    flex: 0 0 auto;
+    transition: background .15s;
+  }
+  .tool-card:hover .tool-sublist li::before { background: var(--accent); }
+  .tool-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 14px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .tool-foot .arrow {
+    transition: transform .15s;
+  }
+  .tool-card:hover .tool-foot .arrow {
+    transform: translateX(3px);
+    color: var(--accent);
+  }
+
+  /* WIP bucket card */
+  /* Tool readiness battery (top-right corner of tile) */
+  .tool-battery {
+    position: absolute; top: 14px; right: 14px;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 9.5px; letter-spacing: 0.06em;
+    color: var(--ink-3); text-transform: uppercase;
+  }
+  .tool-battery .battery-shell {
+    width: 22px; height: 10px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 2px;
+    position: relative; padding: 1px;
+    display: block;
+  }
+  .tool-battery .battery-shell::after {
+    content: ""; position: absolute;
+    top: 2px; right: -3px; width: 2px; height: 4px;
+    background: var(--rule-strong); border-radius: 0 1px 1px 0;
+  }
+  .tool-battery .battery-fill {
+    display: block; height: 100%;
+    background: var(--accent);
+    border-radius: 1px;
+    transition: width .25s;
+  }
+  .tool-battery[data-pct="100"] .battery-fill { background: oklch(0.6 0.12 145); }
+  .tool-battery[data-pct="0"]   .battery-fill { background: var(--rule-strong); opacity: 0.4; }
+
+  .tool-card-bucket { cursor: default; }
+  .tool-card-bucket:hover { transform: none; border-color: var(--rule); box-shadow: var(--shadow); }
+  .tool-card-bucket:hover .tool-icon { background: var(--bg-sunk); color: var(--ink); }
+  .tool-card .wip-pill {
+    display: inline-block;
+    margin-left: 8px;
+    font: 600 9.5px var(--font-mono);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent-deep);
+    background: var(--accent-soft);
+    border: 1px solid #e8c8a3;
+    border-radius: 4px;
+    padding: 1px 6px;
+    vertical-align: 2px;
+  }
+  .wip-list {
+    list-style: none;
+    margin: 12px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .wip-list li { margin: 0; }
+  .wip-list a {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+    column-gap: 10px;
+    align-items: center;
+    padding: 10px 12px;
+    background: var(--bg-elev);
+    text-decoration: none;
+    color: var(--ink);
+    transition: background .12s, color .12s;
+  }
+  .wip-list a:hover { background: var(--bg); }
+  .wip-list .wip-name { font-weight: 600; font-size: 13px; }
+  .wip-list .wip-meta {
+    grid-column: 1 / 2;
+    font-size: 11.5px;
+    color: var(--ink-3);
+    line-height: 1.4;
+  }
+  .wip-list .arrow {
+    grid-column: 2 / 3;
+    grid-row: 1 / 3;
+    align-self: center;
+    color: var(--ink-3);
+    transition: transform .15s, color .15s;
+  }
+  .wip-list a:hover .arrow { color: var(--accent); transform: translateX(3px); }
+
+  /* Brainstorm card */
+  .tool-card-brainstorm { cursor: default; }
+  .tool-card-brainstorm:hover { transform: none; border-color: var(--rule); box-shadow: var(--shadow); }
+  .tool-card-brainstorm:hover .tool-icon { background: var(--bg-sunk); color: var(--ink); }
+  .brainstorm-area {
+    margin-top: 10px;
+    width: 100%;
+    min-height: 70px;
+    border: 1px dashed var(--rule-strong);
+    background: var(--bg);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: 13px var(--font-ui);
+    color: var(--ink);
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .brainstorm-area::placeholder { color: var(--ink-3); }
+  .brainstorm-area:focus { border-color: var(--accent); border-style: solid; box-shadow: 0 0 0 3px var(--accent-soft); }
+  .brainstorm-actions {
+    display: flex; align-items: center; gap: 10px;
+    margin-top: 10px;
+  }
+  .btn-save {
+    flex: 1;
+    background: var(--ink); color: var(--bg);
+    border: 0; border-radius: 8px;
+    padding: 9px 14px;
+    font: 600 13px var(--font-ui);
+    cursor: pointer;
+    transition: background .12s, transform .05s;
+  }
+  .btn-save:hover { background: #000; }
+  .btn-save:active { transform: translateY(1px); }
+  .btn-save:disabled { background: var(--bg-sunk); color: var(--ink-3); cursor: not-allowed; }
+  .brainstorm-count {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .brainstorm-list {
+    list-style: none;
+    margin: 12px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .brainstorm-list li {
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 8px 10px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+    column-gap: 8px;
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--ink);
+  }
+  .brainstorm-list .meta {
+    grid-column: 1 / 2;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-top: 3px;
+  }
+  .brainstorm-list .delete {
+    grid-column: 2 / 3;
+    grid-row: 1 / 3;
+    align-self: center;
+    background: transparent; border: 0;
+    color: var(--ink-3);
+    font-size: 16px; line-height: 1;
+    width: 22px; height: 22px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .brainstorm-list .delete:hover { background: var(--bg-sunk); color: var(--bad); }
+  .brainstorm-empty {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    text-align: center;
+    padding: 8px 0 2px;
+  }
+
+  /* Recent list */
+  .recents {
+    background: var(--bg-elev);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+  .recent-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--rule);
+    cursor: pointer;
+    background: transparent;
+    border-left: 0; border-right: 0; border-top: 0;
+    width: 100%;
+    text-align: left;
+    font: inherit; color: inherit;
+    transition: background .12s;
+  }
+  .recent-row:last-child { border-bottom: 0; }
+  .recent-row:hover { background: var(--bg-sunk); }
+  .recent-row .recent-icon {
+    width: 26px; height: 26px;
+    border-radius: 6px;
+    background: var(--bg-sunk);
+    color: var(--ink-3);
+    display: grid; place-items: center;
+    flex: 0 0 auto;
+    transition: background .15s, color .15s;
+  }
+  .recent-row:hover .recent-icon { background: var(--accent-soft); color: var(--accent-deep); }
+  .recent-text {
+    flex: 1;
+    font-size: 14px;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .recent-time {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--ink-3);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    flex: 0 0 auto;
+  }
+  .recent-empty {
+    padding: 36px 24px;
+    text-align: center;
+    color: var(--ink-3);
+    font-size: 13px;
+  }
+  .recent-empty .mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-top: 6px;
+    color: var(--ink-3);
+    opacity: .7;
+  }
+
+  /* Footer */
+  footer {
+    border-top: 1px solid var(--rule);
+    padding: 22px 28px;
+    margin-top: 60px;
+    color: var(--ink-3);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .footer-inner {
+    max-width: 1180px;
+    margin: 0 auto;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .footer-inner .sep { color: var(--rule-strong); }
+  .footer-inner a { color: inherit; text-decoration: none; border-bottom: 1px dotted currentColor; }
+  .footer-inner a:hover { color: var(--accent); }
+  .footer-right { margin-left: auto; }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 24px; left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--ink);
+    color: var(--bg);
+    padding: 11px 16px;
+    border-radius: 8px;
+    font: 500 13px var(--font-ui);
+    box-shadow: var(--shadow-lg);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s, transform .2s;
+    z-index: 30;
+  }
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+</style>
+</head>
+<body>
+
+<template id="__bundler_thumbnail">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+    <rect width="200" height="200" fill="#f6f1ea"/>
+    <g transform="translate(50 55) scale(1.0)">
+      <path d="M 4,42 C 4,40 6,38 8,37 L 22,30 L 38,23 L 54,18 L 68,15 L 80,15 L 88,18 C 90,20 91,23 92,26 L 94,34 L 95,42 L 94,50 L 91,57 L 86,63 L 78,69 L 68,74 L 56,78 L 44,80 L 34,76 C 28,72 24,66 20,58 L 14,46 L 8,46 Z" fill="#1c1714"/>
+      <g transform="translate(64 28) scale(1.3)">
+        <path d="M8 0 C 9 4, 14 6, 14 11 C 14 14, 11.5 15, 11 13 C 11 16, 13 18, 13 21 C 13 25, 10 27, 8 27 C 6 27, 3 25, 3 21 C 3 18, 5 16.5, 5 13.5 C 5 15.5, 2.5 15, 2.5 11.5 C 2.5 8, 6 6, 8 0 Z" fill="#e07a2c"/>
+      </g>
+    </g>
+  </svg>
+</template>
+
+<!-- ─── Logo glyph (used in multiple places) ─── -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="wsf-mark" viewBox="0 0 100 90">
+      <!-- South Carolina state silhouette - traced from public domain US states data.
+           Triangular wedge with: angular NW corner, gentle N border, curved Atlantic coast SE. -->
+      <path d="M 4,42
+               C 4,40 6,38 8,37
+               L 22,30 L 38,23 L 54,18 L 68,15 L 80,15 L 88,18
+               C 90,20 91,23 92,26
+               L 94,34 L 95,42 L 94,50 L 91,57 L 86,63
+               L 78,69 L 68,74 L 56,78 L 44,80 L 34,76
+               C 28,72 24,66 20,58
+               L 14,46 L 8,46 Z" fill="#1c1714"/>
+      <!-- Flame over Charleston / lowcountry -->
+      <g transform="translate(64 28) scale(1.3)">
+        <path d="M8 0 C 9 4, 14 6, 14 11 C 14 14, 11.5 15, 11 13 C 11 16, 13 18, 13 21 C 13 25, 10 27, 8 27 C 6 27, 3 25, 3 21 C 3 18, 5 16.5, 5 13.5 C 5 15.5, 2.5 15, 2.5 11.5 C 2.5 8, 6 6, 8 0 Z" fill="#e07a2c"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<!-- ─── Password gate ─── -->
+<div class="gate" id="gate">
+  <div class="gate-card">
+    <div class="gate-mark">
+      <img src="assets/wsf-mark-glyph.png" class="logo-glyph" alt="WilliamSmith Fireplaces" />
+      <span>WSF Hub · Internal</span>
+    </div>
+    <h1>Sign in to continue.</h1>
+    <p>This hub is for WilliamSmith Fireplaces employees. Enter the team passphrase to open the tools.</p>
+    <form class="gate-form" id="gateForm" autocomplete="off">
+      <input type="password" class="gate-input" id="gatePass" placeholder="Team passphrase" autofocus />
+      <div class="gate-error" id="gateError">&nbsp;</div>
+      <button type="submit" class="gate-btn">Open hub →</button>
+    </form>
+    <div class="gate-foot">
+      <span>WSF-HUB.COM</span>
+      <span id="gateDate"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ─── App ─── -->
+<div class="app" id="app">
+  <header>
+    <div class="header-inner">
+      <a class="brand" href="/">
+        <img src="assets/wsf-mark-glyph.png" class="logo-glyph" alt="WilliamSmith Fireplaces" />
+        <div class="brand-name">
+          <span class="word">WSF Hub</span>
+          <span class="sub">Internal · WilliamSmith Fireplaces</span>
+        </div>
+      </a>
+      <div class="header-meta">
+        <span class="header-date" id="headerDate"></span>
+        <div class="status-row" id="statusRow">
+          <span class="status-chip" title="Nightly Supabase sync ran 03:14 ET — all tables fresh">
+            <span class="status-dot"></span>SYNC OK
+          </span>
+          <span class="status-chip" title="Today's digest posted to Notion at 08:01 ET">
+            <span class="status-dot"></span>DIGEST POSTED
+          </span>
+          <span class="status-chip" title="MCP server reachable — last health check 200 OK">
+            <span class="status-dot"></span>MCP UP
+          </span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Search -->
+    <section class="hero">
+      <div class="search-label">Ask Anything…</div>
+      <div class="search-wrap">
+        <div class="search-shell">
+          <div class="search-input-row">
+            <div class="search-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="7"/>
+                <path d="m20 20-3.5-3.5"/>
+              </svg>
+            </div>
+            <textarea class="search-input" id="searchInput" placeholder="e.g. how many gas log installs on Kiawah in Q1 of this year" rows="1"></textarea>
+            <div class="search-actions">
+              <button class="ask-btn" id="askBtn" type="button">
+                Ask
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M5 12h14"/><path d="m13 5 7 7-7 7"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="search-foot">
+            <span>Routes to Claude · Ask WilliamSmith MCP</span>
+            <span class="kbd">
+              <span class="kbd-key">⌘</span><span class="kbd-key">↵</span> to send
+            </span>
+          </div>
+        </div>
+
+        <div class="suggestions" id="suggestions">
+          <button class="suggest-chip" data-q="Show me today's daily digest summary.">Today's digest</button>
+          <button class="suggest-chip" data-q="Which approved estimates have a deposit paid but no install date?">Deposit paid · no install date</button>
+          <button class="suggest-chip" data-q="What's our callback rate this week vs the 4-week average?">Callback rate</button>
+          <button class="suggest-chip" data-q="Top 5 reps by pipeline value right now.">Top reps</button>
+          <button class="suggest-chip" data-q="Any open tasks assigned to inactive employees?">Inactive assignments</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tools -->
+    <section class="section">
+      <div class="section-head">
+        <span class="section-num">01</span>
+        <span class="section-title">Tools</span>
+        <span class="section-meta">4 SHORTCUTS</span>
+      </div>
+      <div class="tools-grid">
+        <a class="tool-card" href="https://app.striven.com/" target="_blank" rel="noopener noreferrer">
+          <span class="tool-battery" data-pct="100" title="Connected"><span class="battery-shell"><span class="battery-fill" style="width:100%"></span></span>LIVE</span>
+          <div class="tool-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2"/>
+              <path d="M3 9h18"/><path d="M9 4v16"/>
+            </svg>
+          </div>
+          <div class="tool-name">Striven</div>
+          <div class="tool-desc">Estimates, invoices, tasks, customers.</div>
+          <div class="tool-foot">
+            <span>app.striven.com</span>
+            <span class="arrow">→</span>
+          </div>
+        </a>
+
+        <a class="tool-card" href="https://wsf-hub-tools.pages.dev/" target="_blank" rel="noopener noreferrer">
+          <span class="tool-battery" data-pct="72" title="72% of tool registry up to date"><span class="battery-shell"><span class="battery-fill" style="width:72%"></span></span>72%</span>
+          <div class="tool-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="5" width="18" height="14" rx="2"/>
+              <path d="M7 8v8"/><path d="M10 8v8"/><path d="M13 8v8"/><path d="M17 8v8"/>
+            </svg>
+          </div>
+          <div class="tool-name">Barcode Scanner for Inventory</div>
+          <div class="tool-desc">Field tool tracker — check-out, check-in, spot checks, asset registry.</div>
+          <ul class="tool-sublist">
+            <li>Scan barcodes &middot; Bluetooth/USB or camera</li>
+            <li>Log entries &middot; check-out / in / spot</li>
+            <li>Asset registry &middot; serials &amp; condition</li>
+            <li>Export &middot; PDF &amp; CSV scan log</li>
+          </ul>
+          <div class="tool-foot">
+            <span>wsf-hub-tools.pages.dev</span>
+            <span class="arrow">→</span>
+          </div>
+        </a>
+
+        <div class="tool-card tool-card-bucket" aria-label="Tools In Progress">
+          <div class="tool-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 7l3-3h12l3 3"/>
+              <path d="M3 7v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7"/>
+              <path d="M9 11h6"/>
+            </svg>
+          </div>
+          <div class="tool-name">Tools In Progress<span class="wip-pill">WIP</span></div>
+          <div class="tool-desc">Prototypes being road-tested. Click any to open.</div>
+          <ul class="wip-list">
+            <li>
+              <a href="https://www.notion.so/34ff2394ad6b8129bac1da9eedfef721" target="_blank" rel="noopener noreferrer">
+                <span class="wip-name">Daily Digest</span>
+                <span class="wip-meta">Notion · 8 AM operational flags</span>
+                <span class="arrow">→</span>
+              </a>
+            </li>
+            <li>
+              <a href="manuals.html">
+                <span class="wip-name">Install Manuals</span>
+                <span class="wip-meta">Searchable wiring · venting · gas · parts</span>
+                <span class="arrow">→</span>
+              </a>
+            </li>
+            <li>
+              <a href="estimate-checker.html">
+                <span class="wip-name">Estimate Checker</span>
+                <span class="wip-meta">Sales rep estimate audit · brand · margin · travel</span>
+                <span class="arrow">→</span>
+              </a>
+            </li>
+            <li>
+              <a href="scheduler.html">
+                <span class="wip-name">Route Planner</span>
+                <span class="wip-meta">Bridge-aware route optimization · run-sheets</span>
+                <span class="arrow">→</span>
+              </a>
+            </li>
+          </ul>
+        </div>
+
+        <div class="tool-card tool-card-brainstorm" aria-label="Brainstorming">
+          <div class="tool-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 18h6"/>
+              <path d="M10 22h4"/>
+              <path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2V18h6v-1.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2z"/>
+            </svg>
+          </div>
+          <div class="tool-name">Brainstorming</div>
+          <div class="tool-desc">Capture ideas and projects to revisit later. Saved on this device.</div>
+          <textarea id="brainstormPad" class="brainstorm-area" placeholder="Type an idea… ⌘+Enter to save"></textarea>
+          <div class="brainstorm-actions">
+            <button type="button" class="btn-save" id="brainstormSave">Save idea</button>
+            <span class="brainstorm-count" id="brainstormCount">0 saved</span>
+          </div>
+          <ul class="brainstorm-list" id="brainstormList"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Recent -->
+    <section class="section">
+      <div class="section-head">
+        <span class="section-num">02</span>
+        <span class="section-title">Recent questions</span>
+        <span class="section-meta">
+          <button id="clearRecents" type="button">Clear all</button>
+        </span>
+      </div>
+      <div class="recents" id="recentsList">
+        <div class="recent-empty">
+          No recent questions yet.
+          <div class="mono">Your last 8 will appear here.</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-inner">
+      <span>© 2026 WilliamSmith Fireplaces</span>
+      <span class="sep">·</span>
+      <a href="https://williamsmithfireplaces.com" target="_blank" rel="noopener noreferrer">Customer site</a>
+      <span class="sep">·</span>
+      <span>Internal use only</span>
+      <span class="footer-right">v1.0.0</span>
+    </div>
+  </footer>
+</div>
+
+<div class="toast" id="toast">Saved.</div>
+
+<script>
+(() => {
+  // ─── Config ────────────────────────────────────────────────
+  // Shared password (client-side hash). Default: "fireplace"
+  // To change: open the browser console, run:
+  //   await crypto.subtle.digest('SHA-256', new TextEncoder().encode('your-new-password'))
+  //     .then(b => Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join(''));
+  // Then paste the result below.
+  // SHA-256 of the team passphrase. To rotate, run in the browser console:
+  //   crypto.subtle.digest('SHA-256', new TextEncoder().encode('new-pass'))
+  //     .then(b => console.log([...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')))
+  // Then paste the result below. For real security, layer Cloudflare Access on this domain.
+  // Accepts either "fireplace" or "fireplaces".
+  const PASS_HASHES = [
+    'b9e00cabae41376d78919263b4c3eaded3f6f38ae8f84164d913af323576d60b', // fireplace
+    'ced3d576ec8d770463b478be7c152e44862d35153438f71e6529a1c2d1bf8ae9'  // fireplaces
+  ];
+  const PLAINTEXT_FALLBACK = null;
+
+  const STORAGE_AUTH = 'wsfhub.auth.v1';
+  const STORAGE_RECENTS = 'wsfhub.recents.v1';
+  const MAX_RECENTS = 8;
+
+  // ─── Helpers ───────────────────────────────────────────────
+  const $ = (s, root = document) => root.querySelector(s);
+  const $$ = (s, root = document) => [...root.querySelectorAll(s)];
+
+  async function sha256(text) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  function fmtDate(d = new Date()) {
+    const day = d.toLocaleDateString('en-US', { weekday: 'long' });
+    const m = d.toLocaleDateString('en-US', { month: 'short' });
+    const dd = d.getDate();
+    const yyyy = d.getFullYear();
+    return `${day}, ${m} ${dd}, ${yyyy}`;
+  }
+  function fmtRelative(ts) {
+    const diff = (Date.now() - ts) / 1000;
+    if (diff < 60) return 'JUST NOW';
+    if (diff < 3600) return Math.floor(diff/60) + 'M AGO';
+    if (diff < 86400) return Math.floor(diff/3600) + 'H AGO';
+    if (diff < 86400*7) return Math.floor(diff/86400) + 'D AGO';
+    return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
+  }
+
+  function showToast(msg) {
+    const t = $('#toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._h);
+    t._h = setTimeout(() => t.classList.remove('show'), 1800);
+  }
+
+  // ─── Date in header + gate ─────────────────────────────────
+  $('#headerDate').textContent = fmtDate().toUpperCase();
+  $('#gateDate').textContent = new Date().toLocaleDateString('en-US', {
+    month: '2-digit', day: '2-digit', year: '2-digit'
+  }).replace(/\//g, '.');
+
+  // ─── Gate ──────────────────────────────────────────────────
+  const gate = $('#gate');
+  const app = $('#app');
+
+  function unlock() {
+    sessionStorage.setItem(STORAGE_AUTH, '1');
+    gate.classList.add('hidden');
+    requestAnimationFrame(() => app.classList.add('ready'));
+    // Focus search after fade
+    setTimeout(() => $('#searchInput').focus(), 350);
+  }
+
+  if (sessionStorage.getItem(STORAGE_AUTH) === '1') {
+    unlock();
+  }
+
+  $('#gateForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const inp = $('#gatePass');
+    const err = $('#gateError');
+    const val = inp.value.trim();
+    if (!val) return;
+
+    const hash = await sha256(val);
+    const ok = PASS_HASHES.includes(hash) || (PLAINTEXT_FALLBACK && val === PLAINTEXT_FALLBACK);
+    if (ok) {
+      err.textContent = '';
+      inp.classList.remove('error');
+      unlock();
+    } else {
+      err.textContent = 'That passphrase didn\u2019t match. Try again.';
+      inp.classList.add('error');
+      inp.value = '';
+      inp.focus();
+      setTimeout(() => inp.classList.remove('error'), 400);
+    }
+  });
+
+  // ─── Search ────────────────────────────────────────────────
+  const searchInput = $('#searchInput');
+  const askBtn = $('#askBtn');
+
+  function autosize() {
+    searchInput.style.height = 'auto';
+    searchInput.style.height = Math.min(searchInput.scrollHeight, 200) + 'px';
+  }
+  searchInput.addEventListener('input', autosize);
+
+  function ask(question) {
+    const q = (question || '').trim();
+    if (!q) {
+      searchInput.focus();
+      return;
+    }
+    saveRecent(q);
+    // Route to Claude.ai with the question as a prefilled prompt.
+    // The "Ask WilliamSmith" project on Claude.ai is connected to the MCP server,
+    // so any new chat there has Striven/Supabase data in context.
+    // claude.ai/new accepts a `q` query param for prefilled prompts.
+    const url = 'https://claude.ai/new?q=' + encodeURIComponent(q);
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
+  askBtn.addEventListener('click', () => ask(searchInput.value));
+  searchInput.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      ask(searchInput.value);
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      ask(searchInput.value);
+    }
+  });
+
+  // Suggestion chips
+  $$('.suggest-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      searchInput.value = chip.dataset.q;
+      autosize();
+      searchInput.focus();
+    });
+  });
+
+  // ─── Recents ───────────────────────────────────────────────
+  function loadRecents() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_RECENTS) || '[]'); }
+    catch { return []; }
+  }
+  function saveRecent(q) {
+    const list = loadRecents().filter(r => r.q !== q);
+    list.unshift({ q, t: Date.now() });
+    localStorage.setItem(STORAGE_RECENTS, JSON.stringify(list.slice(0, MAX_RECENTS)));
+    renderRecents();
+  }
+  function clearRecents() {
+    localStorage.removeItem(STORAGE_RECENTS);
+    renderRecents();
+    showToast('Recent questions cleared.');
+  }
+  function renderRecents() {
+    const list = loadRecents();
+    const root = $('#recentsList');
+    if (!list.length) {
+      root.innerHTML = `
+        <div class="recent-empty">
+          No recent questions yet.
+          <div class="mono">Your last ${MAX_RECENTS} will appear here.</div>
+        </div>`;
+      return;
+    }
+    root.innerHTML = list.map((r, i) => `
+      <button class="recent-row" data-i="${i}" type="button" title="Click to ask again">
+        <span class="recent-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/>
+          </svg>
+        </span>
+        <span class="recent-text">${escapeHtml(r.q)}</span>
+        <span class="recent-time">${fmtRelative(r.t)}</span>
+      </button>
+    `).join('');
+    $$('.recent-row', root).forEach(row => {
+      row.addEventListener('click', () => {
+        const i = +row.dataset.i;
+        const q = loadRecents()[i]?.q;
+        if (q) {
+          searchInput.value = q;
+          autosize();
+          ask(q);
+        }
+      });
+    });
+  }
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  $('#clearRecents').addEventListener('click', clearRecents);
+  renderRecents();
+
+  // ─── Brainstorm pad ────────────────────────────────────────
+  const STORAGE_BRAINSTORM = 'wsfhub.brainstorm.v2';
+  const pad = $('#brainstormPad');
+  const saveBtn = $('#brainstormSave');
+  const countEl = $('#brainstormCount');
+  const listEl = $('#brainstormList');
+
+  function loadIdeas() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_BRAINSTORM) || '[]'); }
+    catch { return []; }
+  }
+  function storeIdeas(arr) {
+    localStorage.setItem(STORAGE_BRAINSTORM, JSON.stringify(arr));
+  }
+  function fmtAgo(ts) {
+    const s = Math.round((Date.now() - ts) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.round(s/60) + 'm ago';
+    if (s < 86400) return Math.round(s/3600) + 'h ago';
+    if (s < 604800) return Math.round(s/86400) + 'd ago';
+    return new Date(ts).toLocaleDateString();
+  }
+  function renderIdeas() {
+    const ideas = loadIdeas();
+    countEl.textContent = `${ideas.length} saved`;
+    listEl.innerHTML = '';
+    if (!ideas.length) {
+      const empty = document.createElement('li');
+      empty.className = 'brainstorm-empty';
+      empty.textContent = 'No ideas yet.';
+      empty.style.background = 'transparent';
+      empty.style.border = '0';
+      empty.style.display = 'block';
+      listEl.appendChild(empty);
+      return;
+    }
+    ideas.forEach((it, i) => {
+      const li = document.createElement('li');
+      const txt = document.createElement('div');
+      txt.textContent = it.text;
+      txt.style.gridColumn = '1 / 2';
+      txt.style.whiteSpace = 'pre-wrap';
+      txt.style.wordBreak = 'break-word';
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      meta.textContent = fmtAgo(it.t);
+      const del = document.createElement('button');
+      del.className = 'delete';
+      del.title = 'Delete idea';
+      del.setAttribute('aria-label', 'Delete idea');
+      del.innerHTML = '×';
+      del.addEventListener('click', () => {
+        const cur = loadIdeas();
+        cur.splice(i, 1);
+        storeIdeas(cur);
+        renderIdeas();
+        showToast('Idea deleted.');
+      });
+      li.appendChild(txt);
+      li.appendChild(meta);
+      li.appendChild(del);
+      listEl.appendChild(li);
+    });
+  }
+  function saveIdea() {
+    const v = pad.value.trim();
+    if (!v) { pad.focus(); return; }
+    const ideas = loadIdeas();
+    ideas.unshift({ text: v, t: Date.now() });
+    storeIdeas(ideas);
+    pad.value = '';
+    renderIdeas();
+    showToast('Idea saved.');
+  }
+  saveBtn.addEventListener('click', saveIdea);
+  pad.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      saveIdea();
+    }
+  });
+  // Refresh "Xm ago" labels every minute
+  setInterval(renderIdeas, 60000);
+  renderIdeas();
+
+  // Global ⌘K / Ctrl-K to focus search
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      searchInput.focus();
+      searchInput.select();
+    }
+  });
+})();
+</script>
+</body>
+</html>
