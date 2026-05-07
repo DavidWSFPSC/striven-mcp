@@ -169,6 +169,12 @@
   .card.secondary .card-accent {
     background: var(--ink-3);
   }
+  .card.tertiary .card-accent {
+    background: var(--ok, #4f7a3a);
+  }
+  .card.tertiary .card-cta {
+    color: var(--ok, #4f7a3a);
+  }
 
   .card-title {
     font-family: var(--font-display);
@@ -272,6 +278,18 @@
           <span class="chip">MCP</span>
         </div>
         <div class="card-cta">Ask anything →</div>
+      </a>
+
+      <a href="/triage" class="card tertiary">
+        <div class="card-accent"></div>
+        <div class="card-title">AI Triage System</div>
+        <div class="card-desc">Collaborative build plan for service intake, callback prevention, and dispatch routing.</div>
+        <div class="card-chips">
+          <span class="chip">Twilio</span>
+          <span class="chip">Make.com</span>
+          <span class="chip">Claude API</span>
+        </div>
+        <div class="card-cta">Open workspace →</div>
       </a>
 
     </div>

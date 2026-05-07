@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI Triage & Dispatch System — WSF Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,500;0,8..60,600;1,8..60,500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg:          #f6f1ea;
+    --bg-elev:     #fbf8f3;
+    --bg-sunk:     #ede6dc;
+    --ink:         #1c1714;
+    --ink-2:       #4a423b;
+    --ink-3:       #8b8278;
+    --rule:        #e2d8c8;
+    --rule-strong: #c8bba5;
+    --accent:      #e07a2c;
+    --accent-deep: #b85d18;
+    --accent-soft: #f6e3d0;
+    --ok:          #4f7a3a;
+    --ok-soft:     #eaf2e6;
+    --warn:        #c08a1a;
+    --warn-soft:   #fdf3d8;
+    --bad:         #b04a2c;
+    --bad-soft:    #faeae6;
+    --muted-soft:  #ede6dc;
+    --radius-sm: 6px;
+    --radius:    10px;
+    --radius-lg: 14px;
+    --font-ui:      'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-display: 'Source Serif 4', Georgia, serif;
+    --font-mono:    'JetBrains Mono', ui-monospace, monospace;
+    --shadow-sm: 0 1px 0 rgba(28,23,20,0.04), 0 1px 2px rgba(28,23,20,0.04);
+    --shadow:    0 1px 0 rgba(28,23,20,0.04), 0 4px 12px rgba(28,23,20,0.06);
+    --shadow-lg: 0 1px 0 rgba(28,23,20,0.04), 0 12px 32px rgba(28,23,20,0.10);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg);
+    color: var(--ink);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body::before {
+    content: "";
+    position: fixed; inset: 0; pointer-events: none;
+    background-image: repeating-linear-gradient(135deg, rgba(28,23,20,0.012) 0 1px, transparent 1px 6px);
+    z-index: 0;
+  }
+
+  /* ── Layout ── */
+  .page { position: relative; z-index: 1; max-width: 900px; margin: 0 auto; padding: 0 24px 80px; }
+
+  /* ── Site header ── */
+  .site-header {
+    position: relative; z-index: 1;
+    border-bottom: 1px solid var(--rule);
+    background: var(--bg-elev);
+    padding: 14px 28px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .brand-mark { width: 28px; height: 28px; flex-shrink: 0; color: var(--accent); }
+  .brand-name { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--ink); }
+  .brand-sub  { font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+  .header-right { margin-left: auto; }
+  .back-btn {
+    font-size: 12px; font-weight: 600; color: var(--ink-3);
+    border: 1px solid var(--rule); border-radius: var(--radius-sm);
+    background: transparent; padding: 5px 12px; cursor: pointer;
+    text-decoration: none; display: inline-flex; align-items: center; gap: 5px;
+    transition: border-color .12s, color .12s;
+  }
+  .back-btn:hover { border-color: var(--rule-strong); color: var(--ink); }
+
+  /* ── Page header ── */
+  .page-hero {
+    padding: 40px 0 32px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 36px;
+  }
+  .page-eyebrow {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 10px;
+  }
+  .page-title {
+    font-family: var(--font-display);
+    font-size: clamp(24px, 3.5vw, 34px);
+    font-weight: 600; color: var(--ink);
+    letter-spacing: -0.02em; line-height: 1.15;
+    margin: 0 0 10px;
+  }
+  .page-sub { font-size: 14px; color: var(--ink-2); line-height: 1.6; max-width: 600px; margin-bottom: 16px; }
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 4px 12px; border-radius: 99px;
+    background: var(--warn-soft); color: var(--warn);
+    border: 1px solid rgba(192,138,26,0.3);
+  }
+  .status-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+
+  /* ── Draft mode notice ── */
+  .draft-notice {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg-sunk); border: 1px solid var(--rule);
+    border-radius: var(--radius); padding: 10px 14px;
+    font-size: 12px; color: var(--ink-3); margin-bottom: 36px;
+  }
+  .draft-notice strong { color: var(--ink-2); }
+
+  /* ── Section titles ── */
+  .section-title {
+    font-family: var(--font-display);
+    font-size: 18px; font-weight: 600; color: var(--ink);
+    letter-spacing: -0.01em; margin: 0 0 4px;
+  }
+  .section-sub { font-size: 13px; color: var(--ink-3); margin: 0 0 20px; }
+  .section-divider { border: none; border-top: 1px solid var(--rule); margin: 40px 0 32px; }
+
+  /* ── Overview grid ── */
+  .overview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 8px; }
+  @media (max-width: 640px) { .overview-grid { grid-template-columns: 1fr; } }
+
+  .overview-card {
+    background: var(--bg-elev); border: 1px solid var(--rule);
+    border-radius: var(--radius-lg); padding: 22px 20px;
+    box-shadow: var(--shadow-sm);
+  }
+  .overview-card-accent { width: 3px; height: 22px; border-radius: 2px; background: var(--accent); margin-bottom: 12px; }
+  .overview-card-title { font-size: 13px; font-weight: 700; color: var(--ink); letter-spacing: 0.01em; margin-bottom: 8px; text-transform: uppercase; font-size: 11px; }
+  .overview-card-body { font-size: 13px; color: var(--ink-2); line-height: 1.6; }
+  .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .tag {
+    font-size: 11px; font-weight: 500; padding: 2px 8px;
+    border-radius: 4px; background: var(--bg-sunk); color: var(--ink-3);
+    border: 1px solid var(--rule); font-family: var(--font-mono);
+  }
+  .tag.accent { background: var(--accent-soft); color: var(--accent-deep); border-color: rgba(224,122,44,0.25); font-family: var(--font-ui); font-weight: 600; }
+
+  /* ── Metrics ── */
+  .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 560px) { .metrics-grid { grid-template-columns: 1fr; } }
+
+  .metric-card {
+    background: var(--bg-elev); border: 1px solid var(--rule);
+    border-radius: var(--radius); padding: 18px 18px 16px;
+    box-shadow: var(--shadow-sm);
+  }
+  .metric-label { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+  .metric-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .metric-current { font-family: var(--font-display); font-size: 24px; font-weight: 600; color: var(--bad); }
+  .metric-arrow { color: var(--ink-3); font-size: 16px; }
+  .metric-target { font-family: var(--font-display); font-size: 20px; font-weight: 600; color: var(--ok); }
+  .metric-bar-track { height: 6px; background: var(--bg-sunk); border-radius: 3px; overflow: hidden; }
+  .metric-bar-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--bad), var(--accent)); }
+  .metric-sub { font-size: 12px; color: var(--ink-3); margin-top: 6px; line-height: 1.4; }
+
+  /* ── Architecture flow ── */
+  .arch-flow {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+    background: var(--bg-elev); border: 1px solid var(--rule);
+    border-radius: var(--radius-lg); padding: 24px 20px;
+    box-shadow: var(--shadow-sm);
+  }
+  .arch-node {
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    flex: 1 1 90px; min-width: 80px;
+  }
+  .arch-icon {
+    width: 48px; height: 48px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+    border: 1px solid var(--rule);
+    background: var(--bg);
+  }
+  .arch-label { font-size: 11px; font-weight: 600; color: var(--ink-2); text-align: center; }
+  .arch-sub { font-size: 10px; color: var(--ink-3); text-align: center; }
+  .arch-arrow { color: var(--accent); font-size: 18px; flex-shrink: 0; }
+
+  /* ── Phases ── */
+  .phases-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 580px) { .phases-grid { grid-template-columns: 1fr; } }
+
+  .phase-card {
+    background: var(--bg-elev); border: 1px solid var(--rule);
+    border-radius: var(--radius); padding: 18px 18px 16px;
+    box-shadow: var(--shadow-sm);
+  }
+  .phase-badge {
+    display: inline-block; font-size: 10px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 4px; margin-bottom: 10px;
+    background: var(--accent-soft); color: var(--accent-deep);
+    border: 1px solid rgba(224,122,44,0.25);
+  }
+  .phase-title { font-size: 14px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
+  .phase-timeline { font-size: 11px; font-weight: 600; color: var(--ink-3); letter-spacing: 0.04em; margin-bottom: 8px; }
+  .phase-body { font-size: 12px; color: var(--ink-2); line-height: 1.55; }
+
+  /* ── Decisions ── */
+  .decisions-list { display: flex; flex-direction: column; gap: 14px; }
+
+  .decision-card {
+    background: var(--bg-elev); border: 1px solid var(--rule);
+    border-radius: var(--radius); padding: 18px 18px 16px;
+    box-shadow: var(--shadow-sm);
+  }
+  .decision-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .decision-q { font-size: 14px; font-weight: 600; color: var(--ink); line-height: 1.4; flex: 1; }
+  .status-select {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+    border: 1px solid var(--rule); border-radius: var(--radius-sm);
+    padding: 3px 8px; background: var(--bg); color: var(--ink-2);
+    cursor: pointer; flex-shrink: 0;
+    font-family: var(--font-ui);
+  }
+  .status-select[data-status="Draft"]     { background: var(--muted-soft); color: var(--ink-3); }
+  .status-select[data-status="In Review"] { background: var(--warn-soft);  color: var(--warn); border-color: rgba(192,138,26,.3); }
+  .status-select[data-status="Approved"]  { background: var(--ok-soft);    color: var(--ok);   border-color: rgba(79,122,58,.3); }
+  .status-select[data-status="Parked"]    { background: var(--bg-sunk);    color: var(--ink-3); }
+
+  .decision-rec {
+    font-size: 13px; color: var(--ink-2); line-height: 1.55;
+    background: var(--bg-sunk); border-left: 3px solid var(--accent);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    padding: 8px 12px; margin-bottom: 12px;
+  }
+  .decision-rec-label { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
+
+  .decision-fields { display: grid; grid-template-columns: 160px 1fr; gap: 10px; align-items: start; }
+  @media (max-width: 500px) { .decision-fields { grid-template-columns: 1fr; } }
+
+  .field-label { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); padding-top: 7px; }
+  .field-input {
+    width: 100%; font-size: 13px; font-family: var(--font-ui); color: var(--ink);
+    background: var(--bg); border: 1px solid var(--rule);
+    border-radius: var(--radius-sm); padding: 6px 10px;
+    resize: none; line-height: 1.5;
+    transition: border-color .12s, box-shadow .12s;
+  }
+  .field-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .field-input::placeholder { color: var(--ink-3); }
+
+  /* ── Next Actions ── */
+  .actions-list { display: flex; flex-direction: column; gap: 8px; }
+
+  .action-item {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--bg-elev); border: 1px solid var(--rule);
+    border-radius: var(--radius); padding: 12px 16px;
+    box-shadow: var(--shadow-sm);
+    transition: opacity .15s;
+  }
+  .action-item.done { opacity: 0.55; }
+  .action-item.done .action-text { text-decoration: line-through; color: var(--ink-3); }
+
+  .action-check {
+    width: 20px; height: 20px; border-radius: 5px; flex-shrink: 0;
+    border: 2px solid var(--rule); background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: border-color .12s, background .12s;
+  }
+  .action-check.checked { border-color: var(--ok); background: var(--ok); }
+  .action-check.checked::after { content: "✓"; font-size: 12px; color: white; font-weight: 700; }
+
+  .action-text { font-size: 13px; color: var(--ink); flex: 1; }
+  .action-owner {
+    font-size: 11px; color: var(--ink-3); flex-shrink: 0;
+    border: 1px solid var(--rule); border-radius: 99px;
+    padding: 2px 9px; background: var(--bg-sunk);
+    cursor: pointer;
+  }
+  .action-owner:hover { border-color: var(--rule-strong); }
+
+  /* ── Callout box ── */
+  .callout {
+    background: var(--accent-soft); border-left: 4px solid var(--accent);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 14px 16px; font-size: 13px; color: var(--ink-2); line-height: 1.6;
+    margin-bottom: 20px;
+  }
+  .callout strong { color: var(--accent-deep); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; display: block; margin-bottom: 5px; }
+
+  /* ── Save notice ── */
+  .save-toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--ink); color: #fff;
+    font-size: 12px; font-weight: 600; padding: 8px 16px;
+    border-radius: 99px; opacity: 0;
+    transition: opacity .2s; pointer-events: none;
+    z-index: 100;
+  }
+  .save-toast.visible { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <svg class="brand-mark" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+    <rect x="2" y="2" width="24" height="24" stroke="currentColor" stroke-width="1.3"/>
+    <line x1="2" y1="10" x2="26" y2="10" stroke="currentColor" stroke-width="1.3"/>
+    <line x1="2" y1="18" x2="26" y2="18" stroke="currentColor" stroke-width="1.3"/>
+    <line x1="10" y1="2" x2="10" y2="26" stroke="currentColor" stroke-width="1.3"/>
+    <circle cx="18" cy="14" r="2.2" fill="currentColor"/>
+  </svg>
+  <div>
+    <div class="brand-name">WSF Hub</div>
+    <div class="brand-sub">WilliamSmith Fireplaces</div>
+  </div>
+  <div class="header-right">
+    <a href="/" class="back-btn">← Home</a>
+  </div>
+</header>
+
+<div class="page">
+
+  <!-- Page hero -->
+  <div class="page-hero">
+    <div class="page-eyebrow">Project Workspace</div>
+    <h1 class="page-title">AI Triage &amp; Dispatch System</h1>
+    <p class="page-sub">System design, execution blueprint, and collaborative decision log for service intake automation, callback prevention, and zone-based dispatch routing.</p>
+    <span class="status-pill">Planning Draft</span>
+  </div>
+
+  <!-- Draft mode notice -->
+  <div class="draft-notice">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span><strong>Local draft mode</strong> — decisions and actions save to your browser. Shared Notion collaboration pending.</span>
+  </div>
+
+  <!-- Overview -->
+  <div class="section-title">Overview</div>
+  <div class="section-sub">Four dimensions of the build</div>
+  <div class="overview-grid">
+
+    <div class="overview-card">
+      <div class="overview-card-accent"></div>
+      <div class="overview-card-title">Business Opportunity</div>
+      <div class="overview-card-body">
+        72.5% of service callbacks are non-billable — issues that could be resolved remotely through guided troubleshooting. Five categories drive the majority: Service/Adjustment (33%), Defective Parts (32%), User Error (17%), Battery Failures (7%), Wind/Venting (11%). Every unnecessary dispatch consumes technician capacity reserved for billable work.
+      </div>
+    </div>
+
+    <div class="overview-card">
+      <div class="overview-card-accent"></div>
+      <div class="overview-card-title">Target Outcomes</div>
+      <div class="overview-card-body">
+        <div style="font-size:12px;line-height:1.8;color:var(--ink-2)">
+          <div>Non-billable rate: <strong style="color:var(--bad)">72.5%</strong> → <strong style="color:var(--ok)">&lt;40%</strong></div>
+          <div>Intake: <strong style="color:var(--ink)">Variable/manual</strong> → <strong style="color:var(--ok)">100% structured</strong></div>
+          <div>Dispatch time: <strong style="color:var(--ink)">Manual review</strong> → <strong style="color:var(--ok)">&lt;90 seconds</strong></div>
+          <div>Utilization: <strong style="color:var(--ink)">Unoptimized</strong> → <strong style="color:var(--ok)">Max 7 jobs/tech/day</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="overview-card">
+      <div class="overview-card-accent"></div>
+      <div class="overview-card-title">System Stack</div>
+      <div class="overview-card-body">Claude (Anthropic AI) as the triage brain — no OpenAI. Make.com as the no-code automation layer. Twilio for all telephony and SMS. Striven CRM as system of record. Birdeye for post-service review triggers.</div>
+      <div class="tag-row">
+        <span class="tag">Twilio</span>
+        <span class="tag">Make.com</span>
+        <span class="tag">Claude API</span>
+        <span class="tag">Striven</span>
+        <span class="tag">Birdeye</span>
+      </div>
+    </div>
+
+    <div class="overview-card">
+      <div class="overview-card-accent"></div>
+      <div class="overview-card-title">Implementation Phases</div>
+      <div class="overview-card-body" style="font-size:12px;line-height:1.8;color:var(--ink-2)">
+        <div><strong style="color:var(--accent)">Phase 1</strong> — Foundation (Days 1–7)</div>
+        <div><strong style="color:var(--accent)">Phase 2</strong> — Triage Logic &amp; Scoring (Days 5–14)</div>
+        <div><strong style="color:var(--accent)">Phase 3</strong> — Monitor &amp; Refine (Days 14–30)</div>
+        <div><strong style="color:var(--accent)">Phase 4</strong> — Full Automation (Days 30–60)</div>
+      </div>
+    </div>
+
+  </div>
+
+  <hr class="section-divider" />
+
+  <!-- Key Metrics -->
+  <div class="section-title">Key Metrics</div>
+  <div class="section-sub">Current state → target state</div>
+  <div class="metrics-grid">
+
+    <div class="metric-card">
+      <div class="metric-label">Non-billable callback rate</div>
+      <div class="metric-row">
+        <span class="metric-current">72.5%</span>
+        <span class="metric-arrow">→</span>
+        <span class="metric-target">&lt;40%</span>
+      </div>
+      <div class="metric-bar-track"><div class="metric-bar-fill" style="width:72.5%"></div></div>
+      <div class="metric-sub">Target: reduce by 45% within 90 days of full deployment via AI-guided troubleshooting</div>
+    </div>
+
+    <div class="metric-card">
+      <div class="metric-label">Intake structure</div>
+      <div class="metric-row">
+        <span class="metric-current" style="font-size:16px;line-height:1.2">Variable /<br>manual</span>
+        <span class="metric-arrow">→</span>
+        <span class="metric-target" style="font-size:16px;line-height:1.2">100%<br>structured</span>
+      </div>
+      <div class="metric-sub">Every inbound contact produces a fully structured Striven job card before any human touches it</div>
+    </div>
+
+    <div class="metric-card">
+      <div class="metric-label">Dispatch time (per job)</div>
+      <div class="metric-row">
+        <span class="metric-current" style="font-size:16px;line-height:1.2">Manual<br>review</span>
+        <span class="metric-arrow">→</span>
+        <span class="metric-target" style="font-size:16px;line-height:1.2">&lt;90 sec<br>automated</span>
+      </div>
+      <div class="metric-sub">Automated scoring and queue assignment: Customer Priority ×0.4 + Revenue ×0.3 + Route ×0.3</div>
+    </div>
+
+    <div class="metric-card">
+      <div class="metric-label">Tech utilization</div>
+      <div class="metric-row">
+        <span class="metric-current" style="font-size:16px;line-height:1.2">Unopt.<br>zones</span>
+        <span class="metric-arrow">→</span>
+        <span class="metric-target" style="font-size:16px;line-height:1.2">Zone-<br>clustered</span>
+      </div>
+      <div class="metric-sub">Charleston Location Code Matrix enforced — max 7 jobs/tech/day, Oct 1–Mar 31 peak season</div>
+    </div>
+
+  </div>
+
+  <hr class="section-divider" />
+
+  <!-- System Architecture -->
+  <div class="section-title">System Architecture</div>
+  <div class="section-sub">Inbound communication flow — platform by platform</div>
+
+  <div class="arch-flow">
+    <div class="arch-node">
+      <div class="arch-icon">📞</div>
+      <div class="arch-label">Twilio</div>
+      <div class="arch-sub">SMS &amp; Voice</div>
+    </div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-node">
+      <div class="arch-icon">⚙️</div>
+      <div class="arch-label">Make.com</div>
+      <div class="arch-sub">Automation</div>
+    </div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-node">
+      <div class="arch-icon">🤖</div>
+      <div class="arch-label">Claude API</div>
+      <div class="arch-sub">Triage AI</div>
+    </div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-node">
+      <div class="arch-icon">📋</div>
+      <div class="arch-label">Striven CRM</div>
+      <div class="arch-sub">Job Record</div>
+    </div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-node">
+      <div class="arch-icon">🔧</div>
+      <div class="arch-label">Tech Queue</div>
+      <div class="arch-sub">Jeremy / Logan / Steve</div>
+    </div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-node">
+      <div class="arch-icon">⭐</div>
+      <div class="arch-label">Birdeye</div>
+      <div class="arch-sub">Review request</div>
+    </div>
+  </div>
+
+  <div class="callout" style="margin-top:16px">
+    <strong>Safety escalation</strong>
+    Three conditions bypass all AI and route directly to a human dispatcher within 5 minutes: gas smell, smoke inside the structure, or CO alarm activation. Claude returns <code style="font-family:var(--font-mono);font-size:11px">safety_escalation: true</code> and no further AI processing occurs.
+  </div>
+
+  <hr class="section-divider" />
+
+  <!-- Rollout Phases -->
+  <div class="section-title">Rollout Phases</div>
+  <div class="section-sub">60-day implementation pathway</div>
+  <div class="phases-grid">
+
+    <div class="phase-card">
+      <div class="phase-badge">Phase 1</div>
+      <div class="phase-title">Foundation — Communication &amp; AI Backbone</div>
+      <div class="phase-timeline">Days 1–7 · No custom code required</div>
+      <div class="phase-body">Configure Twilio inbound SMS and voice webhooks. Set up Claude API in Make.com (claude-sonnet-4-6 for standard triage). Build the core Make.com scenario: Twilio → Claude → JSON parse → Striven job creation. Load the Charleston Location Code Matrix as a Make.com Data Store lookup table.</div>
+    </div>
+
+    <div class="phase-card">
+      <div class="phase-badge">Phase 2</div>
+      <div class="phase-title">Triage Logic &amp; Job Scoring Engine</div>
+      <div class="phase-timeline">Days 5–14</div>
+      <div class="phase-body">Deploy Claude Triage Prompt v1.0 with safety check, guided troubleshooting, and structured JSON output. Implement job scoring formula. Configure Striven dispatch queue sorted by score. Enforce 7-job daily cap during peak season. Add $100 trip charge for Secondary Zone jobs automatically.</div>
+    </div>
+
+    <div class="phase-card">
+      <div class="phase-badge">Phase 3</div>
+      <div class="phase-title">Monitor &amp; Refine</div>
+      <div class="phase-timeline">Days 14–30</div>
+      <div class="phase-body">Dispatcher reviews every Claude-generated job card before finalization. Track edits with reason codes. Any issue category or ZIP combination generating &gt;20% edits triggers a prompt refinement. Update to Claude Triage Prompt v1.1 after 30-day calibration period.</div>
+    </div>
+
+    <div class="phase-card">
+      <div class="phase-badge">Phase 4</div>
+      <div class="phase-title">Full Automation &amp; Voice Integration</div>
+      <div class="phase-timeline">Days 30–60</div>
+      <div class="phase-body">Deploy Twilio AI Voice handler for inbound calls. Enable Birdeye automated review requests (2-hour delay post-job completion). Remove monitor mode gating for SMS triage where confidence_score &gt;85. Run first monthly analysis against all target metrics.</div>
+    </div>
+
+  </div>
+
+  <hr class="section-divider" />
+
+  <!-- Working Decisions -->
+  <div class="section-title">Working Decisions</div>
+  <div class="section-sub">Eight open decisions needed before build can advance — edit inline, saves to browser</div>
+
+  <div class="decisions-list" id="decisions-list"></div>
+
+  <hr class="section-divider" />
+
+  <!-- Next Actions -->
+  <div class="section-title">Next Actions</div>
+  <div class="section-sub">Click to mark complete — saves to browser</div>
+
+  <div class="actions-list" id="actions-list"></div>
+
+</div>
+
+<div class="save-toast" id="save-toast">Saved locally</div>
+
+<script>
+const DECISIONS = [
+  {
+    id: 'd1',
+    question: 'Who owns AI triage internally?',
+    recommendation: 'Designate the dispatcher or office manager as the primary AI triage owner — the person who monitors the Striven "AI Triage — Pending Review" queue, approves or edits Claude-generated job cards, and owns prompt refinement feedback during the monitor phase.'
+  },
+  {
+    id: 'd2',
+    question: 'Do we start with SMS, phone calls, or web forms first?',
+    recommendation: 'Start with SMS. It has the lowest implementation complexity (no voice IVR logic), highest AI resolution rate for text-based triage, and is easiest to test and refine. Voice integration follows in Phase 4.'
+  },
+  {
+    id: 'd3',
+    question: 'What Striven fields are required for a complete service job card?',
+    recommendation: 'Required fields from every Claude interaction: customer_name, phone, address, zip_code, fireplace_count, fireplace_type, issue_category (1–5), likely_cause, resolution_attempted, needs_service, urgency_level, confidence_score (0–100), fee_preview, tech_prep_notes, customer_type_guess.'
+  },
+  {
+    id: 'd4',
+    question: 'What counts as a non-billable callback?',
+    recommendation: 'A non-billable callback is any service inquiry that can be fully resolved by AI-guided remote troubleshooting without dispatching a technician. Typically: User Error (cat. 3, ~80% remote resolution), Battery Failures (cat. 4, ~95%), and subset of Service/Adjustment (cat. 1, ~45%). Confirmed by needs_service = false in Claude output.'
+  },
+  {
+    id: 'd5',
+    question: 'Which safety issues must bypass AI immediately?',
+    recommendation: 'Three conditions trigger immediate human escalation with no further AI processing: (1) reported gas smell, (2) smoke inside the structure, (3) CO (carbon monoxide) alarm activation. Claude returns safety_escalation: true. Human dispatcher calls back within 5 minutes.'
+  },
+  {
+    id: 'd6',
+    question: 'Who approves Claude-generated job cards during monitor mode?',
+    recommendation: 'The dispatcher reviews and approves all Claude output in the Striven "AI Triage — Pending Review" queue during Days 14–30. Edits are logged with a reason code. Any pattern generating >20% edits triggers a prompt refinement before advancing to full automation.'
+  },
+  {
+    id: 'd7',
+    question: 'What technician zone rules are final?',
+    recommendation: 'The Charleston Location Code Matrix (Excel master file) is the definitive source. Jeremy: Downtown Core, Suburban Hub, Inland South/West, Coastal West. Logan: Downtown Adjacent, Coastal Center/North, select Coastal South. Steve: Coastal South, Inland East. Shared zones (Goose Creek, Hanahan, Moncks Corner) covered by multiple techs. Needs final confirmation from Jimmy.'
+  },
+  {
+    id: 'd8',
+    question: 'What metrics will Jimmy review weekly?',
+    recommendation: 'Recommended weekly dashboard: (1) Non-billable callback rate vs. 40% target, (2) Average job score at time of dispatch, (3) Tech daily job counts vs. 7-job cap, (4) Monitor mode edit rate (% of Claude cards modified), (5) Average confidence_score by issue category.'
+  }
+];
+
+const ACTIONS = [
+  { id: 'a1', text: 'Confirm service issue categories with dispatcher', owner: 'Dispatcher' },
+  { id: 'a2', text: 'Confirm technician territory matrix with Jimmy', owner: 'Jimmy' },
+  { id: 'a3', text: 'Confirm Make.com account and workspace setup', owner: 'Admin' },
+  { id: 'a4', text: 'Confirm Twilio number strategy (new number vs. existing business number)', owner: 'Jimmy' },
+  { id: 'a5', text: 'Confirm required Striven job fields with dispatcher', owner: 'Dispatcher' },
+  { id: 'a6', text: 'Draft Claude triage prompt v1.0', owner: 'David' },
+  { id: 'a7', text: 'Build monitor-mode workflow in Make.com', owner: 'David' },
+  { id: 'a8', text: 'Review full plan with Jimmy before Phase 1 kickoff', owner: 'Jimmy' }
+];
+
+function loadState() {
+  try { return JSON.parse(localStorage.getItem('wsf-triage-v1') || '{}'); } catch(e) { return {}; }
+}
+
+function saveState(state) {
+  localStorage.setItem('wsf-triage-v1', JSON.stringify(state));
+  const toast = document.getElementById('save-toast');
+  toast.classList.add('visible');
+  setTimeout(() => toast.classList.remove('visible'), 1600);
+}
+
+function renderDecisions(state) {
+  const container = document.getElementById('decisions-list');
+  container.innerHTML = '';
+  DECISIONS.forEach(function(d) {
+    const saved = state[d.id] || {};
+    const owner = saved.owner !== undefined ? saved.owner : 'TBD';
+    const status = saved.status || 'Draft';
+    const notes = saved.notes || '';
+
+    const card = document.createElement('div');
+    card.className = 'decision-card';
+    card.innerHTML =
+      '<div class="decision-header">' +
+        '<div class="decision-q">' + d.question + '</div>' +
+        '<select class="status-select" data-id="' + d.id + '" data-status="' + status + '">' +
+          ['Draft','In Review','Approved','Parked'].map(function(s) {
+            return '<option value="' + s + '"' + (s === status ? ' selected' : '') + '>' + s + '</option>';
+          }).join('') +
+        '</select>' +
+      '</div>' +
+      '<div class="decision-rec"><div class="decision-rec-label">Recommendation</div>' + d.recommendation + '</div>' +
+      '<div class="decision-fields">' +
+        '<div class="field-label">Owner</div>' +
+        '<input class="field-input" data-id="' + d.id + '" data-field="owner" type="text" placeholder="Assign owner…" value="' + owner + '" />' +
+        '<div class="field-label">Notes</div>' +
+        '<textarea class="field-input" data-id="' + d.id + '" data-field="notes" rows="2" placeholder="Add notes or decision answer…">' + notes + '</textarea>' +
+      '</div>';
+
+    container.appendChild(card);
+  });
+
+  container.querySelectorAll('.status-select').forEach(function(sel) {
+    sel.addEventListener('change', function() {
+      sel.dataset.status = sel.value;
+      const st = loadState();
+      if (!st[sel.dataset.id]) st[sel.dataset.id] = {};
+      st[sel.dataset.id].status = sel.value;
+      saveState(st);
+    });
+  });
+
+  container.querySelectorAll('.field-input').forEach(function(inp) {
+    inp.addEventListener('input', function() {
+      const st = loadState();
+      if (!st[inp.dataset.id]) st[inp.dataset.id] = {};
+      st[inp.dataset.id][inp.dataset.field] = inp.value;
+      saveState(st);
+    });
+  });
+}
+
+function renderActions(state) {
+  const container = document.getElementById('actions-list');
+  container.innerHTML = '';
+  ACTIONS.forEach(function(a) {
+    const saved = state['action-' + a.id] || {};
+    const done = saved.done || false;
+    const owner = saved.owner !== undefined ? saved.owner : a.owner;
+
+    const item = document.createElement('div');
+    item.className = 'action-item' + (done ? ' done' : '');
+    item.innerHTML =
+      '<div class="action-check' + (done ? ' checked' : '') + '" data-id="' + a.id + '"></div>' +
+      '<div class="action-text">' + a.text + '</div>' +
+      '<div class="action-owner" data-id="' + a.id + '" title="Click to edit owner">' + owner + '</div>';
+
+    container.appendChild(item);
+  });
+
+  container.querySelectorAll('.action-check').forEach(function(chk) {
+    chk.addEventListener('click', function() {
+      const st = loadState();
+      const key = 'action-' + chk.dataset.id;
+      if (!st[key]) st[key] = {};
+      st[key].done = !chk.classList.contains('checked');
+      saveState(st);
+      renderActions(loadState());
+    });
+  });
+
+  container.querySelectorAll('.action-owner').forEach(function(el) {
+    el.addEventListener('click', function() {
+      const current = el.textContent;
+      const val = prompt('Owner for this action:', current);
+      if (val === null) return;
+      const st = loadState();
+      const key = 'action-' + el.dataset.id;
+      if (!st[key]) st[key] = {};
+      st[key].owner = val || current;
+      saveState(st);
+      renderActions(loadState());
+    });
+  });
+}
+
+(function init() {
+  const state = loadState();
+  renderDecisions(state);
+  renderActions(state);
+})();
+</script>
+
+</body>
+</html>

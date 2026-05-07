@@ -7399,6 +7399,12 @@ def sop():
     return render_template("sop.html")
 
 
+@app.route("/triage", methods=["GET"])
+def triage():
+    """AI Triage & Dispatch System — project workspace."""
+    return render_template("triage.html")
+
+
 @app.route("/logs", methods=["GET"])
 def view_logs():
     """Admin view — shows the last 100 WilliamSmith search queries."""
