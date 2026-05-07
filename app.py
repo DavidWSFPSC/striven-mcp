@@ -7405,6 +7405,12 @@ def triage():
     return render_template("triage.html")
 
 
+@app.route("/chase-cover-calculator", methods=["GET"])
+def chase_cover_calculator():
+    """Chase Cover Measurement Calculator — field measurement placeholder."""
+    return render_template("chase_cover_calculator.html")
+
+
 @app.route("/logs", methods=["GET"])
 def view_logs():
     """Admin view — shows the last 100 WilliamSmith search queries."""
