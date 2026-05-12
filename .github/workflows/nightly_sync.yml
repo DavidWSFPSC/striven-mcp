@@ -31,6 +31,7 @@ jobs:
       - name: Trigger nightly core sync on Render
         run: |
           curl -X POST https://striven-mcp-v2.onrender.com/admin/run-sync \
+            -H "X-API-Key: ${{ secrets.WSF_HUB_API_KEY }}" \
             -H "Authorization: Bearer ${{ secrets.SYNC_API_KEY }}" \
             -H "Content-Type: application/json" \
             --fail --max-time 30
@@ -38,6 +39,7 @@ jobs:
       - name: Trigger estimates sync on Render
         run: |
           curl -X POST https://striven-mcp-v2.onrender.com/admin/run-sync-estimates \
+            -H "X-API-Key: ${{ secrets.WSF_HUB_API_KEY }}" \
             -H "Authorization: Bearer ${{ secrets.SYNC_API_KEY }}" \
             -H "Content-Type: application/json" \
             --fail --max-time 30
@@ -45,6 +47,7 @@ jobs:
       - name: Trigger knowledge base sync on Render
         run: |
           curl -X POST https://striven-mcp-v2.onrender.com/admin/run-sync-kb \
+            -H "X-API-Key: ${{ secrets.WSF_HUB_API_KEY }}" \
             -H "Authorization: Bearer ${{ secrets.SYNC_API_KEY }}" \
             -H "Content-Type: application/json" \
             --fail --max-time 30

@@ -27,6 +27,7 @@ jobs:
       - name: Send daily digest
         run: |
           curl -X POST https://striven-mcp-v2.onrender.com/admin/send-weekly-digest \
+            -H "X-API-Key: ${{ secrets.WSF_HUB_API_KEY }}" \
             -H "Authorization: Bearer ${{ secrets.SYNC_API_KEY }}" \
             -H "Content-Type: application/json" \
             --fail --max-time 60
