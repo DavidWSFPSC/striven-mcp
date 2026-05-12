@@ -99,6 +99,46 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 # Trust Render's proxy (this fixes the host header issue)
 
+# ---------------------------------------------------------------------------
+# WSF Hub API-key authentication
+#
+# All routes are protected by X-API-Key: <WSF_HUB_API_KEY> except the small
+# set of public paths listed in _HUB_PUBLIC below (HTML page shells and
+# the health probe).  The key lives in the WSF_HUB_API_KEY env var on both
+# Render services — never in source or browser JS.
+#
+# Error contract:
+#   401  X-API-Key header missing
+#   403  X-API-Key header present but wrong value
+# ---------------------------------------------------------------------------
+_WSF_HUB_API_KEY = os.environ.get("WSF_HUB_API_KEY", "")
+
+# (method, path) pairs that bypass the key check.
+# POST /ask and all other non-GET variants of these paths ARE protected.
+_HUB_PUBLIC = frozenset({
+    ("GET", "/health"),
+    ("GET", "/"),
+    ("GET", "/ask"),
+    ("GET", "/sop"),
+    ("GET", "/triage"),
+    ("GET", "/chase-cover-calculator"),
+})
+
+
+@app.before_request
+def _require_hub_api_key():
+    """Reject unauthenticated requests to all sensitive routes."""
+    if (request.method, request.path) in _HUB_PUBLIC:
+        return None
+    if request.path.startswith("/static/"):
+        return None
+    provided = request.headers.get("X-API-Key", "")
+    if not provided:
+        return jsonify({"error": "Unauthorized", "detail": "X-API-Key header required"}), 401
+    if not _WSF_HUB_API_KEY or provided != _WSF_HUB_API_KEY:
+        return jsonify({"error": "Forbidden", "detail": "Invalid API key"}), 403
+
+
 # Single shared client; token is cached internally and refreshed as needed
 striven = StrivenClient()
 print("StrivenClient initialised — ready to serve live data.", flush=True)

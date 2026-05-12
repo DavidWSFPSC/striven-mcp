@@ -242,8 +242,9 @@ def _search_invoices_supabase(
 # Configuration
 # ---------------------------------------------------------------------------
 
-BASE_URL = os.environ.get("FLASK_API_URL", "https://striven-mcp-v2.onrender.com")
-TIMEOUT  = 120  # seconds — Render free tier cold starts can take 50+ seconds
+BASE_URL         = os.environ.get("FLASK_API_URL", "https://striven-mcp-v2.onrender.com")
+_WSF_HUB_API_KEY = os.environ.get("WSF_HUB_API_KEY", "")
+TIMEOUT          = 120  # seconds — Render free tier cold starts can take 50+ seconds
 
 # ---------------------------------------------------------------------------
 # MCP server — identity + standing instructions for Claude
@@ -428,10 +429,14 @@ TONE & FORMAT
 # ---------------------------------------------------------------------------
 
 def _call(method: str, path: str, **kwargs) -> dict:
-    """Make an HTTP request to the Flask API and return the JSON response."""
+    """Make an authenticated HTTP request to the Flask API and return the JSON response."""
     url = f"{BASE_URL}{path}"
+    # Merge caller-supplied headers with the hub API key.
+    headers = dict(kwargs.pop("headers", {}))
+    if _WSF_HUB_API_KEY:
+        headers["X-API-Key"] = _WSF_HUB_API_KEY
     try:
-        resp = getattr(requests, method)(url, timeout=TIMEOUT, **kwargs)
+        resp = getattr(requests, method)(url, timeout=TIMEOUT, headers=headers, **kwargs)
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.Timeout:
@@ -1986,6 +1991,7 @@ def log_unanswered_question(
       (e.g. association counts, keyword matches, incomplete syncs)
     In these cases set category="Data Gap" and priority="High"
     """
+    _hub_headers = {"X-API-Key": _WSF_HUB_API_KEY} if _WSF_HUB_API_KEY else {}
     try:
         resp = requests.post(
             f"{BASE_URL}/log-question",
@@ -1996,6 +2002,7 @@ def log_unanswered_question(
                 "source":   "Ask WilliamSmith",
                 "notes":    notes
             },
+            headers=_hub_headers,
             timeout=10
         )
         if resp.status_code == 200:
@@ -2100,6 +2107,7 @@ def verify_aggregate(
                             "source":   "Ask WilliamSmith",
                             "notes":    flag_str or f"delta={d.get('count_delta_pct', 0):.1f}%",
                         },
+                        headers={"X-API-Key": _WSF_HUB_API_KEY} if _WSF_HUB_API_KEY else {},
                         timeout=10,
                     )
                 except Exception:
