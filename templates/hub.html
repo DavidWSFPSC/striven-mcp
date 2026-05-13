@@ -4,296 +4,763 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>WSF Hub</title>
+<meta name="description" content="Internal operations hub — WilliamSmith Fireplaces." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,500;0,8..60,600;1,8..60,500&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,500;0,8..60,600;1,8..60,500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="{{ url_for('static', filename='hub.css') }}" />
 <style>
-  :root {
-    --bg:          #f6f1ea;
-    --bg-elev:     #fbf8f3;
-    --bg-sunk:     #ede6dc;
-    --ink:         #1c1714;
-    --ink-2:       #4a423b;
-    --ink-3:       #8b8278;
-    --rule:        #e2d8c8;
-    --accent:      #e07a2c;
-    --accent-deep: #b85d18;
-    --accent-soft: #f6e3d0;
-    --radius-sm: 6px;
-    --radius:    10px;
-    --radius-lg: 14px;
-    --font-ui:      'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    --font-display: 'Source Serif 4', Georgia, serif;
-    --shadow-sm: 0 1px 0 rgba(28,23,20,0.04), 0 1px 2px rgba(28,23,20,0.04);
-    --shadow:    0 1px 0 rgba(28,23,20,0.04), 0 4px 12px rgba(28,23,20,0.06);
-    --shadow-lg: 0 1px 0 rgba(28,23,20,0.04), 0 12px 32px rgba(28,23,20,0.10);
-  }
+/* ─── Hub homepage — page-specific styles ────────────────────────────────── */
 
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; }
-  body {
-    font-family: var(--font-ui);
-    background: var(--bg);
-    color: var(--ink);
-    min-height: 100dvh;
-    display: flex;
-    flex-direction: column;
-    -webkit-font-smoothing: antialiased;
-    text-rendering: optimizeLegibility;
-  }
+main {
+  flex: 1;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 52px 28px 80px;
+  width: 100%;
+}
 
-  body::before {
-    content: "";
-    position: fixed; inset: 0;
-    pointer-events: none;
-    background-image: repeating-linear-gradient(
-      135deg,
-      rgba(28,23,20,0.012) 0 1px,
-      transparent 1px 6px
-    );
-    z-index: 0;
-  }
+/* Search */
+.search-label {
+  text-align: center;
+  font-family: var(--font-display);
+  font-weight: 600; font-size: 28px;
+  letter-spacing: -0.01em; color: var(--ink);
+  margin-bottom: 20px;
+}
+.search-wrap {
+  max-width: 720px;
+  margin: 0 auto 56px;
+}
+.search-shell {
+  background: var(--bg-elev);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  transition: border-color .15s, box-shadow .15s;
+}
+.search-shell:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(224,122,44,0.12), var(--shadow);
+}
+.search-input-row { display: flex; align-items: stretch; }
+.search-icon {
+  display: grid; place-items: center;
+  padding-left: 18px; color: var(--ink-3); flex: 0 0 auto;
+}
+.search-input {
+  flex: 1; border: 0; background: transparent;
+  padding: 18px 14px 18px 12px;
+  font: 400 16px var(--font-ui);
+  color: var(--ink); outline: none;
+  resize: none; line-height: 1.5;
+  min-height: 56px; max-height: 200px;
+}
+.search-input::placeholder { color: var(--ink-3); }
+.search-actions {
+  display: flex; align-items: flex-end;
+  padding: 10px 10px 10px 0;
+}
+.ask-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 40px; padding: 0 16px 0 14px;
+  background: var(--accent); border: 0;
+  color: #fff; border-radius: 8px;
+  font: 600 13.5px var(--font-ui);
+  cursor: pointer; letter-spacing: 0.005em;
+  transition: background .15s, transform .05s;
+}
+.ask-btn:hover  { background: var(--accent-deep); }
+.ask-btn:active { transform: translateY(1px); }
+.ask-btn svg    { transition: transform .2s; }
+.ask-btn:hover svg { transform: translateX(2px); }
+.search-foot {
+  border-top: 1px solid var(--rule);
+  padding: 10px 16px;
+  display: flex; align-items: center; justify-content: space-between;
+  font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--ink-3); letter-spacing: 0.04em; text-transform: uppercase;
+}
+.kbd { display: inline-flex; gap: 4px; }
+.kbd-key {
+  font-family: var(--font-mono);
+  background: var(--bg); border: 1px solid var(--rule);
+  border-bottom-width: 2px; border-radius: 4px;
+  padding: 1px 5px; color: var(--ink-2); font-size: 10px;
+}
+.suggestions {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  justify-content: center; margin-top: 14px;
+}
+.suggest-chip {
+  background: transparent;
+  border: 1px dashed var(--rule-strong);
+  color: var(--ink-2); padding: 7px 12px;
+  border-radius: 999px; font: 500 12.5px var(--font-ui);
+  cursor: pointer; transition: all .15s;
+}
+.suggest-chip:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent); border-style: solid;
+  color: var(--accent-deep);
+}
 
-  /* ── Header ── */
-  .site-header {
-    position: relative; z-index: 1;
-    border-bottom: 1px solid var(--rule);
-    background: var(--bg-elev);
-    padding: 14px 28px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .brand-mark {
-    width: 32px; height: 32px;
-    flex-shrink: 0;
-    color: var(--accent);
-  }
-  .brand-text {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-  }
-  .brand-name {
-    font-family: var(--font-display);
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--ink);
-    letter-spacing: -0.01em;
-    line-height: 1;
-  }
-  .brand-sub {
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-  }
+/* Section header */
+.section-head {
+  display: flex; align-items: baseline; gap: 12px;
+  margin-bottom: 20px; padding-bottom: 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.section-num {
+  font-family: var(--font-mono); font-size: 10.5px;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--accent); font-weight: 500;
+}
+.section-title-text {
+  font-family: var(--font-display);
+  font-weight: 600; font-size: 17px;
+  letter-spacing: -0.005em; color: var(--ink);
+}
+.section-meta {
+  margin-left: auto;
+  font-family: var(--font-mono); font-size: 10.5px;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.section-meta button {
+  background: transparent; border: 0;
+  font: inherit; color: inherit; cursor: pointer; padding: 0;
+  border-bottom: 1px dotted currentColor;
+}
+.section-meta button:hover { color: var(--accent); }
 
-  /* ── Main ── */
-  main {
-    position: relative; z-index: 1;
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 56px 24px;
-    gap: 0;
-  }
+/* Module cards */
+.modules-section { margin-bottom: 52px; }
+.modules-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+@media (max-width: 840px) {
+  .modules-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 520px) {
+  .modules-grid { grid-template-columns: 1fr; }
+}
 
-  .hub-eyebrow {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--accent);
-    margin-bottom: 10px;
-    text-align: center;
-  }
-  .hub-heading {
-    font-family: var(--font-display);
-    font-size: clamp(26px, 4vw, 34px);
-    font-weight: 600;
-    color: var(--ink);
-    letter-spacing: -0.02em;
-    text-align: center;
-    margin-bottom: 8px;
-    line-height: 1.15;
-  }
-  .hub-sub {
-    font-size: 14px;
-    color: var(--ink-3);
-    text-align: center;
-    margin-bottom: 44px;
-    line-height: 1.5;
-  }
+.module-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  padding: 24px 22px 20px;
+  box-shadow: var(--shadow-sm);
+  display: flex; flex-direction: column; gap: 8px;
+  text-decoration: none; color: inherit;
+  transition: border-color .15s, transform .15s, box-shadow .15s;
+  position: relative;
+}
+.module-card:hover {
+  border-color: var(--rule-strong);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+.module-card.primary:hover { border-color: rgba(224,122,44,0.5); }
 
-  /* ── Cards ── */
-  .cards {
-    display: flex;
-    gap: 20px;
-    flex-wrap: wrap;
-    justify-content: center;
-    width: 100%;
-    max-width: 620px;
-  }
+/* Status badge */
+.module-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  align-self: flex-start;
+  font-family: var(--font-mono); font-size: 9.5px; font-weight: 500;
+  letter-spacing: 0.10em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 4px;
+  margin-bottom: 4px;
+}
+.module-badge.live {
+  background: var(--ok-soft); color: var(--ok);
+  border: 1px solid rgba(79,122,58,0.25);
+}
+.module-badge.live::before {
+  content: ""; width: 5px; height: 5px;
+  border-radius: 50%; background: var(--ok);
+}
+.module-badge.in-progress {
+  background: var(--accent-soft); color: var(--accent-deep);
+  border: 1px solid rgba(224,122,44,0.25);
+}
+.module-badge.coming-soon {
+  background: var(--warn-soft); color: var(--warn);
+  border: 1px solid rgba(192,138,26,0.25);
+}
 
-  .card {
-    flex: 1 1 260px;
-    background: var(--bg-elev);
-    border: 1px solid var(--rule);
-    border-radius: var(--radius-lg);
-    padding: 28px 24px 24px;
-    box-shadow: var(--shadow);
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    text-decoration: none;
-    color: inherit;
-    transition: box-shadow 0.15s, transform 0.12s, border-color 0.15s;
-    cursor: pointer;
-  }
-  .card:hover {
-    box-shadow: var(--shadow-lg);
-    transform: translateY(-2px);
-  }
+/* Icon */
+.module-icon {
+  width: 40px; height: 40px; border-radius: 10px;
+  background: var(--bg-sunk); color: var(--ink-3);
+  display: grid; place-items: center;
+  transition: background .2s, color .2s;
+  margin-bottom: 2px;
+}
+.module-card.primary .module-icon {
+  background: var(--accent-soft); color: var(--accent-deep);
+}
+.module-card:hover .module-icon { background: var(--accent); color: #fff; }
 
-  .card-accent {
-    width: 3px;
-    height: 28px;
-    border-radius: 2px;
-    background: var(--accent);
-    margin-bottom: 4px;
-  }
-  .card.secondary .card-accent {
-    background: var(--ink-3);
-  }
-  .card.tertiary .card-accent {
-    background: var(--ok, #4f7a3a);
-  }
-  .card.tertiary .card-cta {
-    color: var(--ok, #4f7a3a);
-  }
+/* Title */
+.module-title {
+  font-family: var(--font-display);
+  font-size: 18px; font-weight: 600;
+  color: var(--ink); letter-spacing: -0.01em; line-height: 1.2;
+}
 
-  .card-title {
-    font-family: var(--font-display);
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--ink);
-    letter-spacing: -0.01em;
-    line-height: 1.2;
-  }
-  .card-desc {
-    font-size: 13px;
-    color: var(--ink-2);
-    line-height: 1.55;
-  }
+/* Description */
+.module-desc {
+  font-size: 13px; color: var(--ink-2);
+  line-height: 1.58; flex: 1;
+}
 
-  .card-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 4px;
-  }
-  .chip {
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.04em;
-    padding: 3px 9px;
-    border-radius: 99px;
-    background: var(--bg-sunk);
-    color: var(--ink-3);
-    border: 1px solid var(--rule);
-  }
-  .card.primary .chip {
-    background: var(--accent-soft);
-    color: var(--accent-deep);
-    border-color: rgba(224,122,44,0.25);
-  }
+/* Cognitive ladder label */
+.module-ladder {
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--ink-3);
+  display: flex; align-items: center; gap: 7px;
+  margin-top: 4px;
+}
+.module-ladder::before {
+  content: ""; display: block;
+  width: 14px; height: 1px; background: var(--rule-strong); flex-shrink: 0;
+}
 
-  .card-cta {
-    margin-top: 8px;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--accent);
-  }
-  .card.secondary .card-cta {
-    color: var(--ink-2);
-  }
+/* CTA */
+.module-cta {
+  display: inline-flex; align-items: center; gap: 5px;
+  font: 600 12.5px var(--font-ui);
+  color: var(--accent); margin-top: 6px;
+  transition: gap .15s;
+}
+.module-card.muted .module-cta { color: var(--ink-2); }
+.module-card:hover .module-cta { gap: 8px; }
 
-  @media (max-width: 480px) {
-    .cards { gap: 14px; }
-    .card  { padding: 22px 18px 18px; }
-    main   { padding: 40px 16px; }
-    .hub-heading { font-size: 24px; }
-  }
+/* Recents */
+.recents {
+  background: var(--bg-elev);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.recent-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--rule);
+  cursor: pointer; background: transparent;
+  border-left: 0; border-right: 0; border-top: 0;
+  width: 100%; text-align: left;
+  font: inherit; color: inherit;
+  transition: background .12s;
+}
+.recent-row:last-child { border-bottom: 0; }
+.recent-row:hover { background: var(--bg-sunk); }
+.recent-icon {
+  width: 26px; height: 26px; border-radius: 6px;
+  background: var(--bg-sunk); color: var(--ink-3);
+  display: grid; place-items: center; flex: 0 0 auto;
+  transition: background .15s, color .15s;
+}
+.recent-row:hover .recent-icon { background: var(--accent-soft); color: var(--accent-deep); }
+.recent-text {
+  flex: 1; font-size: 14px; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.recent-time {
+  font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--ink-3); letter-spacing: 0.04em;
+  text-transform: uppercase; flex: 0 0 auto;
+}
+.recent-empty {
+  padding: 36px 24px; text-align: center;
+  color: var(--ink-3); font-size: 13px;
+}
+.recent-empty .mono {
+  font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  margin-top: 6px; opacity: .7;
+}
+
+@media (max-width: 520px) {
+  main { padding: 36px 16px 60px; }
+  .search-label { font-size: 22px; }
+  .search-wrap  { margin-bottom: 40px; }
+}
 </style>
 </head>
 <body>
 
-  <header class="site-header">
-    <svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-      <rect x="3" y="3" width="26" height="26" stroke="currentColor" stroke-width="1.4" />
-      <line x1="3" y1="12" x2="29" y2="12" stroke="currentColor" stroke-width="1.4" />
-      <line x1="3" y1="21" x2="29" y2="21" stroke="currentColor" stroke-width="1.4" />
-      <line x1="12" y1="3" x2="12" y2="29" stroke="currentColor" stroke-width="1.4" />
-      <circle cx="21" cy="17" r="2.5" fill="currentColor" />
-    </svg>
-    <div class="brand-text">
-      <span class="brand-name">WSF Hub</span>
-      <span class="brand-sub">Internal · WilliamSmith Fireplaces</span>
+<!-- ─── Inline SVG symbol (SC silhouette + flame) ─── -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="wsf-mark" viewBox="0 0 100 90">
+      <path d="M 4,42 C 4,40 6,38 8,37
+               L 22,30 L 38,23 L 54,18 L 68,15 L 80,15 L 88,18
+               C 90,20 91,23 92,26
+               L 94,34 L 95,42 L 94,50 L 91,57 L 86,63
+               L 78,69 L 68,74 L 56,78 L 44,80 L 34,76
+               C 28,72 24,66 20,58
+               L 14,46 L 8,46 Z" fill="#1c1714"/>
+      <g transform="translate(64 28) scale(1.3)">
+        <path d="M8 0 C 9 4, 14 6, 14 11 C 14 14, 11.5 15, 11 13
+                 C 11 16, 13 18, 13 21 C 13 25, 10 27, 8 27
+                 C 6 27, 3 25, 3 21 C 3 18, 5 16.5, 5 13.5
+                 C 5 15.5, 2.5 15, 2.5 11.5 C 2.5 8, 6 6, 8 0 Z"
+              fill="#e07a2c"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<!-- ─── Gate ─── -->
+<div class="gate" id="gate">
+  <div class="gate-card">
+    <div class="gate-mark">
+      <svg class="gate-logo" viewBox="0 0 100 90" aria-hidden="true">
+        <use href="#wsf-mark"/>
+      </svg>
+      <span class="gate-mark-text">WSF Hub · Internal</span>
+    </div>
+    <h1>Sign in to continue.</h1>
+    <p>This hub is for WilliamSmith Fireplaces employees. Enter the team passphrase to open the tools.</p>
+    <form class="gate-form" id="gateForm" autocomplete="off">
+      <input type="password" class="gate-input" id="gatePass" placeholder="Team passphrase" autofocus />
+      <div class="gate-error" id="gateError">&nbsp;</div>
+      <button type="submit" class="gate-btn">Open hub →</button>
+    </form>
+    <div class="gate-foot">
+      <span>WSF-HUB.COM</span>
+      <span id="gateDate"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ─── App ─── -->
+<div class="app" id="app">
+
+  <header>
+    <div class="header-inner">
+      <a class="brand" href="/">
+        <svg class="brand-mark-sm" viewBox="0 0 100 90" aria-hidden="true">
+          <use href="#wsf-mark"/>
+        </svg>
+        <div class="brand-name">
+          <span class="word">WSF Hub</span>
+          <span class="sub">Internal · WilliamSmith Fireplaces</span>
+        </div>
+      </a>
+      <div class="header-meta">
+        <span class="header-date" id="headerDate"></span>
+        <div class="status-row">
+          <span class="status-chip" title="API key authentication active">
+            <span class="status-dot"></span>SECURED
+          </span>
+          <span class="status-chip" title="Knowledge base indexed and searchable">
+            <span class="status-dot"></span>KB READY
+          </span>
+          <span class="status-chip" title="MCP server connected to Claude">
+            <span class="status-dot"></span>MCP LINKED
+          </span>
+        </div>
+      </div>
     </div>
   </header>
 
   <main>
-    <div class="hub-eyebrow">Internal Tools</div>
-    <h1 class="hub-heading">Where do you want to work?</h1>
-    <p class="hub-sub">Choose a tool to get started.</p>
 
-    <div class="cards">
-
-      <a href="/sop" class="card primary">
-        <div class="card-accent"></div>
-        <div class="card-title">SOP Framework</div>
-        <div class="card-desc">Edit and collaborate on Standard Operating Procedures. Changes save to Notion in real time.</div>
-        <div class="card-chips">
-          <span class="chip">21 Steps</span>
-          <span class="chip">6 Phases</span>
-          <span class="chip">Live</span>
+    <!-- ── Search ────────────────────────────────────────────── -->
+    <div class="search-label">Ask Anything…</div>
+    <div class="search-wrap">
+      <div class="search-shell">
+        <div class="search-input-row">
+          <div class="search-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"/>
+              <path d="m20 20-3.5-3.5"/>
+            </svg>
+          </div>
+          <textarea class="search-input" id="searchInput" rows="1"
+            placeholder="e.g. what gas logs did we install on Kiawah in Q1?"></textarea>
+          <div class="search-actions">
+            <button class="ask-btn" id="askBtn" type="button">
+              Ask
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" stroke-width="2.2"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 12h14"/><path d="m13 5 7 7-7 7"/>
+              </svg>
+            </button>
+          </div>
         </div>
-        <div class="card-cta">Work on SOP →</div>
-      </a>
-
-      <a href="/ask" class="card secondary">
-        <div class="card-accent"></div>
-        <div class="card-title">Ask WilliamSmith</div>
-        <div class="card-desc">Query live job data, estimates, invoices, and the knowledge base using natural language.</div>
-        <div class="card-chips">
-          <span class="chip">Striven</span>
-          <span class="chip">Notion</span>
-          <span class="chip">MCP</span>
+        <div class="search-foot">
+          <span>Opens Claude with your question · Ask WilliamSmith context</span>
+          <span class="kbd">
+            <span class="kbd-key">⌘</span><span class="kbd-key">↵</span> to send
+          </span>
         </div>
-        <div class="card-cta">Ask anything →</div>
-      </a>
-
-      <a href="/triage" class="card tertiary">
-        <div class="card-accent"></div>
-        <div class="card-title">AI Triage System</div>
-        <div class="card-desc">Collaborative build plan for service intake, callback prevention, and dispatch routing.</div>
-        <div class="card-chips">
-          <span class="chip">Twilio</span>
-          <span class="chip">Make.com</span>
-          <span class="chip">Claude API</span>
-        </div>
-        <div class="card-cta">Open workspace →</div>
-      </a>
-
+      </div>
+      <div class="suggestions" id="suggestions">
+        <button class="suggest-chip" data-q="Show me today's daily digest summary.">Today's digest</button>
+        <button class="suggest-chip" data-q="Which approved estimates have a deposit paid but no install date?">Deposit paid · no install date</button>
+        <button class="suggest-chip" data-q="What's our callback rate this week vs the 4-week average?">Callback rate</button>
+        <button class="suggest-chip" data-q="Top 5 reps by pipeline value right now.">Top reps</button>
+        <button class="suggest-chip" data-q="Any open tasks assigned to inactive employees?">Inactive assignments</button>
+      </div>
     </div>
+
+    <!-- ── Five modules ──────────────────────────────────────── -->
+    <section class="modules-section">
+      <div class="section-head">
+        <span class="section-num">01</span>
+        <span class="section-title-text">Modules</span>
+      </div>
+      <div class="modules-grid">
+
+        <!-- 1 · Ask WilliamSmith -------------------------------- -->
+        <a class="module-card primary" href="/ask">
+          <span class="module-badge live">Live</span>
+          <div class="module-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"/>
+              <path d="m20 20-3.5-3.5"/>
+            </svg>
+          </div>
+          <div class="module-title">Ask WilliamSmith</div>
+          <div class="module-desc">Query live job data, estimates, invoices, callbacks, and the 17,000-chunk knowledge base in natural language. The fastest path from question to answer.</div>
+          <div class="module-ladder">Apply — use live data to answer specific questions</div>
+          <div class="module-cta">
+            Ask anything
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2.2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14"/><path d="m13 5 7 7-7 7"/>
+            </svg>
+          </div>
+        </a>
+
+        <!-- 2 · SOP Center -------------------------------------- -->
+        <a class="module-card" href="/sop">
+          <span class="module-badge live">Live</span>
+          <div class="module-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
+            </svg>
+          </div>
+          <div class="module-title">SOP Center</div>
+          <div class="module-desc">The 21-step operational framework from first customer contact through job close. Assign owners, set status, and ratify steps collaboratively — synced to Notion in real time.</div>
+          <div class="module-ladder">Remember / Understand — internalize the right process</div>
+          <div class="module-cta">
+            Open SOP
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2.2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14"/><path d="m13 5 7 7-7 7"/>
+            </svg>
+          </div>
+        </a>
+
+        <!-- 3 · KB Coverage ------------------------------------- -->
+        <a class="module-card" href="/kb">
+          <span class="module-badge in-progress">In Progress</span>
+          <div class="module-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <ellipse cx="12" cy="5" rx="9" ry="3"/>
+              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+            </svg>
+          </div>
+          <div class="module-title">KB Coverage</div>
+          <div class="module-desc">Know what we know — and what we don't. Maps the knowledge base against our installed product base to surface gaps before they become repeat callbacks.</div>
+          <div class="module-ladder">Analyze — identify knowledge gaps systematically</div>
+          <div class="module-cta">
+            View coverage
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2.2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14"/><path d="m13 5 7 7-7 7"/>
+            </svg>
+          </div>
+        </a>
+
+        <!-- 4 · Manifest Center --------------------------------- -->
+        <a class="module-card" href="/manifest">
+          <span class="module-badge coming-soon">Coming Soon</span>
+          <div class="module-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <path d="M3 9h18"/>
+              <path d="M9 21V9"/>
+            </svg>
+          </div>
+          <div class="module-title">Manifest Center</div>
+          <div class="module-desc">Turn Striven estimates into field-ready job manifests. Pull physical line items, flag missing material details, organize PM review, and prepare installer handoffs so crews know what to carry, what to check, and what must be ready before arrival.</div>
+          <div class="module-ladder">Apply / Evaluate — convert approved jobs into field-ready execution packages</div>
+          <div class="module-cta">
+            Open manifest
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2.2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14"/><path d="m13 5 7 7-7 7"/>
+            </svg>
+          </div>
+        </a>
+
+        <!-- 5 · Tools ------------------------------------------- -->
+        <a class="module-card muted" href="/triage">
+          <div class="module-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+            </svg>
+          </div>
+          <div class="module-title">Tools</div>
+          <div class="module-desc">Field calculators, AI triage planning, inventory tracking, and operational shortcuts. Purpose-built utilities for specific jobs — no context-switching required.</div>
+          <div class="module-ladder">Apply — run targeted calculations and audits</div>
+          <div class="module-cta">
+            Open tools
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2.2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14"/><path d="m13 5 7 7-7 7"/>
+            </svg>
+          </div>
+        </a>
+
+      </div>
+    </section>
+
+    <!-- ── Recent questions ──────────────────────────────────── -->
+    <section>
+      <div class="section-head">
+        <span class="section-num">02</span>
+        <span class="section-title-text">Recent questions</span>
+        <span class="section-meta">
+          <button id="clearRecents" type="button">Clear all</button>
+        </span>
+      </div>
+      <div class="recents" id="recentsList">
+        <div class="recent-empty">
+          No recent questions yet.
+          <div class="mono">Your last 8 will appear here.</div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
+  <footer>
+    <div class="footer-inner">
+      <span>© 2026 WilliamSmith Fireplaces</span>
+      <span class="sep">·</span>
+      <a href="https://williamsmithfireplaces.com" target="_blank" rel="noopener noreferrer">Customer site</a>
+      <span class="sep">·</span>
+      <span>Internal use only</span>
+      <span class="footer-right">v2.0.0</span>
+    </div>
+  </footer>
+
+</div><!-- /.app -->
+
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  // ── Config ──────────────────────────────────────────────────────────────
+  // SHA-256 of accepted passphrases. To rotate, run in browser console:
+  //   crypto.subtle.digest('SHA-256', new TextEncoder().encode('new-pass'))
+  //     .then(b => console.log([...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')))
+  const PASS_HASHES = [
+    'b9e00cabae41376d78919263b4c3eaded3f6f38ae8f84164d913af323576d60b', // fireplace
+    'ced3d576ec8d770463b478be7c152e44862d35153438f71e6529a1c2d1bf8ae9'  // fireplaces
+  ];
+  const STORAGE_AUTH    = 'wsfhub.auth.v1';
+  const STORAGE_RECENTS = 'wsfhub.recents.v1';
+  const MAX_RECENTS     = 8;
+
+  const $  = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+  async function sha256(text) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  function fmtDate(d = new Date()) {
+    return d.toLocaleDateString('en-US', {
+      weekday: 'long', month: 'short', day: 'numeric', year: 'numeric'
+    });
+  }
+  function fmtRelative(ts) {
+    const s = (Date.now() - ts) / 1000;
+    if (s < 60)     return 'JUST NOW';
+    if (s < 3600)   return Math.floor(s / 60)   + 'M AGO';
+    if (s < 86400)  return Math.floor(s / 3600)  + 'H AGO';
+    if (s < 604800) return Math.floor(s / 86400) + 'D AGO';
+    return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
+  }
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g,
+      c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  }
+  function showToast(msg) {
+    const t = $('#toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.classList.remove('show'), 1800);
+  }
+
+  // ── Dates ────────────────────────────────────────────────────────────────
+  $('#headerDate').textContent = fmtDate().toUpperCase();
+  $('#gateDate').textContent = new Date().toLocaleDateString('en-US', {
+    month: '2-digit', day: '2-digit', year: '2-digit'
+  }).replace(/\//g, '.');
+
+  // ── Gate ─────────────────────────────────────────────────────────────────
+  const gate = $('#gate');
+  const app  = $('#app');
+
+  function unlock() {
+    sessionStorage.setItem(STORAGE_AUTH, '1');
+    gate.classList.add('hidden');
+    requestAnimationFrame(() => app.classList.add('ready'));
+    setTimeout(() => $('#searchInput').focus(), 350);
+  }
+
+  if (sessionStorage.getItem(STORAGE_AUTH) === '1') unlock();
+
+  $('#gateForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const inp = $('#gatePass');
+    const err = $('#gateError');
+    const val = inp.value.trim();
+    if (!val) return;
+    const hash = await sha256(val);
+    if (PASS_HASHES.includes(hash)) {
+      err.textContent = '';
+      inp.classList.remove('error');
+      unlock();
+    } else {
+      err.textContent = 'That passphrase didn’t match. Try again.';
+      inp.classList.add('error');
+      inp.value = '';
+      inp.focus();
+      setTimeout(() => inp.classList.remove('error'), 400);
+    }
+  });
+
+  // ── Search ───────────────────────────────────────────────────────────────
+  const searchInput = $('#searchInput');
+
+  function autosize() {
+    searchInput.style.height = 'auto';
+    searchInput.style.height = Math.min(searchInput.scrollHeight, 200) + 'px';
+  }
+  searchInput.addEventListener('input', autosize);
+
+  function ask(question) {
+    const q = (question || '').trim();
+    if (!q) { searchInput.focus(); return; }
+    saveRecent(q);
+    window.open('https://claude.ai/new?q=' + encodeURIComponent(q), '_blank', 'noopener,noreferrer');
+  }
+
+  $('#askBtn').addEventListener('click', () => ask(searchInput.value));
+  searchInput.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      ask(searchInput.value);
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      ask(searchInput.value);
+    }
+  });
+  $$('.suggest-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      searchInput.value = chip.dataset.q;
+      autosize();
+      searchInput.focus();
+    });
+  });
+
+  // ── Recents ──────────────────────────────────────────────────────────────
+  function loadRecents() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_RECENTS) || '[]'); }
+    catch { return []; }
+  }
+  function saveRecent(q) {
+    const list = loadRecents().filter(r => r.q !== q);
+    list.unshift({ q, t: Date.now() });
+    localStorage.setItem(STORAGE_RECENTS, JSON.stringify(list.slice(0, MAX_RECENTS)));
+    renderRecents();
+  }
+  function renderRecents() {
+    const list = loadRecents();
+    const root = $('#recentsList');
+    if (!list.length) {
+      root.innerHTML = `
+        <div class="recent-empty">
+          No recent questions yet.
+          <div class="mono">Your last ${MAX_RECENTS} will appear here.</div>
+        </div>`;
+      return;
+    }
+    root.innerHTML = list.map((r, i) => `
+      <button class="recent-row" data-i="${i}" type="button" title="Click to ask again">
+        <span class="recent-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/>
+          </svg>
+        </span>
+        <span class="recent-text">${escapeHtml(r.q)}</span>
+        <span class="recent-time">${fmtRelative(r.t)}</span>
+      </button>`).join('');
+    $$('.recent-row', root).forEach(row => {
+      row.addEventListener('click', () => {
+        const q = loadRecents()[+row.dataset.i]?.q;
+        if (q) { searchInput.value = q; autosize(); ask(q); }
+      });
+    });
+  }
+  $('#clearRecents').addEventListener('click', () => {
+    localStorage.removeItem(STORAGE_RECENTS);
+    renderRecents();
+    showToast('Recent questions cleared.');
+  });
+  renderRecents();
+
+  // ── Global ⌘K / Ctrl-K — focus search ───────────────────────────────────
+  document.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      searchInput.focus();
+      searchInput.select();
+    }
+  });
+
+})();
+</script>
 </body>
 </html>
