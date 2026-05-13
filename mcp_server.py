@@ -26,217 +26,6 @@ import requests
 from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse
 
-# ---------------------------------------------------------------------------
-# Knowledge-base search helpers (in-process — no inter-service HTTP call)
-# ---------------------------------------------------------------------------
-
-def _kb_embed(query: str) -> list:
-    """Embed a query string using OpenAI text-embedding-3-small."""
-    from openai import OpenAI as _OpenAI
-    client = _OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    resp = client.embeddings.create(model="text-embedding-3-small", input=query)
-    return resp.data[0].embedding
-
-
-def _kb_search(query: str, top_k: int = 5) -> dict:
-    """Embed query and call the Supabase match_kb_document_chunks RPC directly."""
-    try:
-        from supabase import create_client as _create_client
-        sb = _create_client(
-            os.environ["SUPABASE_URL"],
-            os.environ["SUPABASE_KEY"],
-        )
-        embedding = _kb_embed(query)
-        result = (
-            sb.rpc(
-                "match_kb_document_chunks",
-                {"query_embedding": embedding, "match_count": min(top_k, 20)},
-            )
-            .execute()
-        )
-        results = result.data or []
-
-        # Fire-and-forget logging — never raises, never breaks search
-        try:
-            from services.supabase_client import log_kb_search
-            top_sim = results[0].get("similarity") if results else None
-            log_kb_search(
-                query=query,
-                top_k=min(top_k, 20),
-                result_count=len(results),
-                top_similarity=top_sim,
-                returned_results=bool(results),
-            )
-        except Exception:
-            pass
-
-        return {"query": query, "results": results}
-    except Exception as exc:
-        return {"error": str(exc)}
-
-# ---------------------------------------------------------------------------
-# Invoice AR helpers (in-process Supabase queries — no Flask hop)
-# ---------------------------------------------------------------------------
-
-def _sb_client():
-    """Return a Supabase client using env vars (lazy, not cached — safe for forked workers)."""
-    from supabase import create_client as _create_client
-    return _create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
-
-
-def _aging_info(due_date_str: str | None) -> tuple[int | None, str]:
-    """Return (days_outstanding, aging_bucket) computed from a due_date ISO string."""
-    from datetime import date, datetime
-    if not due_date_str:
-        return None, "Unknown"
-    try:
-        due = datetime.fromisoformat(due_date_str.replace("Z", "+00:00")).date()
-    except Exception:
-        return None, "Unknown"
-    today = date.today()
-    days  = (today - due).days
-    if today <= due:
-        return 0, "Current"
-    if days <= 30:
-        return days, "1-30 Days"
-    if days <= 60:
-        return days, "31-60 Days"
-    if days <= 90:
-        return days, "61-90 Days"
-    return days, "90+ Days"
-
-
-def _bucket_due_date_range(bucket: str) -> tuple[str | None, str | None]:
-    """Translate an aging_bucket name to a (due_date_lt, due_date_gte) pair for Supabase filtering."""
-    from datetime import date, timedelta
-    today = date.today()
-    if bucket == "Current":
-        # due_date >= today
-        return None, today.isoformat()
-    if bucket == "1-30 Days":
-        return (today - timedelta(days=1)).isoformat(), (today - timedelta(days=30)).isoformat()
-    if bucket == "31-60 Days":
-        return (today - timedelta(days=31)).isoformat(), (today - timedelta(days=60)).isoformat()
-    if bucket == "61-90 Days":
-        return (today - timedelta(days=61)).isoformat(), (today - timedelta(days=90)).isoformat()
-    if bucket == "90+ Days":
-        return (today - timedelta(days=91)).isoformat(), None
-    return None, None
-
-
-def _invoice_ar_summary() -> dict:
-    """Aggregate open-AR totals and aging from the Supabase invoices table."""
-    try:
-        res = (
-            _sb_client()
-            .table("invoices")
-            .select("invoice_id, customer_name, open_balance, due_date")
-            .gt("open_balance", 0)
-            .limit(5000)
-            .execute()
-        )
-        rows = res.data or []
-
-        if not rows:
-            return {"total_open_ar": 0, "invoice_count": 0, "by_bucket": {}, "oldest_invoice": None}
-
-        from collections import defaultdict
-        bucket_counts:  dict[str, int]   = defaultdict(int)
-        bucket_amounts: dict[str, float] = defaultdict(float)
-        total_ar = 0.0
-        oldest: dict | None = None
-
-        for r in rows:
-            bal                   = float(r.get("open_balance") or 0)
-            days_out, bucket      = _aging_info(r.get("due_date"))
-            total_ar             += bal
-            bucket_counts[bucket]  += 1
-            bucket_amounts[bucket] += bal
-
-            due = r.get("due_date")
-            if due and days_out is not None and (
-                oldest is None or days_out > (oldest.get("days_outstanding") or 0)
-            ):
-                oldest = {
-                    "invoice_id":       r["invoice_id"],
-                    "customer_name":    r.get("customer_name"),
-                    "open_balance":     bal,
-                    "due_date":         due,
-                    "days_outstanding": days_out,
-                }
-
-        ordered_buckets = ["Current", "1-30 Days", "31-60 Days", "61-90 Days", "90+ Days", "Unknown"]
-        by_bucket = {
-            b: {"count": bucket_counts[b], "amount": round(bucket_amounts[b], 2)}
-            for b in ordered_buckets
-            if bucket_counts[b] > 0
-        }
-
-        return {
-            "total_open_ar":  round(total_ar, 2),
-            "invoice_count":  len(rows),
-            "by_bucket":      by_bucket,
-            "oldest_invoice": oldest,
-        }
-    except Exception as exc:
-        return {"error": str(exc)}
-
-
-def _search_invoices_supabase(
-    customer_name: str   = "",
-    aging_bucket:  str   = "",
-    min_balance:   float = 0.0,
-    limit:         int   = 50,
-) -> dict:
-    """Query Supabase invoices table with optional filters, sorted by days_outstanding desc."""
-    try:
-        q = (
-            _sb_client()
-            .table("invoices")
-            .select("invoice_id, txn_number, txn_date, due_date, open_balance, customer_name, memo")
-            .gt("open_balance", 0)
-        )
-        if customer_name:
-            q = q.ilike("customer_name", f"%{customer_name}%")
-        if min_balance > 0:
-            q = q.gte("open_balance", min_balance)
-
-        # Translate aging_bucket to a due_date range filter so it works even when
-        # the generated column is null (CURRENT_DATE is volatile; PostgreSQL may
-        # refuse to store it in a GENERATED ALWAYS AS STORED column).
-        if aging_bucket:
-            due_lt, due_gte = _bucket_due_date_range(aging_bucket)
-            if aging_bucket == "Current":
-                q = q.gte("due_date", due_gte)
-            elif aging_bucket == "90+ Days":
-                q = q.lt("due_date", due_lt)
-            elif due_lt and due_gte:
-                q = q.lt("due_date", due_lt).gte("due_date", due_gte)
-
-        res  = q.limit(limit * 3).execute()   # over-fetch so Python sort+limit is accurate
-        rows = res.data or []
-
-        # Compute and attach aging fields in Python, then sort by days_outstanding desc
-        enriched = []
-        for r in rows:
-            days_out, bucket = _aging_info(r.get("due_date"))
-            enriched.append({**r, "days_outstanding": days_out, "aging_bucket": bucket})
-
-        enriched.sort(key=lambda x: (x["days_outstanding"] or 0), reverse=True)
-        enriched = enriched[:limit]
-
-        return {
-            "count":   len(enriched),
-            "filters": {
-                "customer_name": customer_name or None,
-                "aging_bucket":  aging_bucket  or None,
-                "min_balance":   min_balance   or None,
-            },
-            "invoices": enriched,
-        }
-    except Exception as exc:
-        return {"error": str(exc)}
-
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -1277,10 +1066,9 @@ def search_invoices_live(
 @mcp.tool()
 def invoice_ar_summary() -> dict:
     """
-    TIER 2 — Supabase. Return a full accounts-receivable aging summary from
-    the Supabase invoices table.
-    This tool queries Supabase directly — use this BEFORE making any live
-    Striven API calls for this type of question.
+    TIER 2 — AR aging summary. Calls the Flask /analyze/invoice-ar-summary
+    route, which queries Supabase server-side. Use this BEFORE making any
+    live Striven API calls for this type of question.
 
     Aggregates all open-balance invoices into aging buckets and surfaces the
     oldest unpaid invoice. Run sync_invoices.py first to refresh the data.
@@ -1302,7 +1090,7 @@ def invoice_ar_summary() -> dict:
         oldest_invoice — customer name, balance, due date, and days outstanding
                          for the single oldest unpaid invoice
     """
-    return _invoice_ar_summary()
+    return _call("get", "/analyze/invoice-ar-summary")
 
 
 @mcp.tool()
@@ -1313,10 +1101,10 @@ def search_invoices(
     limit:         int   = 50,
 ) -> dict:
     """
-    TIER 2 — Supabase. Search open invoices in the Supabase invoices table
-    with optional filters, sorted by days outstanding (oldest first).
-    This tool queries Supabase directly — use this BEFORE making any live
-    Striven API calls for this type of question.
+    TIER 2 — Invoice search. Calls the Flask /queries/search-invoices route,
+    which queries Supabase server-side. Search open invoices with optional
+    filters, sorted by days outstanding (oldest first). Use this BEFORE
+    making any live Striven API calls for this type of question.
 
     Use when asked:
       'Show me overdue invoices for [customer]'
@@ -1348,12 +1136,12 @@ def search_invoices(
                    each with: invoice_id, txn_number, customer_name, due_date,
                    open_balance, days_outstanding, aging_bucket, memo
     """
-    return _search_invoices_supabase(
-        customer_name=customer_name,
-        aging_bucket=aging_bucket,
-        min_balance=min_balance,
-        limit=limit,
-    )
+    params: dict = {}
+    if customer_name:       params["customer_name"] = customer_name
+    if aging_bucket:        params["aging_bucket"]  = aging_bucket
+    if min_balance:         params["min_balance"]   = min_balance
+    if limit != 50:         params["limit"]         = limit
+    return _call("get", "/queries/search-invoices", params=params or None)
 
 
 @mcp.tool()
@@ -1702,7 +1490,7 @@ def search_knowledge_base(query: str, top_k: int = 5) -> dict:
                'Heat and Glo SL-550 clearances', 'gas valve troubleshooting').
         top_k: Number of results to return (default 5, max 20).
     """
-    return _kb_search(query, top_k)
+    return _call("get", "/search-knowledge-base", params={"query": query, "limit": top_k})
 
 
 @mcp.tool()

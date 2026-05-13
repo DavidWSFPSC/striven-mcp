@@ -3087,6 +3087,188 @@ def search_payments():
 
 
 # ---------------------------------------------------------------------------
+# AR / Invoice Supabase routes — aging summary and filtered invoice search
+#
+# These routes consolidate logic that was previously in-process in mcp_server.py.
+# They are the single authoritative server-side path for AR data.
+# ---------------------------------------------------------------------------
+
+def _aging_info(due_date_str):
+    """Return (days_outstanding, aging_bucket) from a due_date ISO string."""
+    from datetime import date, datetime
+    if not due_date_str:
+        return None, "Unknown"
+    try:
+        due = datetime.fromisoformat(due_date_str.replace("Z", "+00:00")).date()
+    except Exception:
+        return None, "Unknown"
+    today = date.today()
+    days  = (today - due).days
+    if today <= due:
+        return 0, "Current"
+    if days <= 30:
+        return days, "1-30 Days"
+    if days <= 60:
+        return days, "31-60 Days"
+    if days <= 90:
+        return days, "61-90 Days"
+    return days, "90+ Days"
+
+
+def _bucket_due_date_range(bucket):
+    """Translate an aging_bucket name to (due_date_lt, due_date_gte) for Supabase filtering."""
+    from datetime import date, timedelta
+    today = date.today()
+    if bucket == "Current":
+        return None, today.isoformat()
+    if bucket == "1-30 Days":
+        return today.isoformat(), (today - timedelta(days=30)).isoformat()
+    if bucket == "31-60 Days":
+        return (today - timedelta(days=30)).isoformat(), (today - timedelta(days=60)).isoformat()
+    if bucket == "61-90 Days":
+        return (today - timedelta(days=60)).isoformat(), (today - timedelta(days=90)).isoformat()
+    if bucket == "90+ Days":
+        return (today - timedelta(days=90)).isoformat(), None
+    return None, None
+
+
+@app.route("/analyze/invoice-ar-summary", methods=["GET"])
+def analyze_invoice_ar_summary():
+    """
+    AR aging summary from the Supabase invoices table.
+
+    Aggregates all open-balance invoices into aging buckets (Current,
+    1-30 Days, 31-60 Days, 61-90 Days, 90+ Days) and surfaces the
+    oldest unpaid invoice.  Requires sync_invoices.py to have run first.
+
+    Returns:
+        total_open_ar  — total dollars outstanding
+        invoice_count  — number of open invoices
+        by_bucket      — count and amount per aging bucket
+        oldest_invoice — customer, balance, due_date, days_outstanding
+    """
+    try:
+        res = (
+            _sb_client()
+            .table("invoices")
+            .select("invoice_id, customer_name, open_balance, due_date")
+            .gt("open_balance", 0)
+            .limit(5000)
+            .execute()
+        )
+        rows = res.data or []
+
+        if not rows:
+            return jsonify({
+                "total_open_ar": 0, "invoice_count": 0,
+                "by_bucket": {}, "oldest_invoice": None,
+            })
+
+        from collections import defaultdict
+        bucket_counts:  dict = defaultdict(int)
+        bucket_amounts: dict = defaultdict(float)
+        total_ar = 0.0
+        oldest   = None
+
+        for r in rows:
+            bal              = float(r.get("open_balance") or 0)
+            days_out, bucket = _aging_info(r.get("due_date"))
+            total_ar               += bal
+            bucket_counts[bucket]  += 1
+            bucket_amounts[bucket] += bal
+
+            due = r.get("due_date")
+            if due and days_out is not None and (
+                oldest is None or days_out > (oldest.get("days_outstanding") or 0)
+            ):
+                oldest = {
+                    "invoice_id":       r["invoice_id"],
+                    "customer_name":    r.get("customer_name"),
+                    "open_balance":     bal,
+                    "due_date":         due,
+                    "days_outstanding": days_out,
+                }
+
+        ordered = ["Current", "1-30 Days", "31-60 Days", "61-90 Days", "90+ Days", "Unknown"]
+        by_bucket = {
+            b: {"count": bucket_counts[b], "amount": round(bucket_amounts[b], 2)}
+            for b in ordered if bucket_counts[b] > 0
+        }
+
+        return jsonify({
+            "total_open_ar":  round(total_ar, 2),
+            "invoice_count":  len(rows),
+            "by_bucket":      by_bucket,
+            "oldest_invoice": oldest,
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/queries/search-invoices", methods=["GET"])
+def search_invoices_supabase():
+    """
+    Search open invoices in Supabase with optional filters, sorted oldest-first.
+
+    Query params (all optional):
+        customer_name  — partial match, case-insensitive
+        aging_bucket   — Current | 1-30 Days | 31-60 Days | 61-90 Days | 90+ Days
+        min_balance    — float, minimum open_balance (default 0)
+        limit          — max results (default 50, max 500)
+
+    Returns invoices sorted by days_outstanding descending (oldest first).
+    Response shape matches the previous in-process _search_invoices_supabase() exactly.
+    """
+    customer_name = request.args.get("customer_name", "")
+    aging_bucket  = request.args.get("aging_bucket", "")
+    min_balance   = float(request.args.get("min_balance", 0.0))
+    limit         = min(int(request.args.get("limit", 50)), 500)
+
+    try:
+        q = (
+            _sb_client()
+            .table("invoices")
+            .select("invoice_id, txn_number, txn_date, due_date, open_balance, customer_name, memo")
+            .gt("open_balance", 0)
+        )
+        if customer_name:
+            q = q.ilike("customer_name", f"%{customer_name}%")
+        if min_balance > 0:
+            q = q.gte("open_balance", min_balance)
+        if aging_bucket:
+            due_lt, due_gte = _bucket_due_date_range(aging_bucket)
+            if aging_bucket == "Current":
+                q = q.gte("due_date", due_gte)
+            elif aging_bucket == "90+ Days":
+                q = q.lt("due_date", due_lt)
+            elif due_lt and due_gte:
+                q = q.lt("due_date", due_lt).gte("due_date", due_gte)
+
+        res  = q.limit(limit * 3).execute()   # over-fetch so Python sort+limit is accurate
+        rows = res.data or []
+
+        enriched = []
+        for r in rows:
+            days_out, bkt = _aging_info(r.get("due_date"))
+            enriched.append({**r, "days_outstanding": days_out, "aging_bucket": bkt})
+
+        enriched.sort(key=lambda x: (x["days_outstanding"] or 0), reverse=True)
+        enriched = enriched[:limit]
+
+        return jsonify({
+            "count":   len(enriched),
+            "filters": {
+                "customer_name": customer_name or None,
+                "aging_bucket":  aging_bucket  or None,
+                "min_balance":   min_balance   or None,
+            },
+            "invoices": enriched,
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
 # Catalog / CRM data routes — items, vendors, contacts, opportunities
 # ---------------------------------------------------------------------------
 
