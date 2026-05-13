@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KB Coverage — WilliamSmith Fireplaces</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='hub.css') }}">
+  <style>
+    /* ── Page layout ─────────────────────────────────────────── */
+    .page-inner {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 48px 28px 80px;
+    }
+
+    /* ── Page header ─────────────────────────────────────────── */
+    .page-eyebrow {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-bottom: 10px;
+    }
+    .page-title {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: 32px;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin: 0 0 10px;
+    }
+    .page-subtitle {
+      font-size: 15px;
+      color: var(--ink-2);
+      line-height: 1.6;
+      max-width: 600px;
+      margin: 0 0 40px;
+    }
+
+    /* ── Rule ────────────────────────────────────────────────── */
+    .rule { border: 0; border-top: 1px solid var(--rule); margin: 36px 0; }
+
+    /* ── Section ─────────────────────────────────────────────── */
+    .section { margin-bottom: 36px; }
+    .section-label {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-bottom: 12px;
+    }
+    .section-heading {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: 19px;
+      letter-spacing: -0.01em;
+      margin: 0 0 10px;
+    }
+    .section p {
+      font-size: 14px;
+      line-height: 1.65;
+      color: var(--ink-2);
+      margin: 0 0 10px;
+    }
+
+    /* ── Status card ─────────────────────────────────────────── */
+    .status-card {
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+    .status-card-icon {
+      width: 36px;
+      height: 36px;
+      flex-shrink: 0;
+      border-radius: var(--radius-sm);
+      display: grid;
+      place-items: center;
+      background: var(--ok-soft);
+      color: var(--ok);
+    }
+    .status-card-icon.coming {
+      background: var(--warn-soft);
+      color: var(--warn);
+    }
+    .status-card-body { flex: 1; min-width: 0; }
+    .status-card-title {
+      font-weight: 600;
+      font-size: 14px;
+      margin: 0 0 4px;
+    }
+    .status-card-desc {
+      font-size: 13px;
+      color: var(--ink-2);
+      line-height: 1.55;
+      margin: 0;
+    }
+    .badge-ok {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--ok-soft);
+      color: var(--ok);
+      font-weight: 500;
+      margin-bottom: 6px;
+    }
+    .badge-soon {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--warn-soft);
+      color: var(--warn);
+      font-weight: 500;
+      margin-bottom: 6px;
+    }
+
+    /* ── Priority list ───────────────────────────────────────── */
+    .priority-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .priority-list li {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius-sm);
+      padding: 12px 16px;
+      font-size: 14px;
+    }
+    .priority-list .vendor-name { font-weight: 600; flex: 1; }
+    .priority-list .vendor-note {
+      font-size: 12.5px;
+      color: var(--ink-3);
+      font-family: var(--font-mono);
+    }
+
+    /* ── Responsive ──────────────────────────────────────────── */
+    @media (max-width: 520px) {
+      .page-inner { padding: 32px 16px 60px; }
+      .page-title  { font-size: 26px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app ready">
+
+    <!-- Header -->
+    <header>
+      <div class="header-inner">
+        <a href="/" class="brand" aria-label="WSF Hub home">
+          <svg class="brand-mark-sm" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+            <defs>
+              <symbol id="wsf-mark-kb" viewBox="0 0 48 48">
+                <path d="M24 44 C16 44 10 38 8 30 L6 18 C6 14 9 11 13 11 L16 11 L16 8 C16 5.8 17.8 4 20 4 L28 4 C30.2 4 32 5.8 32 8 L32 11 L35 11 C39 11 42 14 42 18 L40 30 C38 38 32 44 24 44 Z" fill="currentColor" opacity="0.18"/>
+                <path d="M24 44 C16 44 10 38 8 30 L6 18 C6 14 9 11 13 11 L16 11 L16 8 C16 5.8 17.8 4 20 4 L28 4 C30.2 4 32 5.8 32 8 L32 11 L35 11 C39 11 42 14 42 18 L40 30 C38 38 32 44 24 44 Z" stroke="currentColor" stroke-width="1.5" fill="none"/>
+                <path d="M24 36 C21 32 19 28 20 24 C21 28 23 30 24 31 C25 30 27 28 28 24 C29 28 27 32 24 36 Z" fill="#e07a2c"/>
+              </symbol>
+            </defs>
+            <use href="#wsf-mark-kb" width="48" height="48"/>
+          </svg>
+          <span class="brand-name">
+            <span class="word">WilliamSmith</span>
+            <span class="sub">Fireplaces</span>
+          </span>
+        </a>
+
+        <div class="header-meta">
+          <a href="/" class="back-btn" aria-label="Back to hub">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M7.5 2L3.5 6L7.5 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Hub
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main -->
+    <main>
+      <div class="page-inner">
+
+        <div class="page-eyebrow">Analyze</div>
+        <h1 class="page-title">KB Coverage</h1>
+        <p class="page-subtitle">
+          Identify where WilliamSmith makes money but lacks the documentation to support it —
+          install manuals, owner manuals, brochures, and internal knowledge articles.
+        </p>
+
+        <hr class="rule">
+
+        <!-- Current capability -->
+        <div class="section">
+          <div class="section-label">Current Capability</div>
+          <h2 class="section-heading">KB Gap Analysis</h2>
+          <p>
+            The <code>kb_gap_report</code> tool is live. It cross-references job revenue data
+            against indexed knowledge base articles and flags product lines that generate significant
+            revenue but have little or no documentation coverage.
+          </p>
+          <p>
+            Ask WilliamSmith: <em>"Which product lines are we installing most that have no KB articles?"</em>
+          </p>
+
+          <div class="status-card">
+            <div class="status-card-icon">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <path d="M9 2a7 7 0 1 1 0 14A7 7 0 0 1 9 2Z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                <path d="M6.5 9l2 2 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <div class="status-card-body">
+              <div class="badge-ok">LIVE</div>
+              <div class="status-card-title">kb_gap_report — MCP tool</div>
+              <p class="status-card-desc">
+                Queries the KB index against installed product data. Returns product lines with the
+                highest revenue-to-coverage gap. Available in Ask WilliamSmith now.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <hr class="rule">
+
+        <!-- Coming soon -->
+        <div class="section">
+          <div class="section-label">Coming Soon</div>
+          <h2 class="section-heading">Product Coverage Dashboard</h2>
+          <p>
+            A visual matrix showing every product line WSF actively installs mapped against
+            available documentation: install manual, owner manual, brochure, internal KB articles,
+            and callback history. Gaps will be color-coded and sortable by revenue impact.
+          </p>
+
+          <div class="status-card">
+            <div class="status-card-icon coming">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <rect x="2" y="2" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                <path d="M6 9h6M6 12h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                <path d="M6 6h2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <div class="status-card-body">
+              <div class="badge-soon">COMING SOON</div>
+              <div class="status-card-title">kb_product_index coverage matrix</div>
+              <p class="status-card-desc">
+                Per-brand, per-model documentation inventory. Tracks what exists, what's missing,
+                and what to prioritize uploading next.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <hr class="rule">
+
+        <!-- Priority vendors -->
+        <div class="section">
+          <div class="section-label">Priority Vendors</div>
+          <h2 class="section-heading">Where to focus first</h2>
+          <p>
+            These product lines represent high install volume or high callback frequency
+            with known documentation gaps. Adding their manuals and specs to the KB will
+            have the most immediate impact on service quality.
+          </p>
+
+          <ul class="priority-list">
+            <li>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="8" cy="8" r="6" stroke="var(--accent)" stroke-width="1.4" fill="none"/>
+                <circle cx="8" cy="8" r="2" fill="var(--accent)"/>
+              </svg>
+              <span class="vendor-name">RH Peterson</span>
+              <span class="vendor-note">Gas logs · burners · high volume</span>
+            </li>
+            <li>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="8" cy="8" r="6" stroke="var(--accent)" stroke-width="1.4" fill="none"/>
+                <circle cx="8" cy="8" r="2" fill="var(--accent)"/>
+              </svg>
+              <span class="vendor-name">American Fyre Designs</span>
+              <span class="vendor-note">Outdoor fire features · limited docs</span>
+            </li>
+            <li>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="8" cy="8" r="6" stroke="var(--accent)" stroke-width="1.4" fill="none"/>
+                <circle cx="8" cy="8" r="2" fill="var(--accent)"/>
+              </svg>
+              <span class="vendor-name">Rasmussen</span>
+              <span class="vendor-note">Gas logs · older models in the field</span>
+            </li>
+            <li>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="8" cy="8" r="6" stroke="var(--accent)" stroke-width="1.4" fill="none"/>
+                <circle cx="8" cy="8" r="2" fill="var(--accent)"/>
+              </svg>
+              <span class="vendor-name">Napoleon</span>
+              <span class="vendor-note">Inserts · linear fireplaces · active line</span>
+            </li>
+          </ul>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- Footer -->
+    <footer>
+      <div class="footer-inner">
+        <span>© 2026 WilliamSmith Fireplaces</span>
+        <span class="sep">·</span>
+        <span>KB Coverage</span>
+        <span class="footer-right">v2.0.0</span>
+      </div>
+    </footer>
+
+  </div><!-- /.app -->
+</body>
+</html>

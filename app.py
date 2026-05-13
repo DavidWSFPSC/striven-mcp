@@ -121,6 +121,8 @@ _HUB_PUBLIC = frozenset({
     ("GET", "/ask"),
     ("GET", "/sop"),
     ("GET", "/triage"),
+    ("GET", "/kb"),
+    ("GET", "/manifest"),
     ("GET", "/chase-cover-calculator"),
 })
 
@@ -7625,6 +7627,18 @@ def sop():
 def triage():
     """AI Triage & Dispatch System — project workspace."""
     return render_template("triage.html")
+
+
+@app.route("/kb", methods=["GET"])
+def kb():
+    """KB Coverage — knowledge gap dashboard placeholder."""
+    return render_template("kb.html")
+
+
+@app.route("/manifest", methods=["GET"])
+def manifest():
+    """Manifest Center — field-ready installer package builder placeholder."""
+    return render_template("manifest.html")
 
 
 @app.route("/chase-cover-calculator", methods=["GET"])
