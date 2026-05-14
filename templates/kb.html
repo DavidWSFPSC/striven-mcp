@@ -11,7 +11,7 @@
   <style>
     /* ── Page layout ─────────────────────────────────────────── */
     .page-inner {
-      max-width: 860px;
+      max-width: 1080px;
       margin: 0 auto;
       padding: 48px 28px 80px;
     }
@@ -37,12 +37,62 @@
       font-size: 15px;
       color: var(--ink-2);
       line-height: 1.6;
-      max-width: 600px;
+      max-width: 620px;
       margin: 0 0 40px;
+    }
+
+    /* ── Error banner ────────────────────────────────────────── */
+    .error-banner {
+      background: var(--bad-soft);
+      border: 1px solid rgba(176,74,44,0.25);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      font-size: 13.5px;
+      color: var(--bad);
+      margin-bottom: 32px;
     }
 
     /* ── Rule ────────────────────────────────────────────────── */
     .rule { border: 0; border-top: 1px solid var(--rule); margin: 36px 0; }
+
+    /* ── Stat grid ───────────────────────────────────────────── */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 14px;
+      margin-bottom: 40px;
+    }
+    .stat-card {
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      box-shadow: var(--shadow-sm);
+    }
+    .stat-label {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-bottom: 8px;
+    }
+    .stat-value {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: 28px;
+      letter-spacing: -0.02em;
+      line-height: 1;
+      color: var(--ink);
+    }
+    .stat-value.bad   { color: var(--bad); }
+    .stat-value.warn  { color: var(--warn); }
+    .stat-value.ok    { color: var(--ok); }
+    .stat-sub {
+      font-size: 12px;
+      color: var(--ink-3);
+      margin-top: 4px;
+    }
 
     /* ── Section ─────────────────────────────────────────────── */
     .section { margin-bottom: 36px; }
@@ -57,110 +107,156 @@
     .section-heading {
       font-family: var(--font-display);
       font-weight: 600;
-      font-size: 19px;
+      font-size: 20px;
       letter-spacing: -0.01em;
-      margin: 0 0 10px;
-    }
-    .section p {
-      font-size: 14px;
-      line-height: 1.65;
-      color: var(--ink-2);
-      margin: 0 0 10px;
+      margin: 0 0 16px;
     }
 
-    /* ── Status card ─────────────────────────────────────────── */
-    .status-card {
+    /* ── Critical gap cards ──────────────────────────────────── */
+    .gap-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+    }
+    .gap-card {
       background: var(--bg-elev);
       border: 1px solid var(--rule);
       border-radius: var(--radius);
-      padding: 20px 22px;
+      padding: 16px 18px;
       box-shadow: var(--shadow-sm);
       display: flex;
       align-items: flex-start;
-      gap: 16px;
-      margin-bottom: 12px;
+      gap: 12px;
     }
-    .status-card-icon {
-      width: 36px;
-      height: 36px;
+    .gap-card.red  { border-left: 3px solid var(--bad); }
+    .gap-card.yellow { border-left: 3px solid var(--warn); }
+    .gap-status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
       flex-shrink: 0;
-      border-radius: var(--radius-sm);
-      display: grid;
-      place-items: center;
-      background: var(--ok-soft);
-      color: var(--ok);
+      margin-top: 4px;
     }
-    .status-card-icon.coming {
-      background: var(--warn-soft);
-      color: var(--warn);
-    }
-    .status-card-body { flex: 1; min-width: 0; }
-    .status-card-title {
+    .gap-status-dot.red    { background: var(--bad); }
+    .gap-status-dot.yellow { background: var(--warn); }
+    .gap-body { flex: 1; min-width: 0; }
+    .gap-vendor {
       font-weight: 600;
       font-size: 14px;
-      margin: 0 0 4px;
+      margin-bottom: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    .status-card-desc {
-      font-size: 13px;
+    .gap-action {
+      font-size: 12.5px;
       color: var(--ink-2);
-      line-height: 1.55;
-      margin: 0;
-    }
-    .badge-ok {
-      display: inline-block;
-      font-family: var(--font-mono);
-      font-size: 10px;
-      letter-spacing: 0.08em;
-      padding: 2px 7px;
-      border-radius: 999px;
-      background: var(--ok-soft);
-      color: var(--ok);
-      font-weight: 500;
+      line-height: 1.45;
       margin-bottom: 6px;
     }
-    .badge-soon {
-      display: inline-block;
+    .gap-meta {
       font-family: var(--font-mono);
-      font-size: 10px;
-      letter-spacing: 0.08em;
-      padding: 2px 7px;
-      border-radius: 999px;
-      background: var(--warn-soft);
-      color: var(--warn);
-      font-weight: 500;
-      margin-bottom: 6px;
+      font-size: 10.5px;
+      color: var(--ink-3);
+      letter-spacing: 0.03em;
     }
 
-    /* ── Priority list ───────────────────────────────────────── */
-    .priority-list {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .priority-list li {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      background: var(--bg-elev);
+    /* ── Coverage table ──────────────────────────────────────── */
+    .table-wrap {
+      overflow-x: auto;
       border: 1px solid var(--rule);
-      border-radius: var(--radius-sm);
-      padding: 12px 16px;
-      font-size: 14px;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-sm);
     }
-    .priority-list .vendor-name { font-weight: 600; flex: 1; }
-    .priority-list .vendor-note {
-      font-size: 12.5px;
-      color: var(--ink-3);
+    table.coverage-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .coverage-table thead th {
+      background: var(--bg-sunk);
+      padding: 10px 14px;
+      text-align: left;
       font-family: var(--font-mono);
+      font-size: 9.5px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      font-weight: 500;
+      border-bottom: 1px solid var(--rule);
+      white-space: nowrap;
+    }
+    .coverage-table thead th.right { text-align: right; }
+    .coverage-table tbody tr {
+      border-bottom: 1px solid var(--rule);
+      transition: background .1s;
+    }
+    .coverage-table tbody tr:last-child { border-bottom: 0; }
+    .coverage-table tbody tr:hover { background: var(--bg-elev); }
+    .coverage-table td {
+      padding: 11px 14px;
+      vertical-align: middle;
+      color: var(--ink-2);
+    }
+    .coverage-table td.right { text-align: right; font-family: var(--font-mono); font-size: 12px; }
+    .coverage-table td.vendor-cell {
+      font-weight: 600;
+      color: var(--ink);
+      white-space: nowrap;
+    }
+
+    /* Status badge */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .badge-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .badge.red    { background: var(--bad-soft);  color: var(--bad);  }
+    .badge.red    .badge-dot { background: var(--bad); }
+    .badge.yellow { background: var(--warn-soft); color: var(--warn); }
+    .badge.yellow .badge-dot { background: var(--warn); }
+    .badge.green  { background: var(--ok-soft);   color: var(--ok);  }
+    .badge.green  .badge-dot { background: var(--ok); }
+    .badge.unknown { background: var(--bg-sunk);  color: var(--ink-3); }
+    .badge.unknown .badge-dot { background: var(--ink-3); }
+
+    /* Manual check */
+    .manual-yes { color: var(--ok);   font-weight: 600; }
+    .manual-no  { color: var(--bad);  font-weight: 600; }
+
+    /* Action cell */
+    .action-cell {
+      font-size: 12px;
+      color: var(--ink-2);
+      max-width: 240px;
+    }
+
+    /* Empty state */
+    .empty-state {
+      padding: 48px 24px;
+      text-align: center;
+      color: var(--ink-3);
+      font-size: 14px;
     }
 
     /* ── Responsive ──────────────────────────────────────────── */
-    @media (max-width: 520px) {
+    @media (max-width: 640px) {
       .page-inner { padding: 32px 16px 60px; }
       .page-title  { font-size: 26px; }
+      .stat-grid   { grid-template-columns: repeat(2, 1fr); }
     }
   </style>
 </head>
@@ -205,120 +301,130 @@
         <div class="page-eyebrow">Analyze</div>
         <h1 class="page-title">KB Coverage</h1>
         <p class="page-subtitle">
-          Identify where WilliamSmith makes money but lacks the documentation to support it —
-          install manuals, owner manuals, brochures, and internal knowledge articles.
+          Where WilliamSmith generates revenue without the documentation to back it up —
+          install manuals, owner manuals, brochures, and internal knowledge articles by vendor.
         </p>
 
-        <hr class="rule">
+        {% if error %}
+        <div class="error-banner">
+          Could not load coverage data from the database. Check the Supabase connection and try again.
+        </div>
+        {% endif %}
 
-        <!-- Current capability -->
-        <div class="section">
-          <div class="section-label">Current Capability</div>
-          <h2 class="section-heading">KB Gap Analysis</h2>
-          <p>
-            The <code>kb_gap_report</code> tool is live. It cross-references job revenue data
-            against indexed knowledge base articles and flags product lines that generate significant
-            revenue but have little or no documentation coverage.
-          </p>
-          <p>
-            Ask WilliamSmith: <em>"Which product lines are we installing most that have no KB articles?"</em>
-          </p>
-
-          <div class="status-card">
-            <div class="status-card-icon">
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <path d="M9 2a7 7 0 1 1 0 14A7 7 0 0 1 9 2Z" stroke="currentColor" stroke-width="1.4" fill="none"/>
-                <path d="M6.5 9l2 2 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </div>
-            <div class="status-card-body">
-              <div class="badge-ok">LIVE</div>
-              <div class="status-card-title">kb_gap_report — MCP tool</div>
-              <p class="status-card-desc">
-                Queries the KB index against installed product data. Returns product lines with the
-                highest revenue-to-coverage gap. Available in Ask WilliamSmith now.
-              </p>
-            </div>
+        <!-- Stat cards -->
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-label">Total Vendors</div>
+            <div class="stat-value">{{ total_vendors }}</div>
+            <div class="stat-sub">tracked in KB index</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Critical Gaps</div>
+            <div class="stat-value bad">{{ red_count }}</div>
+            <div class="stat-sub">red coverage status</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Partial Coverage</div>
+            <div class="stat-value warn">{{ yellow_count }}</div>
+            <div class="stat-sub">yellow coverage status</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Good Coverage</div>
+            <div class="stat-value ok">{{ green_count }}</div>
+            <div class="stat-sub">green coverage status</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Missing Install Manual</div>
+            <div class="stat-value bad">{{ missing_install }}</div>
+            <div class="stat-sub">vendors without one</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Total Revenue</div>
+            <div class="stat-value" style="font-size:22px;">{{ total_revenue_fmt }}</div>
+            <div class="stat-sub">across all tracked vendors</div>
           </div>
         </div>
 
+        {% if critical %}
         <hr class="rule">
 
-        <!-- Coming soon -->
+        <!-- Critical gaps -->
         <div class="section">
-          <div class="section-label">Coming Soon</div>
-          <h2 class="section-heading">Product Coverage Dashboard</h2>
-          <p>
-            A visual matrix showing every product line WSF actively installs mapped against
-            available documentation: install manual, owner manual, brochure, internal KB articles,
-            and callback history. Gaps will be color-coded and sortable by revenue impact.
-          </p>
-
-          <div class="status-card">
-            <div class="status-card-icon coming">
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <rect x="2" y="2" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.4" fill="none"/>
-                <path d="M6 9h6M6 12h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                <path d="M6 6h2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-              </svg>
+          <div class="section-label">Needs Action</div>
+          <h2 class="section-heading">Critical &amp; Partial Coverage Gaps</h2>
+          <div class="gap-grid">
+            {% for v in critical %}
+            <div class="gap-card {{ v.coverage_status }}">
+              <div class="gap-status-dot {{ v.coverage_status }}"></div>
+              <div class="gap-body">
+                <div class="gap-vendor">{{ v.vendor }}</div>
+                <div class="gap-action">{{ v.action_needed }}</div>
+                <div class="gap-meta">
+                  {{ v.revenue_fmt }} rev &nbsp;·&nbsp;
+                  {{ v.kb_doc_count }} KB doc{% if v.kb_doc_count != 1 %}s{% endif %}
+                  {% if not v.has_install_manual %} &nbsp;·&nbsp; <span style="color:var(--bad)">no install manual</span>{% endif %}
+                </div>
+              </div>
             </div>
-            <div class="status-card-body">
-              <div class="badge-soon">COMING SOON</div>
-              <div class="status-card-title">kb_product_index coverage matrix</div>
-              <p class="status-card-desc">
-                Per-brand, per-model documentation inventory. Tracks what exists, what's missing,
-                and what to prioritize uploading next.
-              </p>
-            </div>
+            {% endfor %}
           </div>
         </div>
+        {% endif %}
 
         <hr class="rule">
 
-        <!-- Priority vendors -->
+        <!-- Full table -->
         <div class="section">
-          <div class="section-label">Priority Vendors</div>
-          <h2 class="section-heading">Where to focus first</h2>
-          <p>
-            These product lines represent high install volume or high callback frequency
-            with known documentation gaps. Adding their manuals and specs to the KB will
-            have the most immediate impact on service quality.
-          </p>
+          <div class="section-label">All Vendors</div>
+          <h2 class="section-heading">Full Coverage Table</h2>
 
-          <ul class="priority-list">
-            <li>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <circle cx="8" cy="8" r="6" stroke="var(--accent)" stroke-width="1.4" fill="none"/>
-                <circle cx="8" cy="8" r="2" fill="var(--accent)"/>
-              </svg>
-              <span class="vendor-name">RH Peterson</span>
-              <span class="vendor-note">Gas logs · burners · high volume</span>
-            </li>
-            <li>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <circle cx="8" cy="8" r="6" stroke="var(--accent)" stroke-width="1.4" fill="none"/>
-                <circle cx="8" cy="8" r="2" fill="var(--accent)"/>
-              </svg>
-              <span class="vendor-name">American Fyre Designs</span>
-              <span class="vendor-note">Outdoor fire features · limited docs</span>
-            </li>
-            <li>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <circle cx="8" cy="8" r="6" stroke="var(--accent)" stroke-width="1.4" fill="none"/>
-                <circle cx="8" cy="8" r="2" fill="var(--accent)"/>
-              </svg>
-              <span class="vendor-name">Rasmussen</span>
-              <span class="vendor-note">Gas logs · older models in the field</span>
-            </li>
-            <li>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <circle cx="8" cy="8" r="6" stroke="var(--accent)" stroke-width="1.4" fill="none"/>
-                <circle cx="8" cy="8" r="2" fill="var(--accent)"/>
-              </svg>
-              <span class="vendor-name">Napoleon</span>
-              <span class="vendor-note">Inserts · linear fireplaces · active line</span>
-            </li>
-          </ul>
+          {% if vendors %}
+          <div class="table-wrap">
+            <table class="coverage-table">
+              <thead>
+                <tr>
+                  <th>Vendor</th>
+                  <th>Status</th>
+                  <th class="right">Revenue</th>
+                  <th class="right">Profit</th>
+                  <th class="right">Margin</th>
+                  <th class="right">SKUs</th>
+                  <th class="right">KB Docs</th>
+                  <th>Install Manual</th>
+                  <th>Action Needed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for v in vendors %}
+                <tr>
+                  <td class="vendor-cell">{{ v.vendor }}</td>
+                  <td>
+                    <span class="badge {{ v.coverage_status }}">
+                      <span class="badge-dot"></span>
+                      {{ v.coverage_status | upper }}
+                    </span>
+                  </td>
+                  <td class="right">{{ v.revenue_fmt }}</td>
+                  <td class="right">{{ v.profit_fmt }}</td>
+                  <td class="right">{{ v.margin_fmt }}</td>
+                  <td class="right">{{ v.unique_skus }}</td>
+                  <td class="right">{{ v.kb_doc_count }}</td>
+                  <td>
+                    {% if v.has_install_manual %}
+                      <span class="manual-yes">Yes</span>
+                    {% else %}
+                      <span class="manual-no">No</span>
+                    {% endif %}
+                  </td>
+                  <td class="action-cell">{{ v.action_needed }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <div class="empty-state">No vendor data available.</div>
+          {% endif %}
         </div>
 
       </div>

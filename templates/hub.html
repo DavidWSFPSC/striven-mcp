@@ -296,35 +296,12 @@ main {
 </head>
 <body>
 
-<!-- ─── Inline SVG symbol (SC silhouette + flame) ─── -->
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <defs>
-    <symbol id="wsf-mark" viewBox="0 0 100 90">
-      <path d="M 4,42 C 4,40 6,38 8,37
-               L 22,30 L 38,23 L 54,18 L 68,15 L 80,15 L 88,18
-               C 90,20 91,23 92,26
-               L 94,34 L 95,42 L 94,50 L 91,57 L 86,63
-               L 78,69 L 68,74 L 56,78 L 44,80 L 34,76
-               C 28,72 24,66 20,58
-               L 14,46 L 8,46 Z" fill="#1c1714"/>
-      <g transform="translate(64 28) scale(1.3)">
-        <path d="M8 0 C 9 4, 14 6, 14 11 C 14 14, 11.5 15, 11 13
-                 C 11 16, 13 18, 13 21 C 13 25, 10 27, 8 27
-                 C 6 27, 3 25, 3 21 C 3 18, 5 16.5, 5 13.5
-                 C 5 15.5, 2.5 15, 2.5 11.5 C 2.5 8, 6 6, 8 0 Z"
-              fill="#e07a2c"/>
-      </g>
-    </symbol>
-  </defs>
-</svg>
 
 <!-- ─── Gate ─── -->
 <div class="gate" id="gate">
   <div class="gate-card">
     <div class="gate-mark">
-      <svg class="gate-logo" viewBox="0 0 100 90" aria-hidden="true">
-        <use href="#wsf-mark"/>
-      </svg>
+      <img class="gate-logo" src="/static/logo.png" alt="WilliamSmith Fireplaces" />
       <span class="gate-mark-text">WSF Hub · Internal</span>
     </div>
     <h1>Sign in to continue.</h1>
@@ -347,9 +324,7 @@ main {
   <header>
     <div class="header-inner">
       <a class="brand" href="/">
-        <svg class="brand-mark-sm" viewBox="0 0 100 90" aria-hidden="true">
-          <use href="#wsf-mark"/>
-        </svg>
+        <img class="brand-mark-sm" src="/static/logo.png" alt="WilliamSmith Fireplaces" style="object-fit:contain;" />
         <div class="brand-name">
           <span class="word">WSF Hub</span>
           <span class="sub">Internal · WilliamSmith Fireplaces</span>

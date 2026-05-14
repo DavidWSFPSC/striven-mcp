@@ -7833,8 +7833,87 @@ def triage():
 
 @app.route("/kb", methods=["GET"])
 def kb():
-    """KB Coverage — knowledge gap dashboard placeholder."""
-    return render_template("kb.html")
+    """KB Coverage dashboard — vendor documentation coverage from kb_product_index."""
+    try:
+        res = (
+            _sb_client()
+            .table("kb_product_index")
+            .select("*")
+            .order("total_revenue", desc=True)
+            .execute()
+        )
+        rows = res.data or []
+    except Exception as exc:
+        print(f"[/kb] Supabase error: {exc}", flush=True)
+        rows = []
+
+    def _fmt_currency(v):
+        if v is None:
+            return "—"
+        try:
+            return f"${float(v):,.0f}"
+        except (TypeError, ValueError):
+            return "—"
+
+    def _fmt_pct(v):
+        if v is None:
+            return "—"
+        try:
+            return f"{float(v):.1f}%"
+        except (TypeError, ValueError):
+            return "—"
+
+    vendors = []
+    for r in rows:
+        status = (r.get("coverage_status") or "").lower()
+        has_manual = bool(r.get("has_install_manual"))
+
+        if status == "red":
+            action = "Find and add install manual/spec docs"
+        elif status == "yellow" and not has_manual:
+            action = "Add install manual"
+        elif status == "yellow" and has_manual:
+            action = "Add supporting docs / review coverage"
+        elif status == "green":
+            action = "Maintain"
+        else:
+            action = "Review"
+
+        vendors.append({
+            "vendor":             r.get("vendor") or "—",
+            "unique_skus":        r.get("unique_skus") or 0,
+            "total_revenue":      r.get("total_revenue") or 0,
+            "total_profit":       r.get("total_profit") or 0,
+            "avg_margin_pct":     r.get("avg_margin_pct"),
+            "kb_doc_count":       r.get("kb_doc_count") or 0,
+            "has_install_manual": has_manual,
+            "coverage_status":    status or "unknown",
+            "action_needed":      action,
+            "revenue_fmt":        _fmt_currency(r.get("total_revenue")),
+            "profit_fmt":         _fmt_currency(r.get("total_profit")),
+            "margin_fmt":         _fmt_pct(r.get("avg_margin_pct")),
+        })
+
+    total_vendors   = len(vendors)
+    red_count       = sum(1 for v in vendors if v["coverage_status"] == "red")
+    yellow_count    = sum(1 for v in vendors if v["coverage_status"] == "yellow")
+    green_count     = sum(1 for v in vendors if v["coverage_status"] == "green")
+    missing_install = sum(1 for v in vendors if not v["has_install_manual"])
+    total_rev_sum   = sum(v["total_revenue"] for v in vendors)
+    critical        = [v for v in vendors if v["coverage_status"] in ("red", "yellow")]
+
+    return render_template(
+        "kb.html",
+        vendors=vendors,
+        critical=critical,
+        total_vendors=total_vendors,
+        red_count=red_count,
+        yellow_count=yellow_count,
+        green_count=green_count,
+        missing_install=missing_install,
+        total_revenue_fmt=_fmt_currency(total_rev_sum),
+        error=len(rows) == 0,
+    )
 
 
 @app.route("/manifest", methods=["GET"])
