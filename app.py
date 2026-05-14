@@ -7881,7 +7881,7 @@ def kb():
 
         vendors.append({
             "vendor":             r.get("vendor") or "—",
-            "unique_skus":        r.get("unique_skus") or 0,
+            "unique_skus":        r.get("total_unique_skus") or 0,
             "total_revenue":      r.get("total_revenue") or 0,
             "total_profit":       r.get("total_profit") or 0,
             "avg_margin_pct":     r.get("avg_margin_pct"),
