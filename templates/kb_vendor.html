@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ vendor_name }} — KB Coverage · WilliamSmith Fireplaces</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='hub.css') }}">
+  <style>
+    /* ── Layout ──────────────────────────────────────────────── */
+    .page-inner {
+      max-width: 1140px;
+      margin: 0 auto;
+      padding: 48px 28px 80px;
+    }
+    .page-eyebrow {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-bottom: 10px;
+    }
+    .page-title {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: 32px;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin: 0 0 10px;
+    }
+    .page-subtitle {
+      font-size: 14px;
+      color: var(--ink-3);
+      margin: 0 0 36px;
+      font-family: var(--font-mono);
+      letter-spacing: 0.04em;
+    }
+    .rule { border: 0; border-top: 1px solid var(--rule); margin: 32px 0; }
+
+    /* ── Error banner ────────────────────────────────────────── */
+    .error-banner {
+      background: var(--bad-soft);
+      border: 1px solid rgba(176,74,44,0.25);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      font-size: 13.5px;
+      color: var(--bad);
+      margin-bottom: 28px;
+    }
+
+    /* ── Stat cards ──────────────────────────────────────────── */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 36px;
+    }
+    .stat-card {
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      box-shadow: var(--shadow-sm);
+    }
+    .stat-label {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-bottom: 8px;
+    }
+    .stat-value {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: 26px;
+      letter-spacing: -0.02em;
+      line-height: 1;
+      color: var(--ink);
+    }
+    .stat-sub { font-size: 11.5px; color: var(--ink-3); margin-top: 4px; }
+
+    /* ── Search bar ──────────────────────────────────────────── */
+    .search-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .search-input {
+      flex: 1;
+      max-width: 380px;
+      height: 38px;
+      padding: 0 12px;
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius-sm);
+      font: 14px var(--font-ui);
+      color: var(--ink);
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .search-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(224,122,44,0.14);
+    }
+    .search-count {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--ink-3);
+      letter-spacing: 0.04em;
+    }
+
+    /* ── Table ───────────────────────────────────────────────── */
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-sm);
+    }
+    table.vendor-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+    }
+    .vendor-table thead th {
+      background: var(--bg-sunk);
+      padding: 9px 12px;
+      text-align: left;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      font-weight: 500;
+      border-bottom: 1px solid var(--rule);
+      white-space: nowrap;
+    }
+    .vendor-table thead th.right { text-align: right; }
+    .vendor-table tbody tr {
+      border-bottom: 1px solid var(--rule);
+      transition: background .1s;
+    }
+    .vendor-table tbody tr:last-child { border-bottom: 0; }
+    .vendor-table tbody tr:hover { background: var(--bg-elev); }
+    .vendor-table tbody tr.hidden-row { display: none; }
+    .vendor-table td {
+      padding: 10px 12px;
+      vertical-align: top;
+      color: var(--ink-2);
+    }
+    .vendor-table td.mono { font-family: var(--font-mono); font-size: 11.5px; }
+    .vendor-table td.right { text-align: right; font-family: var(--font-mono); font-size: 11.5px; }
+    .vendor-table td.est-num {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent-deep);
+      white-space: nowrap;
+    }
+    .vendor-table td.customer-cell {
+      font-weight: 600;
+      color: var(--ink);
+      white-space: nowrap;
+    }
+    .vendor-table td.item-cell {
+      font-weight: 500;
+      color: var(--ink);
+      max-width: 240px;
+    }
+    .vendor-table td.desc-cell {
+      color: var(--ink-3);
+      font-size: 11.5px;
+      max-width: 200px;
+    }
+
+    /* Status pill */
+    .status-pill {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      letter-spacing: 0.06em;
+      padding: 2px 7px;
+      border-radius: 999px;
+      white-space: nowrap;
+      background: var(--bg-sunk);
+      color: var(--ink-3);
+    }
+    .status-pill.completed { background: var(--ok-soft);   color: var(--ok); }
+    .status-pill.approved  { background: #e8f0fe;          color: #2d5be3; }
+    .status-pill.quoted    { background: var(--warn-soft); color: var(--warn); }
+    .status-pill.progress  { background: var(--warn-soft); color: var(--warn); }
+
+    /* Empty / no-results states */
+    .empty-state {
+      padding: 56px 24px;
+      text-align: center;
+    }
+    .empty-state h2 {
+      font-family: var(--font-display);
+      font-size: 20px;
+      font-weight: 600;
+      margin: 0 0 8px;
+      color: var(--ink);
+    }
+    .empty-state p { font-size: 14px; color: var(--ink-3); margin: 0; }
+    .no-results-row td {
+      padding: 24px;
+      text-align: center;
+      color: var(--ink-3);
+      font-size: 13px;
+      font-style: italic;
+    }
+
+    /* Note bar */
+    .note-bar {
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      font-size: 12.5px;
+      color: var(--ink-3);
+      margin-bottom: 16px;
+    }
+
+    /* ── Responsive ──────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      .page-inner { padding: 28px 16px 60px; }
+      .page-title  { font-size: 24px; }
+      .stat-grid   { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <div class="app ready">
+
+    <!-- Header -->
+    <header>
+      <div class="header-inner">
+        <a href="/" class="brand" aria-label="WSF Hub home">
+          <svg class="brand-mark-sm" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+            <defs>
+              <symbol id="wsf-mark-kbv" viewBox="0 0 48 48">
+                <path d="M24 44 C16 44 10 38 8 30 L6 18 C6 14 9 11 13 11 L16 11 L16 8 C16 5.8 17.8 4 20 4 L28 4 C30.2 4 32 5.8 32 8 L32 11 L35 11 C39 11 42 14 42 18 L40 30 C38 38 32 44 24 44 Z" fill="currentColor" opacity="0.18"/>
+                <path d="M24 44 C16 44 10 38 8 30 L6 18 C6 14 9 11 13 11 L16 11 L16 8 C16 5.8 17.8 4 20 4 L28 4 C30.2 4 32 5.8 32 8 L32 11 L35 11 C39 11 42 14 42 18 L40 30 C38 38 32 44 24 44 Z" stroke="currentColor" stroke-width="1.5" fill="none"/>
+                <path d="M24 36 C21 32 19 28 20 24 C21 28 23 30 24 31 C25 30 27 28 28 24 C29 28 27 32 24 36 Z" fill="#e07a2c"/>
+              </symbol>
+            </defs>
+            <use href="#wsf-mark-kbv" width="48" height="48"/>
+          </svg>
+          <span class="brand-name">
+            <span class="word">WilliamSmith</span>
+            <span class="sub">Fireplaces</span>
+          </span>
+        </a>
+        <div class="header-meta">
+          <a href="/kb" class="back-btn" aria-label="Back to KB Coverage">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M7.5 2L3.5 6L7.5 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            KB Coverage
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main -->
+    <main>
+      <div class="page-inner">
+
+        <div class="page-eyebrow">KB Coverage · Vendor Drill-Down</div>
+        <h1 class="page-title">{{ vendor_name }}</h1>
+        <p class="page-subtitle">Estimates where this vendor appeared as a matched line item</p>
+
+        {% if error %}
+        <div class="error-banner">
+          Could not load data from the database. The Supabase connection may be unavailable — try again shortly.
+        </div>
+        {% endif %}
+
+        {% if not error and not lines %}
+        <div class="empty-state">
+          <h2>No matches found</h2>
+          <p>No line items in the database matched "{{ vendor_name }}" in the item name field.</p>
+        </div>
+        {% else %}
+
+        <!-- ── Summary cards ──────────────────────────────────── -->
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-label">Matched Line Items</div>
+            <div class="stat-value">{{ lines | length }}</div>
+            <div class="stat-sub">item_name ILIKE %{{ vendor_name }}%</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Unique Estimates</div>
+            <div class="stat-value">{{ unique_estimates }}</div>
+            <div class="stat-sub">distinct jobs</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Matched Line Revenue</div>
+            <div class="stat-value" style="font-size:20px;">{{ total_line_revenue }}</div>
+            <div class="stat-sub">sum of matched line totals</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Most Recent Estimate</div>
+            <div class="stat-value" style="font-size:18px; letter-spacing:0;">{{ most_recent_date }}</div>
+            <div class="stat-sub">by created date</div>
+          </div>
+        </div>
+
+        <div class="note-bar">
+          Job address is not stored on estimates — it lives in customer locations linked by customer.
+          Revenue shown here is the matched line total, not the full estimate value.
+        </div>
+
+        <!-- ── Search + table ─────────────────────────────────── -->
+        <div class="search-row">
+          <input
+            type="search"
+            class="search-input"
+            id="vendorSearch"
+            placeholder="Filter by estimate #, customer, item…"
+            autocomplete="off"
+          />
+          <span class="search-count" id="searchCount">{{ lines | length }} rows</span>
+        </div>
+
+        <div class="table-wrap">
+          <table class="vendor-table" id="vendorTable">
+            <thead>
+              <tr>
+                <th>Estimate #</th>
+                <th>Customer</th>
+                <th>Status</th>
+                <th>Date</th>
+                <th class="right">Est. Value</th>
+                <th>Matched Item</th>
+                <th>Description</th>
+                <th class="right">Qty</th>
+                <th class="right">Line Total</th>
+                <th>Rep / PM</th>
+              </tr>
+            </thead>
+            <tbody id="vendorTbody">
+              {% for ln in lines %}
+              <tr>
+                <td class="est-num">{{ ln.estimate_number }}</td>
+                <td class="customer-cell">{{ ln.customer_name }}</td>
+                <td>
+                  {% set s = ln.status_raw | lower %}
+                  {% if 'complet' in s %}
+                    <span class="status-pill completed">{{ ln.status_raw }}</span>
+                  {% elif 'approv' in s %}
+                    <span class="status-pill approved">{{ ln.status_raw }}</span>
+                  {% elif 'quot' in s %}
+                    <span class="status-pill quoted">{{ ln.status_raw }}</span>
+                  {% elif 'progress' in s or 'in progress' in s %}
+                    <span class="status-pill progress">{{ ln.status_raw }}</span>
+                  {% else %}
+                    <span class="status-pill">{{ ln.status_raw }}</span>
+                  {% endif %}
+                </td>
+                <td class="mono">{{ ln.created_date }}</td>
+                <td class="right">{{ ln.total_amount }}</td>
+                <td class="item-cell">{{ ln.item_name }}</td>
+                <td class="desc-cell">{{ ln.description }}</td>
+                <td class="right">{{ ln.quantity }}</td>
+                <td class="right">{{ ln.line_total }}</td>
+                <td class="mono" style="font-size:11px;color:var(--ink-3);">
+                  {% if ln.sales_rep != '—' %}{{ ln.sales_rep }}{% endif %}
+                  {% if ln.project_manager != '—' %}<br>PM: {{ ln.project_manager }}{% endif %}
+                  {% if ln.sales_rep == '—' and ln.project_manager == '—' %}—{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+              <tr class="no-results-row" id="noResultsRow" style="display:none;">
+                <td colspan="10">No rows match your filter.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {% endif %}
+
+      </div>
+    </main>
+
+    <!-- Footer -->
+    <footer>
+      <div class="footer-inner">
+        <span>© 2026 WilliamSmith Fireplaces</span>
+        <span class="sep">·</span>
+        <a href="/kb">KB Coverage</a>
+        <span class="sep">·</span>
+        <span>{{ vendor_name }}</span>
+        <span class="footer-right">v2.0.0</span>
+      </div>
+    </footer>
+
+  </div><!-- /.app -->
+
+  <script>
+    (function () {
+      var input   = document.getElementById('vendorSearch');
+      var tbody   = document.getElementById('vendorTbody');
+      var count   = document.getElementById('searchCount');
+      var noRow   = document.getElementById('noResultsRow');
+      if (!input || !tbody) return;
+
+      var allRows = Array.from(tbody.querySelectorAll('tr:not(#noResultsRow)'));
+      var total   = allRows.length;
+
+      input.addEventListener('input', function () {
+        var q = this.value.trim().toLowerCase();
+        var visible = 0;
+        allRows.forEach(function (row) {
+          var text = row.textContent.toLowerCase();
+          var show = !q || text.includes(q);
+          row.classList.toggle('hidden-row', !show);
+          if (show) visible++;
+        });
+        if (count) count.textContent = (q ? visible + ' of ' + total : total) + ' rows';
+        if (noRow) noRow.style.display = (visible === 0 && q) ? '' : 'none';
+      });
+    })();
+  </script>
+</body>
+</html>

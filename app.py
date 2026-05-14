@@ -135,6 +135,8 @@ def _require_hub_api_key():
         return None
     if request.path.startswith("/static/"):
         return None
+    if request.path.startswith("/kb/vendor/"):
+        return None
     provided = request.headers.get("X-API-Key", "")
     if not provided:
         return jsonify({"error": "Unauthorized", "detail": "X-API-Key header required"}), 401
@@ -7962,6 +7964,124 @@ def kb():
         q_website_gaps=q_website_gaps,
         q_whyfyre=q_whyfyre,
         error=len(rows) == 0,
+    )
+
+
+@app.route("/kb/vendor/<path:vendor_name>", methods=["GET"])
+def kb_vendor(vendor_name: str):
+    """
+    KB vendor drill-down — estimates and line items for a specific vendor.
+
+    Two-step query (no Supabase join syntax needed):
+      1. estimate_line_items WHERE item_name ILIKE '%vendor_name%'
+      2. estimates WHERE estimate_id IN (matched ids)
+    Merged in Python.
+    """
+    from urllib.parse import unquote
+    vendor_name = unquote(vendor_name).strip()
+
+    error = False
+    lines: list[dict] = []
+    estimates_map: dict[int, dict] = {}
+
+    try:
+        sb = _sb_client()
+
+        # ── Step 1: matching line items ───────────────────────────
+        safe = vendor_name.replace("%", "").replace("_", "\\_")
+        li_res = (
+            sb.table("estimate_line_items")
+            .select("line_item_id, estimate_id, item_name, description, quantity, price, line_total")
+            .ilike("item_name", f"%{safe}%")
+            .order("estimate_id", desc=True)
+            .execute()
+        )
+        li_rows = li_res.data or []
+
+        # ── Step 2: fetch parent estimates ────────────────────────
+        est_ids = list({r["estimate_id"] for r in li_rows if r.get("estimate_id")})
+        chunk_size = 200
+        for i in range(0, len(est_ids), chunk_size):
+            chunk = est_ids[i: i + chunk_size]
+            est_res = (
+                sb.table("estimates")
+                .select(
+                    "estimate_id, estimate_number, customer_name, status_raw, "
+                    "created_date, total_amount, sales_rep_name, project_manager"
+                )
+                .in_("estimate_id", chunk)
+                .execute()
+            )
+            for e in (est_res.data or []):
+                estimates_map[e["estimate_id"]] = e
+
+        # ── Step 3: merge ─────────────────────────────────────────
+        def _dash(v):
+            if v is None or str(v).strip() == "":
+                return "—"
+            return v
+
+        def _fmt_cur(v):
+            try:
+                return f"${float(v):,.2f}"
+            except (TypeError, ValueError):
+                return "—"
+
+        def _fmt_date(v):
+            if not v:
+                return "—"
+            try:
+                return str(v)[:10]
+            except Exception:
+                return "—"
+
+        for li in li_rows:
+            eid  = li.get("estimate_id")
+            est  = estimates_map.get(eid) or {}
+            lines.append({
+                "estimate_id":     eid,
+                "estimate_number": _dash(est.get("estimate_number")),
+                "customer_name":   _dash(est.get("customer_name")),
+                "status_raw":      _dash(est.get("status_raw")),
+                "created_date":    _fmt_date(est.get("created_date")),
+                "total_amount":    _fmt_cur(est.get("total_amount")),
+                "sales_rep":       _dash(est.get("sales_rep_name")),
+                "project_manager": _dash(est.get("project_manager")),
+                "item_name":       _dash(li.get("item_name")),
+                "description":     _dash(li.get("description")),
+                "quantity":        li.get("quantity") if li.get("quantity") is not None else "—",
+                "price":           _fmt_cur(li.get("price")),
+                "line_total":      _fmt_cur(li.get("line_total")),
+                "line_total_raw":  li.get("line_total") or 0,
+            })
+
+    except Exception as exc:
+        print(f"[kb_vendor] Supabase error: {exc}", flush=True)
+        error = True
+
+    # ── Summary stats ─────────────────────────────────────────────
+    unique_estimates   = len(set(ln["estimate_id"] for ln in lines if ln["estimate_id"]))
+    total_line_revenue = sum(ln["line_total_raw"] for ln in lines)
+    dates = [
+        ln["created_date"] for ln in lines
+        if ln["created_date"] and ln["created_date"] != "—"
+    ]
+    most_recent_date = max(dates) if dates else "—"
+
+    def _fmt_cur_plain(v):
+        try:
+            return f"${float(v):,.2f}"
+        except (TypeError, ValueError):
+            return "—"
+
+    return render_template(
+        "kb_vendor.html",
+        vendor_name=vendor_name,
+        lines=lines,
+        error=error,
+        unique_estimates=unique_estimates,
+        total_line_revenue=_fmt_cur_plain(total_line_revenue),
+        most_recent_date=most_recent_date,
     )
 
 
