@@ -40,6 +40,7 @@ import os
 import io
 import csv
 import json
+import re
 import time as _time_mod
 import anthropic
 from flask import Flask, jsonify, request, render_template, Response
@@ -5291,6 +5292,205 @@ def _fmt_line_item(li: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Manifest API helpers
+#
+# Used by GET /manifest/api/estimate/* routes.  These helpers normalize
+# Striven sales-order data into a field-ready manifest package and classify
+# every line item as a physical material, excluded charge, or unclassified.
+#
+# Classification order:
+#   1. EXCLUDE patterns (_MANIFEST_EXCL) match first → is_physical = False
+#   2. INCLUDE patterns (_MANIFEST_INCL) match next  → is_physical = True
+#   3. No match                                       → is_physical = None
+#
+# IMPORTANT: "labor" and "installation labor" are intentionally absent from
+# the exclude list.  A labor-only line that matches no include term returns
+# is_physical = None so the PM sees it explicitly rather than having it
+# silently dropped from the manifest.
+# ---------------------------------------------------------------------------
+
+# Each entry is (compiled_regex, display_reason).
+# Multi-word phrases are listed before their component single words so the
+# more specific reason string is captured first.
+
+_MANIFEST_EXCL: list[tuple] = [
+    (re.compile(r"\bjob[\s\-]+quote[\s\-]+adjustment\b", re.I), "job quote adjustment"),
+    (re.compile(r"\berrors\s*&\s*omissions\b",           re.I), "errors & omissions"),
+    (re.compile(r"\berrors\s+and\s+omissions\b",         re.I), "errors and omissions"),
+    (re.compile(r"\btrip\s+charge\b",                    re.I), "trip charge"),
+    (re.compile(r"\btrip\s+fee\b",                       re.I), "trip fee"),
+    (re.compile(r"\bpre-?view\b",                        re.I), "preview"),
+    (re.compile(r"\bsales\s+tax\b",                      re.I), "sales tax"),
+    (re.compile(r"\badmin\s+fee\b",                      re.I), "admin fee"),
+    (re.compile(r"\bfreight\b",                          re.I), "freight"),
+    (re.compile(r"\bshipping\b",                         re.I), "shipping"),
+    (re.compile(r"\bdelivery\b",                         re.I), "delivery"),
+    (re.compile(r"\bpermit\b",                           re.I), "permit"),
+    (re.compile(r"\bwarranty\b",                         re.I), "warranty"),
+    (re.compile(r"\bcommission\b",                       re.I), "commission"),
+    (re.compile(r"\bdiscount\b",                         re.I), "discount"),
+    (re.compile(r"\bdisposal\b",                         re.I), "disposal"),
+    (re.compile(r"\bhaul\b",                             re.I), "haul"),
+    (re.compile(r"\binspection\b",                       re.I), "inspection"),
+    (re.compile(r"\bmiscellaneous\b",                    re.I), "miscellaneous"),
+    (re.compile(r"\bmisc\b",                             re.I), "misc"),
+    (re.compile(r"\btax\b",                              re.I), "tax"),
+]
+
+_MANIFEST_INCL: list[tuple] = [
+    # Multi-word phrases first
+    (re.compile(r"\bchase\s+cover\b",  re.I), "chase cover"),
+    (re.compile(r"\bglass\s+door\b",   re.I), "glass door"),
+    (re.compile(r"\bgas\s+log\b",      re.I), "gas log"),
+    (re.compile(r"\bhearth\s+pad\b",   re.I), "hearth pad"),
+    (re.compile(r"\blog\s+set\b",      re.I), "log set"),
+    # Single words
+    (re.compile(r"\bfireplace\b",      re.I), "fireplace"),
+    (re.compile(r"\binsert\b",         re.I), "insert"),
+    (re.compile(r"\bstove\b",          re.I), "stove"),
+    (re.compile(r"\bventing\b",        re.I), "venting"),
+    (re.compile(r"\bflue\b",           re.I), "flue"),
+    (re.compile(r"\bliner\b",          re.I), "liner"),
+    (re.compile(r"\btermination\b",    re.I), "termination"),
+    (re.compile(r"\bcollar\b",         re.I), "collar"),
+    (re.compile(r"\belbow\b",          re.I), "elbow"),
+    (re.compile(r"\boffset\b",         re.I), "offset"),
+    (re.compile(r"\bburner\b",         re.I), "burner"),
+    (re.compile(r"\bsurround\b",       re.I), "surround"),
+    (re.compile(r"\bfacing\b",         re.I), "facing"),
+    (re.compile(r"\bhearth\b",         re.I), "hearth"),
+    (re.compile(r"\bmantel\b",         re.I), "mantel"),
+    (re.compile(r"\bmantle\b",         re.I), "mantle"),
+    (re.compile(r"\bblower\b",         re.I), "blower"),
+    (re.compile(r"\bigniter\b",        re.I), "igniter"),
+    (re.compile(r"\bvalve\b",          re.I), "valve"),
+    (re.compile(r"\bcontrol\b",        re.I), "control"),
+    (re.compile(r"\bscreen\b",         re.I), "screen"),
+    (re.compile(r"\bpanel\b",          re.I), "panel"),
+    (re.compile(r"\bdoor\b",           re.I), "door"),
+    (re.compile(r"\bcap\b",            re.I), "cap"),
+    (re.compile(r"\bpipe\b",           re.I), "pipe"),
+    (re.compile(r"\bvent\b",           re.I), "vent"),
+    (re.compile(r"\bfan\b",            re.I), "fan"),
+    (re.compile(r"\bkit\b",            re.I), "kit"),
+]
+
+# Compiled once: extract a SKU from "CODE — Description" or "CODE - Description".
+_SKU_RE = re.compile(r'^([A-Z0-9][A-Z0-9\-/]{2,})\s*[—\-–]\s*', re.UNICODE)
+
+
+def _extract_manifest_address(r: dict) -> dict | None:
+    """
+    Try to extract a job/ship-to address from a raw Striven sales-order record.
+
+    Striven field names for address vary; we try the most common patterns in
+    priority order.  Returns None if no address data is found so callers can
+    surface a warning to the PM.
+    """
+    for key in ("shipToAddress", "shipTo", "jobAddress", "location"):
+        addr = r.get(key)
+        if addr and isinstance(addr, dict):
+            street = addr.get("address1") or addr.get("Address1") or addr.get("street")
+            city   = addr.get("city")     or addr.get("City")
+            state  = addr.get("state")    or addr.get("State")
+            zip_   = addr.get("zip")      or addr.get("Zip") or addr.get("postalCode")
+            if any([street, city, state, zip_]):
+                return {"street": street, "city": city, "state": state, "zip": zip_}
+    return None
+
+
+def is_manifest_material_line(
+    item_name: str | None,
+    description: str | None,
+) -> bool | None:
+    """
+    Classify a Striven line item as physical material, excluded charge, or unknown.
+
+    Returns:
+        True  — physical material; should appear on the field manifest.
+        False — excluded charge (tax, shipping, warranty, etc.); omit from manifest.
+        None  — unclassified; surface to the PM for manual review.
+
+    Classification order:
+        1. EXCLUDE patterns match first.
+        2. INCLUDE patterns match second.
+        3. No match → None.
+
+    NOTE: "labor" and "installation labor" are intentionally absent from the
+    exclude list.  A pure-labor line that matches no include term returns None
+    so the PM sees it explicitly rather than having it silently dropped.
+    """
+    haystack = " ".join(filter(None, [item_name, description]))
+    for pattern, _ in _MANIFEST_EXCL:
+        if pattern.search(haystack):
+            return False
+    for pattern, _ in _MANIFEST_INCL:
+        if pattern.search(haystack):
+            return True
+    return None
+
+
+def normalize_manifest_line(li: dict) -> dict:
+    """
+    Normalize a single raw Striven line item for the Manifest API.
+
+    Returns a flat dict with material classification applied:
+        line_item_id, item_id, item_name, sku, description,
+        price, qty, line_total, is_group,
+        is_physical (True / False / None),
+        classification_reason, exclusion_reason.
+    """
+    item        = li.get("item")        or {}
+    item_name   = item.get("name")      or item.get("Name")      or ""
+    description = li.get("description") or li.get("Description") or ""
+    price       = li.get("price")       or li.get("Price")       or 0
+    qty         = li.get("qty")         or li.get("Qty")         or 1
+
+    # ── Classification ───────────────────────────────────────────────────────
+    haystack     = " ".join(filter(None, [item_name, description]))
+    is_physical  = None
+    excl_reason  = None
+    class_reason = "unclassified"
+
+    for pattern, reason in _MANIFEST_EXCL:
+        if pattern.search(haystack):
+            is_physical  = False
+            excl_reason  = reason
+            class_reason = f"excluded: {reason}"
+            break
+
+    if is_physical is None:
+        for pattern, reason in _MANIFEST_INCL:
+            if pattern.search(haystack):
+                is_physical  = True
+                class_reason = f"matched: {reason}"
+                break
+
+    # ── SKU extraction ───────────────────────────────────────────────────────
+    # Prefer item.number if Striven provides it; fall back to parsing item_name.
+    sku = item.get("number") or item.get("Number") or None
+    if sku is None and item_name:
+        m = _SKU_RE.match(item_name)
+        if m:
+            sku = m.group(1)
+
+    return {
+        "line_item_id":          li.get("id"),
+        "item_id":               item.get("id")  or item.get("Id"),
+        "item_name":             item_name or None,
+        "sku":                   sku,
+        "description":           description or None,
+        "price":                 price,
+        "qty":                   qty,
+        "line_total":            round((price or 0) * (qty or 1), 2),
+        "is_group":              bool(li.get("itemGroupLineItems")),
+        "is_physical":           is_physical,
+        "classification_reason": class_reason,
+        "exclusion_reason":      excl_reason,
+    }
+
+
 def extract_sales_rep(order: dict) -> str:
     """
     Best-effort extraction of the sales rep name from a RAW Striven order dict.
@@ -7639,6 +7839,211 @@ def kb():
 def manifest():
     """Manifest Center — field-ready installer package builder placeholder."""
     return render_template("manifest.html")
+
+
+# ---------------------------------------------------------------------------
+# Manifest API — read-only field-manifest data routes
+#
+# These routes serve John's Manifest PWA and establish the WSF Hub
+# integration pattern: external tools call Flask; Flask owns Striven OAuth.
+#
+# Auth:    ALL three routes require X-API-Key (X-API-Key header).
+#          They are intentionally NOT in _HUB_PUBLIC — the before_request
+#          guard protects them automatically like all other data routes.
+#
+# Striven: uses the shared StrivenClient (striven.get_estimate()).
+#          No new OAuth code, no new token logic, no new env vars.
+# ---------------------------------------------------------------------------
+
+
+@app.route("/manifest/api/estimate/<int:estimate_id>", methods=["GET"])
+def manifest_api_estimate_header(estimate_id: int):
+    """
+    Normalized estimate header for the Manifest PWA.
+
+    Returns identity, customer, job address, sales rep, project manager,
+    status, custom fields, financial summary, and manifest-readiness warnings.
+    Does not return line items — call /lines or /package for those.
+
+    Auth: X-API-Key required (not in _HUB_PUBLIC).
+    """
+    try:
+        raw = striven.get_estimate(estimate_id)
+    except HTTPError as exc:
+        code = exc.response.status_code if exc.response is not None else 502
+        if code == 404:
+            return jsonify({"error": "Estimate not found", "estimate_id": estimate_id}), 404
+        return jsonify({"error": "Striven request failed", "estimate_id": estimate_id}), code
+    except Exception:
+        return jsonify({"error": "Internal error fetching estimate", "estimate_id": estimate_id}), 500
+
+    customer  = raw.get("customer")     or raw.get("Customer")     or {}
+    status    = raw.get("status")       or raw.get("Status")       or {}
+    cf        = raw.get("customFields") or []
+    rep_id, rep_name = _resolve_rep(raw, allow_created_by_fallback=True)
+    status_id = status.get("id")    or status.get("Id")
+    pm        = _extract_custom_field(cf, 1559)
+    job_addr  = _extract_manifest_address(raw)
+    permit    = _extract_custom_field(cf, 1517) or ""
+
+    warnings: list[str] = []
+    if status_id and status_id != 22:
+        warnings.append(
+            f"Estimate status is '{status.get('name') or status.get('Name')}' "
+            f"(id={status_id}) — manifest may be premature; expected Approved (22)."
+        )
+    if not pm:
+        warnings.append("No project manager assigned.")
+    if job_addr is None:
+        warnings.append("No job/ship-to address found on this estimate.")
+    if permit and "needs permit" in permit.lower():
+        warnings.append(f"Permit required: {permit}")
+
+    return jsonify({
+        "estimate_id":         raw.get("id")          or raw.get("Id"),
+        "estimate_number":     raw.get("orderNumber") or raw.get("OrderNumber"),
+        "name":                raw.get("orderName")   or raw.get("OrderName"),
+        "status":              status.get("name")     or status.get("Name"),
+        "status_id":           status_id,
+        "customer": {
+            "id":     customer.get("id")     or customer.get("Id"),
+            "name":   customer.get("name")   or customer.get("Name"),
+            "number": customer.get("number") or customer.get("Number"),
+        },
+        "job_address":         job_addr,
+        "sales_rep": {
+            "id":   rep_id,
+            "name": rep_name,
+        },
+        "project_manager":     pm,
+        "product_type":        _extract_custom_field(cf, 1507),
+        "project_type":        _extract_custom_field(cf, 1506),
+        "project_components":  _extract_custom_field(cf, 1508),
+        "permit_status":       permit or None,
+        "target_install_date": _extract_custom_field(cf, 1515),
+        "order_total":         raw.get("orderTotal")  or raw.get("OrderTotal"),
+        "open_balance":        raw.get("openBalance") or raw.get("OpenBalance"),
+        "invoice_status":      (raw.get("invoiceStatus") or raw.get("InvoiceStatus") or {}).get("name"),
+        "is_change_order":     raw.get("isChangeOrder", False),
+        "warnings":            warnings,
+        "fetched_at":          _time_mod.strftime("%Y-%m-%dT%H:%M:%SZ", _time_mod.gmtime()),
+    })
+
+
+@app.route("/manifest/api/estimate/<int:estimate_id>/lines", methods=["GET"])
+def manifest_api_estimate_lines(estimate_id: int):
+    """
+    All line items for an estimate with material classification applied.
+
+    Returns every line item — physical, excluded, and unclassified — so the
+    PWA can present the full picture.  is_physical=True means physical
+    material; False means excluded charge; None means unclassified / needs
+    PM review.  No lines are silently dropped.
+
+    Auth: X-API-Key required (not in _HUB_PUBLIC).
+    """
+    try:
+        raw = striven.get_estimate(estimate_id)
+    except HTTPError as exc:
+        code = exc.response.status_code if exc.response is not None else 502
+        if code == 404:
+            return jsonify({"error": "Estimate not found", "estimate_id": estimate_id}), 404
+        return jsonify({"error": "Striven request failed", "estimate_id": estimate_id}), code
+    except Exception:
+        return jsonify({"error": "Internal error fetching estimate", "estimate_id": estimate_id}), 500
+
+    lines = [normalize_manifest_line(li) for li in (raw.get("lineItems") or [])]
+
+    return jsonify({
+        "estimate_id":        estimate_id,
+        "line_count":         len(lines),
+        "physical_count":     sum(1 for l in lines if l["is_physical"] is True),
+        "excluded_count":     sum(1 for l in lines if l["is_physical"] is False),
+        "unclassified_count": sum(1 for l in lines if l["is_physical"] is None),
+        "lines":              lines,
+    })
+
+
+@app.route("/manifest/api/estimate/<int:estimate_id>/package", methods=["GET"])
+def manifest_api_estimate_package(estimate_id: int):
+    """
+    Field-ready manifest package for an estimate.
+
+    Composes a normalized header with line items partitioned into
+    physical_items, excluded_lines, and unclassified_lines.  Unclassified
+    lines are preserved separately for PM review before sign-off.  Excluded
+    lines are included for audit completeness.
+
+    Auth: X-API-Key required (not in _HUB_PUBLIC).
+    """
+    try:
+        raw = striven.get_estimate(estimate_id)
+    except HTTPError as exc:
+        code = exc.response.status_code if exc.response is not None else 502
+        if code == 404:
+            return jsonify({"error": "Estimate not found", "estimate_id": estimate_id}), 404
+        return jsonify({"error": "Striven request failed", "estimate_id": estimate_id}), code
+    except Exception:
+        return jsonify({"error": "Internal error fetching estimate", "estimate_id": estimate_id}), 500
+
+    # ── Shared context ───────────────────────────────────────────────────────
+    customer  = raw.get("customer")     or raw.get("Customer")     or {}
+    status    = raw.get("status")       or raw.get("Status")       or {}
+    cf        = raw.get("customFields") or []
+    rep_id, rep_name = _resolve_rep(raw, allow_created_by_fallback=True)
+    status_id = status.get("id")    or status.get("Id")
+    pm        = _extract_custom_field(cf, 1559)
+    job_addr  = _extract_manifest_address(raw)
+    permit    = _extract_custom_field(cf, 1517) or ""
+
+    # ── Line classification ──────────────────────────────────────────────────
+    all_lines      = [normalize_manifest_line(li) for li in (raw.get("lineItems") or [])]
+    physical_items = [l for l in all_lines if l["is_physical"] is True]
+    excluded_lines = [l for l in all_lines if l["is_physical"] is False]
+    unclassified   = [l for l in all_lines if l["is_physical"] is None]
+
+    # ── Warnings ────────────────────────────────────────────────────────────
+    warnings: list[str] = []
+    if status_id and status_id != 22:
+        warnings.append(
+            f"Estimate status is '{status.get('name') or status.get('Name')}' "
+            f"(id={status_id}) — manifest may be premature; expected Approved (22)."
+        )
+    if not pm:
+        warnings.append("No project manager assigned.")
+    if job_addr is None:
+        warnings.append("No job/ship-to address found on this estimate.")
+    if permit and "needs permit" in permit.lower():
+        warnings.append(f"Permit required: {permit}")
+    if unclassified:
+        warnings.append(
+            f"{len(unclassified)} line(s) could not be classified as physical or excluded — "
+            "review unclassified_lines before finalizing the manifest."
+        )
+
+    return jsonify({
+        "estimate_id":        estimate_id,
+        "manifest_id":        None,
+        "generated_at":       _time_mod.strftime("%Y-%m-%dT%H:%M:%SZ", _time_mod.gmtime()),
+        "status":             "draft",
+        "header": {
+            "estimate_number":     raw.get("orderNumber")   or raw.get("OrderNumber"),
+            "name":                raw.get("orderName")     or raw.get("OrderName"),
+            "customer_name":       customer.get("name")     or customer.get("Name"),
+            "job_address":         job_addr,
+            "sales_rep":           rep_name,
+            "project_manager":     pm,
+            "product_type":        _extract_custom_field(cf, 1507),
+            "target_install_date": _extract_custom_field(cf, 1515),
+            "permit_status":       permit or None,
+            "order_total":         raw.get("orderTotal")    or raw.get("OrderTotal"),
+        },
+        "physical_items":     physical_items,
+        "excluded_lines":     excluded_lines,
+        "unclassified_lines": unclassified,
+        "item_count":         len(physical_items),
+        "warnings":           warnings,
+    })
 
 
 @app.route("/chase-cover-calculator", methods=["GET"])
