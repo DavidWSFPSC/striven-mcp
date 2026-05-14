@@ -7972,50 +7972,46 @@ def kb_vendor(vendor_name: str):
     """
     KB vendor drill-down — estimates and line items for a specific vendor.
 
-    Two-step query (no Supabase join syntax needed):
-      1. estimate_line_items WHERE item_name ILIKE '%vendor_name%'
-      2. estimates WHERE estimate_id IN (matched ids)
-    Merged in Python.
+    Three-path matching strategy (no vendor→SKU map exists in schema):
+
+    Path A — items catalog lookup:
+        Query `items` where name OR description ILIKE '%vendor%'.
+        Collect item_ids; query estimate_line_items by item_id.
+        Catches model numbers whose catalog entry describes the vendor.
+
+    Path B — line-item name text search:
+        estimate_line_items WHERE item_name ILIKE '%vendor%'.
+        Catches line items whose stored name contains the vendor name.
+
+    Path C — line-item description text search:
+        estimate_line_items WHERE description ILIKE '%vendor%'.
+        Catches lines whose description mentions the vendor.
+
+    All three sets are merged and deduplicated by line_item_id.
+    Results fall back to Paths B+C if Path A finds nothing.
+
+    Note: kb_product_index.total_unique_skus was built from a one-time
+    profitability report import and cannot be replicated here — no
+    vendor→SKU mapping table exists in the current schema.
     """
     from urllib.parse import unquote
     vendor_name = unquote(vendor_name).strip()
 
-    error = False
-    lines: list[dict] = []
+    error  = False
+    lines: list[dict]      = []
     estimates_map: dict[int, dict] = {}
 
+    # Match metadata
+    matched_catalog_items = 0
+    match_method          = "name/description text search"
+    fallback_used         = False
+
     try:
-        sb = _sb_client()
-
-        # ── Step 1: matching line items ───────────────────────────
-        safe = vendor_name.replace("%", "").replace("_", "\\_")
-        li_res = (
-            sb.table("estimate_line_items")
-            .select("line_item_id, estimate_id, item_name, description, quantity, price, line_total")
-            .ilike("item_name", f"%{safe}%")
-            .order("estimate_id", desc=True)
-            .execute()
-        )
-        li_rows = li_res.data or []
-
-        # ── Step 2: fetch parent estimates ────────────────────────
-        est_ids = list({r["estimate_id"] for r in li_rows if r.get("estimate_id")})
+        sb         = _sb_client()
         chunk_size = 200
-        for i in range(0, len(est_ids), chunk_size):
-            chunk = est_ids[i: i + chunk_size]
-            est_res = (
-                sb.table("estimates")
-                .select(
-                    "estimate_id, estimate_number, customer_name, status_raw, "
-                    "created_date, total_amount, sales_rep_name, project_manager"
-                )
-                .in_("estimate_id", chunk)
-                .execute()
-            )
-            for e in (est_res.data or []):
-                estimates_map[e["estimate_id"]] = e
+        safe       = vendor_name.replace("%", "").replace("_", "\\_")
 
-        # ── Step 3: merge ─────────────────────────────────────────
+        # ── Local helpers ─────────────────────────────────────────
         def _dash(v):
             if v is None or str(v).strip() == "":
                 return "—"
@@ -8035,9 +8031,101 @@ def kb_vendor(vendor_name: str):
             except Exception:
                 return "—"
 
-        for li in li_rows:
-            eid  = li.get("estimate_id")
-            est  = estimates_map.get(eid) or {}
+        li_select = (
+            "line_item_id, estimate_id, item_name, description, "
+            "quantity, price, line_total"
+        )
+
+        seen_lid: set       = set()    # dedup tracker
+        raw_li:   list[dict] = []
+
+        # ── Path A: items catalog → item_id match ─────────────────
+        catalog_item_ids: list[int] = []
+        try:
+            cat_res = (
+                sb.table("items")
+                .select("item_id")
+                .or_(f"name.ilike.%{safe}%,description.ilike.%{safe}%")
+                .execute()
+            )
+            catalog_item_ids = [
+                r["item_id"] for r in (cat_res.data or []) if r.get("item_id")
+            ]
+            matched_catalog_items = len(catalog_item_ids)
+        except Exception as cat_exc:
+            print(f"[kb_vendor] catalog lookup error: {cat_exc}", flush=True)
+
+        if catalog_item_ids:
+            for i in range(0, len(catalog_item_ids), chunk_size):
+                chunk = catalog_item_ids[i: i + chunk_size]
+                a_res = (
+                    sb.table("estimate_line_items")
+                    .select(li_select)
+                    .in_("item_id", chunk)
+                    .execute()
+                )
+                for row in (a_res.data or []):
+                    lid = row.get("line_item_id")
+                    if lid not in seen_lid:
+                        seen_lid.add(lid)
+                        raw_li.append(row)
+
+        # ── Path B: item_name ILIKE vendor ────────────────────────
+        b_res = (
+            sb.table("estimate_line_items")
+            .select(li_select)
+            .ilike("item_name", f"%{safe}%")
+            .execute()
+        )
+        for row in (b_res.data or []):
+            lid = row.get("line_item_id")
+            if lid not in seen_lid:
+                seen_lid.add(lid)
+                raw_li.append(row)
+
+        # ── Path C: description ILIKE vendor ─────────────────────
+        c_res = (
+            sb.table("estimate_line_items")
+            .select(li_select)
+            .ilike("description", f"%{safe}%")
+            .execute()
+        )
+        for row in (c_res.data or []):
+            lid = row.get("line_item_id")
+            if lid not in seen_lid:
+                seen_lid.add(lid)
+                raw_li.append(row)
+
+        # ── Sort merged rows by estimate_id desc ──────────────────
+        raw_li.sort(key=lambda r: r.get("estimate_id") or 0, reverse=True)
+
+        # ── Determine match method label ──────────────────────────
+        if matched_catalog_items > 0:
+            match_method = "item catalog + name/description text search"
+        else:
+            match_method = "name/description text search"
+            fallback_used = True   # no catalog hits; text-only
+
+        # ── Fetch parent estimates ────────────────────────────────
+        est_ids = list({r["estimate_id"] for r in raw_li if r.get("estimate_id")})
+        for i in range(0, len(est_ids), chunk_size):
+            chunk = est_ids[i: i + chunk_size]
+            est_res = (
+                sb.table("estimates")
+                .select(
+                    "estimate_id, estimate_number, customer_name, status_raw, "
+                    "created_date, total_amount, sales_rep_name, project_manager"
+                )
+                .in_("estimate_id", chunk)
+                .execute()
+            )
+            for e in (est_res.data or []):
+                estimates_map[e["estimate_id"]] = e
+
+        # ── Merge line items + estimates ──────────────────────────
+        for li in raw_li:
+            eid = li.get("estimate_id")
+            est = estimates_map.get(eid) or {}
             lines.append({
                 "estimate_id":     eid,
                 "estimate_number": _dash(est.get("estimate_number")),
@@ -8082,6 +8170,9 @@ def kb_vendor(vendor_name: str):
         unique_estimates=unique_estimates,
         total_line_revenue=_fmt_cur_plain(total_line_revenue),
         most_recent_date=most_recent_date,
+        match_method=match_method,
+        matched_catalog_items=matched_catalog_items,
+        fallback_used=fallback_used,
     )
 
 

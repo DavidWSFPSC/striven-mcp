@@ -328,7 +328,7 @@
           <div class="stat-card">
             <div class="stat-label">Matched Line Items</div>
             <div class="stat-value">{{ lines | length }}</div>
-            <div class="stat-sub">item_name ILIKE %{{ vendor_name }}%</div>
+            <div class="stat-sub">{{ match_method }}</div>
           </div>
           <div class="stat-card">
             <div class="stat-label">Unique Estimates</div>
@@ -348,8 +348,13 @@
         </div>
 
         <div class="note-bar">
-          Job address is not stored on estimates — it lives in customer locations linked by customer.
-          Revenue shown here is the matched line total, not the full estimate value.
+          {% if matched_catalog_items > 0 %}
+            Matched via <strong>{{ matched_catalog_items }} catalog SKU{{ 's' if matched_catalog_items != 1 else '' }}</strong> from the items table, plus vendor name text search across line item names and descriptions.
+          {% else %}
+            Matched by vendor name text search across line item names and descriptions.
+            Model-number-only line items may not appear — no vendor→SKU mapping table exists in the current schema.
+          {% endif %}
+          Job address is not stored on estimates. Revenue shown is matched line totals, not full estimate value.
         </div>
 
         <!-- ── Search + table ─────────────────────────────────── -->
