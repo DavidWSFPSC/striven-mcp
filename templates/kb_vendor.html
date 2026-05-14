@@ -11,7 +11,7 @@
   <style>
     /* ── Layout ──────────────────────────────────────────────── */
     .page-inner {
-      max-width: 1140px;
+      max-width: 1200px;
       margin: 0 auto;
       padding: 48px 28px 80px;
     }
@@ -39,6 +39,15 @@
       letter-spacing: 0.04em;
     }
     .rule { border: 0; border-top: 1px solid var(--rule); margin: 32px 0; }
+
+    /* ── Logo override — real logo is landscape, not square ──── */
+    .brand-mark-sm.logo-img {
+      width: auto;
+      height: 30px;
+      max-width: 140px;
+      object-fit: contain;
+      flex-shrink: 0;
+    }
 
     /* ── Error banner ────────────────────────────────────────── */
     .error-banner {
@@ -83,12 +92,23 @@
     }
     .stat-sub { font-size: 11.5px; color: var(--ink-3); margin-top: 4px; }
 
-    /* ── Search bar ──────────────────────────────────────────── */
+    /* ── Note bar ────────────────────────────────────────────── */
+    .note-bar {
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      font-size: 12.5px;
+      color: var(--ink-3);
+      margin-bottom: 16px;
+    }
+
+    /* ── Search + hint row ───────────────────────────────────── */
     .search-row {
       display: flex;
       align-items: center;
       gap: 12px;
-      margin-bottom: 16px;
+      margin-bottom: 8px;
     }
     .search-input {
       flex: 1;
@@ -113,19 +133,31 @@
       color: var(--ink-3);
       letter-spacing: 0.04em;
     }
+    .table-hint {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      color: var(--ink-3);
+      letter-spacing: 0.04em;
+      margin-bottom: 12px;
+    }
 
-    /* ── Table ───────────────────────────────────────────────── */
+    /* ── Table wrapper — scrollable ──────────────────────────── */
     .table-wrap {
       overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
       border: 1px solid var(--rule);
       border-radius: var(--radius);
       box-shadow: var(--shadow-sm);
+      max-width: 100%;
     }
     table.vendor-table {
       width: 100%;
+      min-width: 980px;           /* forces scroll before columns collapse */
       border-collapse: collapse;
       font-size: 12.5px;
     }
+
+    /* ── Sortable headers ────────────────────────────────────── */
     .vendor-table thead th {
       background: var(--bg-sunk);
       padding: 9px 12px;
@@ -140,6 +172,29 @@
       white-space: nowrap;
     }
     .vendor-table thead th.right { text-align: right; }
+    .vendor-table thead th[data-sort-type] {
+      cursor: pointer;
+      user-select: none;
+    }
+    .vendor-table thead th[data-sort-type]:hover {
+      background: var(--rule);
+      color: var(--ink-2);
+    }
+    .vendor-table thead th[data-sort-type].sort-active {
+      color: var(--accent-deep);
+    }
+    .sort-arrow {
+      display: inline-block;
+      margin-left: 4px;
+      font-size: 9px;
+      opacity: 0.5;
+    }
+    .sort-active .sort-arrow {
+      opacity: 1;
+      color: var(--accent);
+    }
+
+    /* ── Table rows + cells ──────────────────────────────────── */
     .vendor-table tbody tr {
       border-bottom: 1px solid var(--rule);
       transition: background .1s;
@@ -152,7 +207,7 @@
       vertical-align: top;
       color: var(--ink-2);
     }
-    .vendor-table td.mono { font-family: var(--font-mono); font-size: 11.5px; }
+    .vendor-table td.mono  { font-family: var(--font-mono); font-size: 11.5px; }
     .vendor-table td.right { text-align: right; font-family: var(--font-mono); font-size: 11.5px; }
     .vendor-table td.est-num {
       font-family: var(--font-mono);
@@ -169,15 +224,15 @@
     .vendor-table td.item-cell {
       font-weight: 500;
       color: var(--ink);
-      max-width: 240px;
+      max-width: 220px;
     }
     .vendor-table td.desc-cell {
       color: var(--ink-3);
       font-size: 11.5px;
-      max-width: 200px;
+      max-width: 180px;
     }
 
-    /* Status pill */
+    /* ── Status pill ─────────────────────────────────────────── */
     .status-pill {
       display: inline-block;
       font-family: var(--font-mono);
@@ -194,7 +249,7 @@
     .status-pill.quoted    { background: var(--warn-soft); color: var(--warn); }
     .status-pill.progress  { background: var(--warn-soft); color: var(--warn); }
 
-    /* Empty / no-results states */
+    /* ── Empty / no-results ──────────────────────────────────── */
     .empty-state {
       padding: 56px 24px;
       text-align: center;
@@ -215,17 +270,6 @@
       font-style: italic;
     }
 
-    /* Note bar */
-    .note-bar {
-      background: var(--bg-elev);
-      border: 1px solid var(--rule);
-      border-radius: var(--radius-sm);
-      padding: 10px 14px;
-      font-size: 12.5px;
-      color: var(--ink-3);
-      margin-bottom: 16px;
-    }
-
     /* ── Responsive ──────────────────────────────────────────── */
     @media (max-width: 640px) {
       .page-inner { padding: 28px 16px 60px; }
@@ -241,16 +285,7 @@
     <header>
       <div class="header-inner">
         <a href="/" class="brand" aria-label="WSF Hub home">
-          <svg class="brand-mark-sm" viewBox="0 0 48 48" fill="none" aria-hidden="true">
-            <defs>
-              <symbol id="wsf-mark-kbv" viewBox="0 0 48 48">
-                <path d="M24 44 C16 44 10 38 8 30 L6 18 C6 14 9 11 13 11 L16 11 L16 8 C16 5.8 17.8 4 20 4 L28 4 C30.2 4 32 5.8 32 8 L32 11 L35 11 C39 11 42 14 42 18 L40 30 C38 38 32 44 24 44 Z" fill="currentColor" opacity="0.18"/>
-                <path d="M24 44 C16 44 10 38 8 30 L6 18 C6 14 9 11 13 11 L16 11 L16 8 C16 5.8 17.8 4 20 4 L28 4 C30.2 4 32 5.8 32 8 L32 11 L35 11 C39 11 42 14 42 18 L40 30 C38 38 32 44 24 44 Z" stroke="currentColor" stroke-width="1.5" fill="none"/>
-                <path d="M24 36 C21 32 19 28 20 24 C21 28 23 30 24 31 C25 30 27 28 28 24 C29 28 27 32 24 36 Z" fill="#e07a2c"/>
-              </symbol>
-            </defs>
-            <use href="#wsf-mark-kbv" width="48" height="48"/>
-          </svg>
+          <img class="brand-mark-sm logo-img" src="/static/logo.png" alt="WilliamSmith Fireplaces">
           <span class="brand-name">
             <span class="word">WilliamSmith</span>
             <span class="sub">Fireplaces</span>
@@ -328,21 +363,22 @@
           />
           <span class="search-count" id="searchCount">{{ lines | length }} rows</span>
         </div>
+        <p class="table-hint">Click column headers to sort. Use horizontal scroll to see all columns.</p>
 
         <div class="table-wrap">
           <table class="vendor-table" id="vendorTable">
             <thead>
               <tr>
-                <th>Estimate #</th>
-                <th>Customer</th>
-                <th>Status</th>
-                <th>Date</th>
-                <th class="right">Est. Value</th>
-                <th>Matched Item</th>
+                <th data-sort-type="text">Estimate #<span class="sort-arrow"></span></th>
+                <th data-sort-type="text">Customer<span class="sort-arrow"></span></th>
+                <th data-sort-type="status">Status<span class="sort-arrow"></span></th>
+                <th data-sort-type="date">Date<span class="sort-arrow"></span></th>
+                <th data-sort-type="currency" class="right">Est. Value<span class="sort-arrow"></span></th>
+                <th data-sort-type="text">Matched Item<span class="sort-arrow"></span></th>
                 <th>Description</th>
-                <th class="right">Qty</th>
-                <th class="right">Line Total</th>
-                <th>Rep / PM</th>
+                <th data-sort-type="num" class="right">Qty<span class="sort-arrow"></span></th>
+                <th data-sort-type="currency" class="right">Line Total<span class="sort-arrow"></span></th>
+                <th data-sort-type="text">Rep / PM<span class="sort-arrow"></span></th>
               </tr>
             </thead>
             <tbody id="vendorTbody">
@@ -350,7 +386,7 @@
               <tr>
                 <td class="est-num">{{ ln.estimate_number }}</td>
                 <td class="customer-cell">{{ ln.customer_name }}</td>
-                <td>
+                <td data-sort-value="{{ ln.status_raw }}">
                   {% set s = ln.status_raw | lower %}
                   {% if 'complet' in s %}
                     <span class="status-pill completed">{{ ln.status_raw }}</span>
@@ -358,18 +394,18 @@
                     <span class="status-pill approved">{{ ln.status_raw }}</span>
                   {% elif 'quot' in s %}
                     <span class="status-pill quoted">{{ ln.status_raw }}</span>
-                  {% elif 'progress' in s or 'in progress' in s %}
+                  {% elif 'progress' in s %}
                     <span class="status-pill progress">{{ ln.status_raw }}</span>
                   {% else %}
                     <span class="status-pill">{{ ln.status_raw }}</span>
                   {% endif %}
                 </td>
-                <td class="mono">{{ ln.created_date }}</td>
-                <td class="right">{{ ln.total_amount }}</td>
+                <td class="mono" data-sort-value="{{ ln.created_date }}">{{ ln.created_date }}</td>
+                <td class="right" data-sort-value="{{ ln.total_amount }}">{{ ln.total_amount }}</td>
                 <td class="item-cell">{{ ln.item_name }}</td>
                 <td class="desc-cell">{{ ln.description }}</td>
-                <td class="right">{{ ln.quantity }}</td>
-                <td class="right">{{ ln.line_total }}</td>
+                <td class="right" data-sort-value="{{ ln.quantity }}">{{ ln.quantity }}</td>
+                <td class="right" data-sort-value="{{ ln.line_total }}">{{ ln.line_total }}</td>
                 <td class="mono" style="font-size:11px;color:var(--ink-3);">
                   {% if ln.sales_rep != '—' %}{{ ln.sales_rep }}{% endif %}
                   {% if ln.project_manager != '—' %}<br>PM: {{ ln.project_manager }}{% endif %}
@@ -404,29 +440,158 @@
   </div><!-- /.app -->
 
   <script>
-    (function () {
-      var input   = document.getElementById('vendorSearch');
-      var tbody   = document.getElementById('vendorTbody');
-      var count   = document.getElementById('searchCount');
-      var noRow   = document.getElementById('noResultsRow');
-      if (!input || !tbody) return;
+  (function () {
+    'use strict';
 
-      var allRows = Array.from(tbody.querySelectorAll('tr:not(#noResultsRow)'));
-      var total   = allRows.length;
+    /* ── Status sort order ────────────────────────────────────── */
+    var STATUS_ORDER = {
+      'quoted':           1,
+      'pending approval': 2,
+      'approved':         3,
+      'in progress':      4,
+      'installed':        5,
+      'invoiced':         6,
+      'completed':        7,
+      'lost':             8,
+      'cancelled':        9
+    };
 
-      input.addEventListener('input', function () {
-        var q = this.value.trim().toLowerCase();
-        var visible = 0;
-        allRows.forEach(function (row) {
-          var text = row.textContent.toLowerCase();
-          var show = !q || text.includes(q);
-          row.classList.toggle('hidden-row', !show);
-          if (show) visible++;
-        });
-        if (count) count.textContent = (q ? visible + ' of ' + total : total) + ' rows';
-        if (noRow) noRow.style.display = (visible === 0 && q) ? '' : 'none';
+    function statusRank(text) {
+      var t = (text || '').toLowerCase().trim();
+      for (var k in STATUS_ORDER) {
+        if (t.indexOf(k) !== -1) return STATUS_ORDER[k];
+      }
+      return 99;
+    }
+
+    /* ── Parse sort value for a cell ─────────────────────────── */
+    function cellSortValue(td, type) {
+      /* Prefer explicit data-sort-value if present */
+      var raw = td.getAttribute('data-sort-value');
+      var text = raw !== null ? raw : td.textContent.trim();
+
+      if (type === 'num') {
+        var n = parseFloat((text || '').replace(/[^0-9.\-]/g, ''));
+        return isNaN(n) ? -Infinity : n;
+      }
+      if (type === 'currency') {
+        var c = parseFloat((text || '').replace(/[$,]/g, ''));
+        return isNaN(c) ? -Infinity : c;
+      }
+      if (type === 'date') {
+        /* YYYY-MM-DD strings sort lexicographically; '—' → sorts last */
+        return (text && text !== '—') ? text : '0000-00-00';
+      }
+      if (type === 'status') {
+        return statusRank(text);
+      }
+      /* 'text' */
+      return (text || '').toLowerCase();
+    }
+
+    /* ── DOM refs ─────────────────────────────────────────────── */
+    var tbody   = document.getElementById('vendorTbody');
+    var searchEl = document.getElementById('vendorSearch');
+    var countEl  = document.getElementById('searchCount');
+    var noRow    = document.getElementById('noResultsRow');
+    if (!tbody) return;
+
+    var headers  = document.querySelectorAll('#vendorTable thead th[data-sort-type]');
+    var dataRows = Array.from(tbody.querySelectorAll('tr:not(#noResultsRow)'));
+    var total    = dataRows.length;
+
+    /* ── Search state ─────────────────────────────────────────── */
+    var currentQuery = '';
+
+    function applyFilter() {
+      var q = currentQuery;
+      var visible = 0;
+      dataRows.forEach(function (row) {
+        if (row.classList.contains('hidden-sort')) return; /* already hidden by sort (unused here) */
+        var text = row.textContent.toLowerCase();
+        var show = !q || text.indexOf(q) !== -1;
+        row.classList.toggle('hidden-row', !show);
+        if (show) visible++;
       });
-    })();
+      if (countEl) countEl.textContent = (q ? visible + ' of ' + total : total) + ' rows';
+      if (noRow) noRow.style.display = (visible === 0 && q) ? '' : 'none';
+    }
+
+    if (searchEl) {
+      searchEl.addEventListener('input', function () {
+        currentQuery = this.value.trim().toLowerCase();
+        applyFilter();
+      });
+    }
+
+    /* ── Sort state ───────────────────────────────────────────── */
+    var sortCol = -1;   /* column index, -1 = unsorted */
+    var sortDir =  1;   /* 1 = asc, -1 = desc */
+
+    /* Build header index → th map for easy lookup */
+    var thList = Array.from(document.querySelectorAll('#vendorTable thead th'));
+
+    function updateArrows(activeIndex) {
+      thList.forEach(function (th, i) {
+        var arrow = th.querySelector('.sort-arrow');
+        if (!arrow) return;
+        th.classList.remove('sort-active');
+        if (i === activeIndex) {
+          th.classList.add('sort-active');
+          arrow.textContent = sortDir === 1 ? ' ↑' : ' ↓';
+        } else {
+          arrow.textContent = '';
+        }
+      });
+    }
+
+    function sortTable(colIndex, type) {
+      dataRows.sort(function (a, b) {
+        var tdA = a.querySelectorAll('td')[colIndex];
+        var tdB = b.querySelectorAll('td')[colIndex];
+        if (!tdA || !tdB) return 0;
+
+        var va = cellSortValue(tdA, type);
+        var vb = cellSortValue(tdB, type);
+
+        var cmp;
+        if (typeof va === 'number' && typeof vb === 'number') {
+          cmp = va - vb;
+        } else {
+          cmp = va < vb ? -1 : va > vb ? 1 : 0;
+        }
+        return cmp * sortDir;
+      });
+
+      /* Re-insert sorted rows before the no-results sentinel */
+      dataRows.forEach(function (row) {
+        tbody.insertBefore(row, noRow);
+      });
+
+      /* Re-apply the current search filter (preserves hidden-row state) */
+      applyFilter();
+    }
+
+    /* ── Attach click handlers ────────────────────────────────── */
+    headers.forEach(function (th) {
+      th.addEventListener('click', function () {
+        /* Find this th's position in the full th list */
+        var colIndex = thList.indexOf(th);
+        var type     = th.getAttribute('data-sort-type');
+
+        if (sortCol === colIndex) {
+          sortDir = -sortDir;          /* toggle direction */
+        } else {
+          sortCol = colIndex;
+          sortDir = 1;                 /* reset to ascending */
+        }
+
+        updateArrows(colIndex);
+        sortTable(colIndex, type);
+      });
+    });
+
+  })();
   </script>
 </body>
 </html>
