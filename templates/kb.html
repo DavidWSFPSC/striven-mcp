@@ -9,14 +9,12 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='hub.css') }}">
   <style>
-    /* ── Page layout ─────────────────────────────────────────── */
+    /* ── Layout ──────────────────────────────────────────────── */
     .page-inner {
-      max-width: 1080px;
+      max-width: 1100px;
       margin: 0 auto;
       padding: 48px 28px 80px;
     }
-
-    /* ── Page header ─────────────────────────────────────────── */
     .page-eyebrow {
       font-family: var(--font-mono);
       font-size: 10.5px;
@@ -37,9 +35,10 @@
       font-size: 15px;
       color: var(--ink-2);
       line-height: 1.6;
-      max-width: 620px;
+      max-width: 640px;
       margin: 0 0 40px;
     }
+    .rule { border: 0; border-top: 1px solid var(--rule); margin: 36px 0; }
 
     /* ── Error banner ────────────────────────────────────────── */
     .error-banner {
@@ -52,21 +51,18 @@
       margin-bottom: 32px;
     }
 
-    /* ── Rule ────────────────────────────────────────────────── */
-    .rule { border: 0; border-top: 1px solid var(--rule); margin: 36px 0; }
-
     /* ── Stat grid ───────────────────────────────────────────── */
     .stat-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 14px;
-      margin-bottom: 40px;
+      grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+      gap: 12px;
+      margin-bottom: 36px;
     }
     .stat-card {
       background: var(--bg-elev);
       border: 1px solid var(--rule);
       border-radius: var(--radius);
-      padding: 18px 20px;
+      padding: 16px 18px;
       box-shadow: var(--shadow-sm);
     }
     .stat-label {
@@ -80,21 +76,17 @@
     .stat-value {
       font-family: var(--font-display);
       font-weight: 600;
-      font-size: 28px;
+      font-size: 26px;
       letter-spacing: -0.02em;
       line-height: 1;
       color: var(--ink);
     }
-    .stat-value.bad   { color: var(--bad); }
-    .stat-value.warn  { color: var(--warn); }
-    .stat-value.ok    { color: var(--ok); }
-    .stat-sub {
-      font-size: 12px;
-      color: var(--ink-3);
-      margin-top: 4px;
-    }
+    .stat-value.bad  { color: var(--bad); }
+    .stat-value.warn { color: var(--warn); }
+    .stat-value.ok   { color: var(--ok); }
+    .stat-sub { font-size: 11.5px; color: var(--ink-3); margin-top: 4px; }
 
-    /* ── Section ─────────────────────────────────────────────── */
+    /* ── Section headers ─────────────────────────────────────── */
     .section { margin-bottom: 36px; }
     .section-label {
       font-family: var(--font-mono);
@@ -102,63 +94,129 @@
       letter-spacing: 0.16em;
       text-transform: uppercase;
       color: var(--ink-3);
-      margin-bottom: 12px;
+      margin-bottom: 10px;
     }
     .section-heading {
       font-family: var(--font-display);
       font-weight: 600;
       font-size: 20px;
       letter-spacing: -0.01em;
-      margin: 0 0 16px;
+      margin: 0 0 6px;
+    }
+    .section-desc {
+      font-size: 13.5px;
+      color: var(--ink-2);
+      line-height: 1.55;
+      margin: 0 0 20px;
     }
 
-    /* ── Critical gap cards ──────────────────────────────────── */
-    .gap-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-      gap: 12px;
+    /* ── Priority counts row ─────────────────────────────────── */
+    .priority-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 24px;
     }
-    .gap-card {
+    .priority-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
       background: var(--bg-elev);
       border: 1px solid var(--rule);
       border-radius: var(--radius);
-      padding: 16px 18px;
+      padding: 10px 16px;
       box-shadow: var(--shadow-sm);
+    }
+    .priority-pill .p-badge {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      padding: 2px 7px;
+      border-radius: 999px;
+    }
+    .p-badge.p1 { background: var(--bad-soft);  color: var(--bad); }
+    .p-badge.p2 { background: var(--warn-soft); color: var(--warn); }
+    .p-badge.p3 { background: #e8f0fe;          color: #2d5be3; }
+    .p-badge.p4 { background: var(--ok-soft);   color: var(--ok); }
+    .priority-pill .p-count {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: 20px;
+      color: var(--ink);
+      line-height: 1;
+    }
+    .priority-pill .p-label {
+      font-size: 12px;
+      color: var(--ink-3);
+    }
+
+    /* ── Work queue cards ────────────────────────────────────── */
+    .queue-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 14px;
+      margin-bottom: 4px;
+    }
+    .queue-card {
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      box-shadow: var(--shadow-sm);
+    }
+    .queue-card-header {
       display: flex;
-      align-items: flex-start;
-      gap: 12px;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
     }
-    .gap-card.red  { border-left: 3px solid var(--bad); }
-    .gap-card.yellow { border-left: 3px solid var(--warn); }
-    .gap-status-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
+    .queue-card-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-sm);
+      display: grid;
+      place-items: center;
       flex-shrink: 0;
-      margin-top: 4px;
     }
-    .gap-status-dot.red    { background: var(--bad); }
-    .gap-status-dot.yellow { background: var(--warn); }
-    .gap-body { flex: 1; min-width: 0; }
-    .gap-vendor {
+    .queue-card-icon.red    { background: var(--bad-soft);  color: var(--bad); }
+    .queue-card-icon.yellow { background: var(--warn-soft); color: var(--warn); }
+    .queue-card-icon.blue   { background: #e8f0fe;          color: #2d5be3; }
+    .queue-card-title {
       font-weight: 600;
       font-size: 14px;
-      margin-bottom: 3px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
-    .gap-action {
+    .queue-card-desc {
       font-size: 12.5px;
       color: var(--ink-2);
-      line-height: 1.45;
-      margin-bottom: 6px;
+      line-height: 1.5;
+      margin-bottom: 14px;
     }
-    .gap-meta {
-      font-family: var(--font-mono);
-      font-size: 10.5px;
+    .queue-vendor-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .queue-vendor-list li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      background: var(--bg-sunk);
+      border-radius: var(--radius-sm);
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+    .qv-name { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .qv-meta { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-3); flex-shrink: 0; }
+    .queue-empty {
+      font-size: 13px;
       color: var(--ink-3);
-      letter-spacing: 0.03em;
+      padding: 10px 0;
+      font-style: italic;
     }
 
     /* ── Coverage table ──────────────────────────────────────── */
@@ -171,14 +229,14 @@
     table.coverage-table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 13px;
+      font-size: 12.5px;
     }
     .coverage-table thead th {
       background: var(--bg-sunk);
-      padding: 10px 14px;
+      padding: 9px 12px;
       text-align: left;
       font-family: var(--font-mono);
-      font-size: 9.5px;
+      font-size: 9px;
       letter-spacing: 0.12em;
       text-transform: uppercase;
       color: var(--ink-3);
@@ -194,16 +252,12 @@
     .coverage-table tbody tr:last-child { border-bottom: 0; }
     .coverage-table tbody tr:hover { background: var(--bg-elev); }
     .coverage-table td {
-      padding: 11px 14px;
+      padding: 10px 12px;
       vertical-align: middle;
       color: var(--ink-2);
     }
-    .coverage-table td.right { text-align: right; font-family: var(--font-mono); font-size: 12px; }
-    .coverage-table td.vendor-cell {
-      font-weight: 600;
-      color: var(--ink);
-      white-space: nowrap;
-    }
+    .coverage-table td.right { text-align: right; font-family: var(--font-mono); font-size: 11.5px; }
+    .coverage-table td.vendor-cell { font-weight: 600; color: var(--ink); white-space: nowrap; }
 
     /* Status badge */
     .badge {
@@ -218,45 +272,79 @@
       font-weight: 500;
       white-space: nowrap;
     }
-    .badge-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-    .badge.red    { background: var(--bad-soft);  color: var(--bad);  }
-    .badge.red    .badge-dot { background: var(--bad); }
-    .badge.yellow { background: var(--warn-soft); color: var(--warn); }
-    .badge.yellow .badge-dot { background: var(--warn); }
-    .badge.green  { background: var(--ok-soft);   color: var(--ok);  }
-    .badge.green  .badge-dot { background: var(--ok); }
-    .badge.unknown { background: var(--bg-sunk);  color: var(--ink-3); }
+    .badge-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .badge.red     { background: var(--bad-soft);  color: var(--bad); }
+    .badge.red     .badge-dot { background: var(--bad); }
+    .badge.yellow  { background: var(--warn-soft); color: var(--warn); }
+    .badge.yellow  .badge-dot { background: var(--warn); }
+    .badge.green   { background: var(--ok-soft);   color: var(--ok); }
+    .badge.green   .badge-dot { background: var(--ok); }
+    .badge.unknown { background: var(--bg-sunk);   color: var(--ink-3); }
     .badge.unknown .badge-dot { background: var(--ink-3); }
 
-    /* Manual check */
-    .manual-yes { color: var(--ok);   font-weight: 600; }
-    .manual-no  { color: var(--bad);  font-weight: 600; }
-
-    /* Action cell */
-    .action-cell {
-      font-size: 12px;
-      color: var(--ink-2);
-      max-width: 240px;
+    /* Priority badge */
+    .pri-badge {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      padding: 2px 7px;
+      border-radius: 999px;
+      white-space: nowrap;
     }
+    .pri-badge.P1     { background: var(--bad-soft);  color: var(--bad); }
+    .pri-badge.P2     { background: var(--warn-soft); color: var(--warn); }
+    .pri-badge.P3     { background: #e8f0fe;          color: #2d5be3; }
+    .pri-badge.P4     { background: var(--ok-soft);   color: var(--ok); }
+    .pri-badge.Review { background: var(--bg-sunk);   color: var(--ink-3); }
 
-    /* Empty state */
-    .empty-state {
-      padding: 48px 24px;
-      text-align: center;
-      color: var(--ink-3);
-      font-size: 14px;
+    .manual-yes { color: var(--ok);  font-weight: 600; }
+    .manual-no  { color: var(--bad); font-weight: 600; }
+    .action-cell { font-size: 11.5px; color: var(--ink-2); max-width: 180px; }
+    .why-cell    { font-size: 11.5px; color: var(--ink-2); max-width: 200px; }
+    .ws-cell     { font-size: 11.5px; color: var(--ink-3); font-family: var(--font-mono); white-space: nowrap; }
+    .empty-state { padding: 48px 24px; text-align: center; color: var(--ink-3); font-size: 14px; }
+
+    /* ── Checklist ───────────────────────────────────────────── */
+    .checklist {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
     }
+    .checklist li {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      font-size: 13.5px;
+    }
+    .checklist .ck-label { flex: 1; font-weight: 500; }
+    .checklist .ck-status {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 500;
+    }
+    .ck-live     { background: var(--ok-soft);   color: var(--ok); }
+    .ck-progress { background: var(--warn-soft); color: var(--warn); }
+    .ck-active   { background: var(--bad-soft);  color: var(--bad); }
+    .ck-not      { background: var(--bg-sunk);   color: var(--ink-3); }
+    .ck-sop      { background: #e8f0fe;          color: #2d5be3; }
 
     /* ── Responsive ──────────────────────────────────────────── */
     @media (max-width: 640px) {
       .page-inner { padding: 32px 16px 60px; }
       .page-title  { font-size: 26px; }
       .stat-grid   { grid-template-columns: repeat(2, 1fr); }
+      .queue-grid  { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -282,7 +370,6 @@
             <span class="sub">Fireplaces</span>
           </span>
         </a>
-
         <div class="header-meta">
           <a href="/" class="back-btn" aria-label="Back to hub">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
@@ -301,8 +388,8 @@
         <div class="page-eyebrow">Analyze</div>
         <h1 class="page-title">KB Coverage</h1>
         <p class="page-subtitle">
-          Where WilliamSmith generates revenue without the documentation to back it up —
-          install manuals, owner manuals, brochures, and internal knowledge articles by vendor.
+          Where WilliamSmith generates revenue without the documentation to back it up.
+          Use this dashboard to prioritize what to scrape, build, and maintain.
         </p>
 
         {% if error %}
@@ -311,7 +398,7 @@
         </div>
         {% endif %}
 
-        <!-- Stat cards -->
+        <!-- ── Stat cards ─────────────────────────────────────── -->
         <div class="stat-grid">
           <div class="stat-card">
             <div class="stat-label">Total Vendors</div>
@@ -340,40 +427,142 @@
           </div>
           <div class="stat-card">
             <div class="stat-label">Total Revenue</div>
-            <div class="stat-value" style="font-size:22px;">{{ total_revenue_fmt }}</div>
+            <div class="stat-value" style="font-size:20px;">{{ total_revenue_fmt }}</div>
             <div class="stat-sub">across all tracked vendors</div>
           </div>
         </div>
 
-        {% if critical %}
         <hr class="rule">
 
-        <!-- Critical gaps -->
+        <!-- ── Scraping Work Queue ────────────────────────────── -->
         <div class="section">
-          <div class="section-label">Needs Action</div>
-          <h2 class="section-heading">Critical &amp; Partial Coverage Gaps</h2>
-          <div class="gap-grid">
-            {% for v in critical %}
-            <div class="gap-card {{ v.coverage_status }}">
-              <div class="gap-status-dot {{ v.coverage_status }}"></div>
-              <div class="gap-body">
-                <div class="gap-vendor">{{ v.vendor }}</div>
-                <div class="gap-action">{{ v.action_needed }}</div>
-                <div class="gap-meta">
-                  {{ v.revenue_fmt }} rev &nbsp;·&nbsp;
-                  {{ v.kb_doc_count }} KB doc{% if v.kb_doc_count != 1 %}s{% endif %}
-                  {% if not v.has_install_manual %} &nbsp;·&nbsp; <span style="color:var(--bad)">no install manual</span>{% endif %}
-                </div>
-              </div>
+          <div class="section-label">Documentation Project</div>
+          <h2 class="section-heading">Scraping Work Queue</h2>
+          <p class="section-desc">
+            Vendors ranked and bucketed by documentation gap severity. Use this to direct
+            scraping effort, vendor outreach, and the Whyfyre comparison review.
+          </p>
+
+          <!-- Priority counts -->
+          <div class="priority-row">
+            <div class="priority-pill">
+              <span class="p-badge p1">P1</span>
+              <span class="p-count">{{ p1_count }}</span>
+              <span class="p-label">Start here</span>
             </div>
-            {% endfor %}
+            <div class="priority-pill">
+              <span class="p-badge p2">P2</span>
+              <span class="p-count">{{ p2_count }}</span>
+              <span class="p-label">Missing manual</span>
+            </div>
+            <div class="priority-pill">
+              <span class="p-badge p3">P3</span>
+              <span class="p-count">{{ p3_count }}</span>
+              <span class="p-label">Partial coverage</span>
+            </div>
+            <div class="priority-pill">
+              <span class="p-badge p4">P4</span>
+              <span class="p-count">{{ p4_count }}</span>
+              <span class="p-label">Maintain</span>
+            </div>
           </div>
+
+          <!-- Three queue cards -->
+          <div class="queue-grid">
+
+            <!-- Card 1: Start Here -->
+            <div class="queue-card">
+              <div class="queue-card-header">
+                <div class="queue-card-icon red">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M8 2v5l3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                    <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                  </svg>
+                </div>
+                <div class="queue-card-title">Start Here — P1</div>
+              </div>
+              <p class="queue-card-desc">
+                Highest-value gaps and vendors missing install manuals above the $250k revenue threshold.
+                These should be scraped or sourced first.
+              </p>
+              {% if q_start_here %}
+              <ul class="queue-vendor-list">
+                {% for v in q_start_here %}
+                <li>
+                  <span class="qv-name">{{ v.vendor }}</span>
+                  <span class="qv-meta">{{ v.revenue_fmt }} · {{ v.workstream }}</span>
+                </li>
+                {% endfor %}
+              </ul>
+              {% else %}
+              <p class="queue-empty">No P1 vendors — good shape.</p>
+              {% endif %}
+            </div>
+
+            <!-- Card 2: Website Gaps -->
+            <div class="queue-card">
+              <div class="queue-card-header">
+                <div class="queue-card-icon yellow">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                    <path d="M5 8h6M5 11h4M5 5h2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                  </svg>
+                </div>
+                <div class="queue-card-title">Website Gaps</div>
+              </div>
+              <p class="queue-card-desc">
+                Red-status vendors with zero KB documents. Sold by WSF with no coverage —
+                may also need a WSFPSC.com product page review.
+              </p>
+              {% if q_website_gaps %}
+              <ul class="queue-vendor-list">
+                {% for v in q_website_gaps %}
+                <li>
+                  <span class="qv-name">{{ v.vendor }}</span>
+                  <span class="qv-meta">{{ v.revenue_fmt }} · {{ v.kb_doc_count }} docs</span>
+                </li>
+                {% endfor %}
+              </ul>
+              {% else %}
+              <p class="queue-empty">No zero-doc red vendors.</p>
+              {% endif %}
+            </div>
+
+            <!-- Card 3: Whyfyre Review -->
+            <div class="queue-card">
+              <div class="queue-card-header">
+                <div class="queue-card-icon blue">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                    <path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                  </svg>
+                </div>
+                <div class="queue-card-title">Whyfyre Review</div>
+              </div>
+              <p class="queue-card-desc">
+                Green and yellow vendors with revenue where documentation exists but should be
+                compared against manufacturer pages and Whyfyre. Review not yet started.
+              </p>
+              {% if q_whyfyre %}
+              <ul class="queue-vendor-list">
+                {% for v in q_whyfyre %}
+                <li>
+                  <span class="qv-name">{{ v.vendor }}</span>
+                  <span class="qv-meta">{{ v.revenue_fmt }} · {{ v.kb_doc_count }} docs</span>
+                </li>
+                {% endfor %}
+              </ul>
+              {% else %}
+              <p class="queue-empty">No vendors in this queue.</p>
+              {% endif %}
+            </div>
+
+          </div><!-- /.queue-grid -->
         </div>
-        {% endif %}
 
         <hr class="rule">
 
-        <!-- Full table -->
+        <!-- ── Full coverage table ────────────────────────────── -->
         <div class="section">
           <div class="section-label">All Vendors</div>
           <h2 class="section-heading">Full Coverage Table</h2>
@@ -385,12 +574,15 @@
                 <tr>
                   <th>Vendor</th>
                   <th>Status</th>
+                  <th>Priority</th>
+                  <th>Workstream</th>
                   <th class="right">Revenue</th>
                   <th class="right">Profit</th>
                   <th class="right">Margin</th>
                   <th class="right">SKUs</th>
                   <th class="right">KB Docs</th>
                   <th>Install Manual</th>
+                  <th>Why It Matters</th>
                   <th>Action Needed</th>
                 </tr>
               </thead>
@@ -404,6 +596,10 @@
                       {{ v.coverage_status | upper }}
                     </span>
                   </td>
+                  <td>
+                    <span class="pri-badge {{ v.scrape_priority }}">{{ v.scrape_priority }}</span>
+                  </td>
+                  <td class="ws-cell">{{ v.workstream }}</td>
                   <td class="right">{{ v.revenue_fmt }}</td>
                   <td class="right">{{ v.profit_fmt }}</td>
                   <td class="right">{{ v.margin_fmt }}</td>
@@ -416,6 +612,7 @@
                       <span class="manual-no">No</span>
                     {% endif %}
                   </td>
+                  <td class="why-cell">{{ v.why_it_matters }}</td>
                   <td class="action-cell">{{ v.action_needed }}</td>
                 </tr>
                 {% endfor %}
@@ -425,6 +622,43 @@
           {% else %}
           <div class="empty-state">No vendor data available.</div>
           {% endif %}
+        </div>
+
+        <hr class="rule">
+
+        <!-- ── Project Checklist ──────────────────────────────── -->
+        <div class="section">
+          <div class="section-label">Documentation Project</div>
+          <h2 class="section-heading">Project Checklist</h2>
+          <p class="section-desc">
+            Current status of each workstream. Nothing is marked complete unless it is confirmed done.
+          </p>
+          <ul class="checklist">
+            <li>
+              <span class="ck-label">KB Index</span>
+              <span class="ck-status ck-live">Live</span>
+            </li>
+            <li>
+              <span class="ck-label">Sold-product coverage</span>
+              <span class="ck-status ck-progress">In Progress</span>
+            </li>
+            <li>
+              <span class="ck-label">Missing install manuals</span>
+              <span class="ck-status ck-active">Active Queue</span>
+            </li>
+            <li>
+              <span class="ck-label">Whyfyre comparison</span>
+              <span class="ck-status ck-not">Not Started</span>
+            </li>
+            <li>
+              <span class="ck-label">WSFPSC website product gaps</span>
+              <span class="ck-status ck-not">Not Started</span>
+            </li>
+            <li>
+              <span class="ck-label">Repeatable profitability report import</span>
+              <span class="ck-status ck-sop">Needs SOP</span>
+            </li>
+          </ul>
         </div>
 
       </div>

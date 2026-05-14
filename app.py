@@ -7867,7 +7867,10 @@ def kb():
     for r in rows:
         status = (r.get("coverage_status") or "").lower()
         has_manual = bool(r.get("has_install_manual"))
+        kb_docs    = r.get("kb_doc_count") or 0
+        revenue    = r.get("total_revenue") or 0
 
+        # ── Action needed ─────────────────────────────────────────
         if status == "red":
             action = "Find and add install manual/spec docs"
         elif status == "yellow" and not has_manual:
@@ -7879,17 +7882,46 @@ def kb():
         else:
             action = "Review"
 
+        # ── Scrape priority ───────────────────────────────────────
+        if not has_manual and revenue >= 250_000:
+            scrape_priority = "P1"
+            why_it_matters  = "High revenue and missing install manual"
+            workstream      = "Install Manual"
+        elif status == "red" and kb_docs == 0:
+            scrape_priority = "P1"
+            why_it_matters  = "Zero KB coverage"
+            workstream      = "Build Vendor Folder"
+        elif not has_manual:
+            scrape_priority = "P2"
+            why_it_matters  = "Missing install manual"
+            workstream      = "Install Manual"
+        elif status == "yellow":
+            scrape_priority = "P3"
+            why_it_matters  = "Partial KB coverage"
+            workstream      = "Supporting Docs"
+        elif status == "green":
+            scrape_priority = "P4"
+            why_it_matters  = "Covered; maintain"
+            workstream      = "Maintain"
+        else:
+            scrape_priority = "Review"
+            why_it_matters  = "Needs manual review"
+            workstream      = "Review"
+
         vendors.append({
             "vendor":             r.get("vendor") or "—",
             "unique_skus":        r.get("total_unique_skus") or 0,
-            "total_revenue":      r.get("total_revenue") or 0,
+            "total_revenue":      revenue,
             "total_profit":       r.get("total_profit") or 0,
             "avg_margin_pct":     r.get("avg_margin_pct"),
-            "kb_doc_count":       r.get("kb_doc_count") or 0,
+            "kb_doc_count":       kb_docs,
             "has_install_manual": has_manual,
             "coverage_status":    status or "unknown",
             "action_needed":      action,
-            "revenue_fmt":        _fmt_currency(r.get("total_revenue")),
+            "scrape_priority":    scrape_priority,
+            "why_it_matters":     why_it_matters,
+            "workstream":         workstream,
+            "revenue_fmt":        _fmt_currency(revenue),
             "profit_fmt":         _fmt_currency(r.get("total_profit")),
             "margin_fmt":         _fmt_pct(r.get("avg_margin_pct")),
         })
@@ -7902,6 +7934,16 @@ def kb():
     total_rev_sum   = sum(v["total_revenue"] for v in vendors)
     critical        = [v for v in vendors if v["coverage_status"] in ("red", "yellow")]
 
+    p1_count = sum(1 for v in vendors if v["scrape_priority"] == "P1")
+    p2_count = sum(1 for v in vendors if v["scrape_priority"] == "P2")
+    p3_count = sum(1 for v in vendors if v["scrape_priority"] == "P3")
+    p4_count = sum(1 for v in vendors if v["scrape_priority"] == "P4")
+
+    # Work-queue slices for the template
+    q_start_here    = [v for v in vendors if v["scrape_priority"] == "P1"]
+    q_website_gaps  = [v for v in vendors if v["coverage_status"] == "red" and v["kb_doc_count"] == 0]
+    q_whyfyre       = [v for v in vendors if v["coverage_status"] in ("green", "yellow") and v["total_revenue"] > 0]
+
     return render_template(
         "kb.html",
         vendors=vendors,
@@ -7912,6 +7954,13 @@ def kb():
         green_count=green_count,
         missing_install=missing_install,
         total_revenue_fmt=_fmt_currency(total_rev_sum),
+        p1_count=p1_count,
+        p2_count=p2_count,
+        p3_count=p3_count,
+        p4_count=p4_count,
+        q_start_here=q_start_here,
+        q_website_gaps=q_website_gaps,
+        q_whyfyre=q_whyfyre,
         error=len(rows) == 0,
     )
 
