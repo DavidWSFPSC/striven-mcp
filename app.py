@@ -43,7 +43,7 @@ import json
 import re
 import time as _time_mod
 import anthropic
-from flask import Flask, jsonify, request, render_template, Response
+from flask import Flask, jsonify, request, render_template, Response, session as flask_session
 from dotenv import load_dotenv
 import requests
 from requests import HTTPError
@@ -100,6 +100,12 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 # Trust Render's proxy (this fixes the host header issue)
 
+# Flask session signing key.  Set FLASK_SECRET_KEY in the Render environment
+# to a stable random value (e.g. `python -c "import secrets; print(secrets.token_hex(32))"`).
+# If not set, a random key is generated per process start — sessions will be
+# invalidated on every Render restart, which is acceptable for the demo gate.
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
+
 # ---------------------------------------------------------------------------
 # WSF Hub API-key authentication
 #
@@ -136,6 +142,12 @@ def _require_hub_api_key():
     if request.path.startswith("/static/"):
         return None
     if request.path.startswith("/kb/vendor/"):
+        return None
+    if request.path.startswith("/manifest/ui/"):
+        # /manifest/ui/* is session-gated per-route, not by X-API-Key
+        return None
+    if request.path == "/manifest/session":
+        # POST validates MANIFEST_DEMO_KEY and sets session; DELETE clears it
         return None
     provided = request.headers.get("X-API-Key", "")
     if not provided:
@@ -8226,8 +8238,132 @@ def kb_vendor(vendor_name: str):
 
 @app.route("/manifest", methods=["GET"])
 def manifest():
-    """Manifest Center — field-ready installer package builder placeholder."""
-    return render_template("manifest.html")
+    """Material Manifest — field-ready installer package demo.
+    Passes authed=True to the template when the session demo key has been validated.
+    """
+    authed = bool(flask_session.get("manifest_demo_ok"))
+    return render_template("manifest.html", authed=authed)
+
+
+@app.route("/manifest/session", methods=["POST"])
+def manifest_session():
+    """
+    Validate the MANIFEST_DEMO_KEY and set a server-side session flag.
+
+    Request body (JSON):  { "key": "<demo-key>" }
+    Success response:     { "ok": true }          HTTP 200
+    Failure responses:    { "error": "..." }       HTTP 401 or 500
+
+    The key is compared with hmac.compare_digest to avoid timing attacks.
+    The provided key is never logged.
+    Bypassed by _require_hub_api_key (POST /manifest/session exempt).
+    """
+    import hmac as _hmac
+    demo_key = os.environ.get("MANIFEST_DEMO_KEY", "")
+    if not demo_key:
+        return jsonify({"error": "MANIFEST_DEMO_KEY is not configured on this server."}), 500
+
+    body     = request.get_json(silent=True) or {}
+    provided = (body.get("key") or "").strip()
+
+    if not provided or not _hmac.compare_digest(provided, demo_key):
+        return jsonify({"error": "Invalid demo key."}), 401
+
+    flask_session["manifest_demo_ok"] = True
+    flask_session.permanent = False   # expires when browser closes
+    return jsonify({"ok": True}), 200
+
+
+@app.route("/manifest/session", methods=["DELETE"])
+def manifest_session_clear():
+    """Clear the manifest demo session (logout).  No key required."""
+    flask_session.pop("manifest_demo_ok", None)
+    return jsonify({"ok": True}), 200
+
+
+@app.route("/manifest/ui/estimate/<int:estimate_id>/package", methods=["GET"])
+def manifest_ui_estimate_package(estimate_id: int):
+    """
+    Browser-safe proxy for the Material Manifest demo UI.
+
+    No X-API-Key required — accessible from /manifest without exposing any
+    secret to browser JavaScript.  Runs server-side and returns the same
+    package structure as /manifest/api/estimate/<id>/package.
+
+    Requires a valid manifest demo session (POST /manifest/session with the
+    MANIFEST_DEMO_KEY).  Returns 401 if not authorized.
+    """
+    if not flask_session.get("manifest_demo_ok"):
+        return jsonify({
+            "error": "Not authorized. Enter the demo key on the Manifest page.",
+            "auth_required": True,
+        }), 401
+
+    try:
+        raw = striven.get_estimate(estimate_id)
+    except HTTPError as exc:
+        code = exc.response.status_code if exc.response is not None else 502
+        if code == 404:
+            return jsonify({"error": "Estimate not found", "estimate_id": estimate_id}), 404
+        return jsonify({"error": "Striven request failed", "estimate_id": estimate_id}), code
+    except Exception:
+        return jsonify({"error": "Internal error fetching estimate", "estimate_id": estimate_id}), 500
+
+    customer  = raw.get("customer")     or raw.get("Customer")     or {}
+    status    = raw.get("status")       or raw.get("Status")       or {}
+    cf        = raw.get("customFields") or []
+    rep_id, rep_name = _resolve_rep(raw, allow_created_by_fallback=True)
+    status_id = status.get("id")    or status.get("Id")
+    pm        = _extract_custom_field(cf, 1559)
+    job_addr  = _extract_manifest_address(raw)
+    permit    = _extract_custom_field(cf, 1517) or ""
+
+    all_lines      = [normalize_manifest_line(li) for li in (raw.get("lineItems") or [])]
+    physical_items = [l for l in all_lines if l["is_physical"] is True]
+    excluded_lines = [l for l in all_lines if l["is_physical"] is False]
+    unclassified   = [l for l in all_lines if l["is_physical"] is None]
+
+    warnings: list[str] = []
+    if status_id and status_id != 22:
+        warnings.append(
+            f"Estimate status is '{status.get('name') or status.get('Name')}' "
+            f"(id={status_id}) — manifest may be premature; expected Approved (22)."
+        )
+    if not pm:
+        warnings.append("No project manager assigned.")
+    if job_addr is None:
+        warnings.append("No job/ship-to address found on this estimate.")
+    if permit and "needs permit" in permit.lower():
+        warnings.append(f"Permit required: {permit}")
+    if unclassified:
+        warnings.append(
+            f"{len(unclassified)} line(s) could not be classified as physical or excluded — "
+            "review unclassified_lines before finalizing the manifest."
+        )
+
+    return jsonify({
+        "estimate_id":        estimate_id,
+        "manifest_id":        None,
+        "generated_at":       _time_mod.strftime("%Y-%m-%dT%H:%M:%SZ", _time_mod.gmtime()),
+        "status":             "draft",
+        "header": {
+            "estimate_number":     raw.get("orderNumber")   or raw.get("OrderNumber"),
+            "name":                raw.get("orderName")     or raw.get("OrderName"),
+            "customer_name":       customer.get("name")     or customer.get("Name"),
+            "job_address":         job_addr,
+            "sales_rep":           rep_name,
+            "project_manager":     pm,
+            "product_type":        _extract_custom_field(cf, 1507),
+            "target_install_date": (_extract_custom_field(cf, 1515) or "")[:10] or None,
+            "permit_status":       permit or None,
+            "order_total":         raw.get("orderTotal")    or raw.get("OrderTotal"),
+        },
+        "physical_items":     physical_items,
+        "excluded_lines":     excluded_lines,
+        "unclassified_lines": unclassified,
+        "item_count":         len(physical_items),
+        "warnings":           warnings,
+    })
 
 
 # ---------------------------------------------------------------------------
