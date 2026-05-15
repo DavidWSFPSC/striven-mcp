@@ -201,7 +201,8 @@ def _check_and_claim_request() -> bool:
 
 # ---------------------------------------------------------------------------
 _RESP_CACHE: dict[str, tuple[object, float]] = {}
-_CACHE_TTL   = 60  # seconds
+_CACHE_TTL   = 60   # seconds
+_CACHE_MAX   = 100  # max entries — evict oldest before inserting when full
 
 
 def _cache_get(key: str) -> object | None:
@@ -217,8 +218,26 @@ def _cache_get(key: str) -> object | None:
 
 
 def _cache_set(key: str, data: object) -> None:
+    if len(_RESP_CACHE) >= _CACHE_MAX:
+        # Evict the entry with the smallest (oldest) timestamp
+        oldest_key = min(_RESP_CACHE, key=lambda k: _RESP_CACHE[k][1])
+        del _RESP_CACHE[oldest_key]
+        print(f"[cache] EVICT oldest={oldest_key!r} (cap={_CACHE_MAX})", flush=True)
     _RESP_CACHE[key] = (data, _time_mod.monotonic())
-    print(f"[cache] SET  key={key!r}", flush=True)
+    print(f"[cache] SET  key={key!r} size={len(_RESP_CACHE)}", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Memory helper — logs RSS in MB using psutil when available.
+# ---------------------------------------------------------------------------
+
+def _rss_mb() -> float:
+    """Return current process RSS in MB, or -1.0 if psutil is unavailable."""
+    try:
+        import psutil as _psutil
+        return _psutil.Process().memory_info().rss / 1_048_576
+    except Exception:
+        return -1.0
 
 
 # ---------------------------------------------------------------------------
@@ -827,7 +846,10 @@ def gas_log_audit():
     raw_limit     = request.args.get("limit", "").strip()
     inspect_limit = int(raw_limit) if raw_limit.isdigit() else None
     try:
-        return jsonify(_run_gas_log_audit(limit=inspect_limit))
+        print(f"[memory] route=/gas-log-audit rss_mb={_rss_mb():.1f} stage=start", flush=True)
+        _audit_result = _run_gas_log_audit(limit=inspect_limit)
+        print(f"[memory] route=/gas-log-audit rss_mb={_rss_mb():.1f} stage=end", flush=True)
+        return jsonify(_audit_result)
     except HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 502
         return jsonify({"error": str(exc)}), status
@@ -1082,6 +1104,7 @@ def admin_run_sync():
     ]
 
     def _run_all():
+        print(f"[memory] route=/admin/run-sync rss_mb={_rss_mb():.1f} stage=start", flush=True)
         print("[admin/run-sync] Nightly sync started.", flush=True)
         for script in scripts:
             print(f"[admin/run-sync] Running {script} ...", flush=True)
@@ -1104,6 +1127,7 @@ def admin_run_sync():
             except Exception as exc:
                 print(f"[admin/run-sync] {script} error: {exc}", flush=True)
         print("[admin/run-sync] Nightly sync complete.", flush=True)
+        print(f"[memory] route=/admin/run-sync rss_mb={_rss_mb():.1f} stage=end", flush=True)
 
     t = threading.Thread(target=_run_all, daemon=True)
     t.start()
@@ -1133,12 +1157,14 @@ def admin_run_sync_estimates():
         return jsonify({"error": "Unauthorized"}), 401
 
     def _run():
+        print(f"[memory] route=/admin/run-sync-estimates rss_mb={_rss_mb():.1f} stage=start", flush=True)
         print("[admin/run-sync-estimates] Estimates sync started.", flush=True)
         try:
             n = sync_estimates_to_supabase(limit=None)
             print(f"[admin/run-sync-estimates] Completed — {n} records synced.", flush=True)
         except Exception as exc:
             print(f"[admin/run-sync-estimates] ERROR: {exc}", flush=True)
+        print(f"[memory] route=/admin/run-sync-estimates rss_mb={_rss_mb():.1f} stage=end", flush=True)
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -1169,6 +1195,7 @@ def admin_run_sync_kb():
         return jsonify({"error": "Unauthorized"}), 401
 
     def _run():
+        print(f"[memory] route=/admin/run-sync-kb rss_mb={_rss_mb():.1f} stage=start", flush=True)
         print("[admin/run-sync-kb] Knowledge base sync started.", flush=True)
         try:
             result = subprocess.run(
@@ -1185,6 +1212,7 @@ def admin_run_sync_kb():
             print("[admin/run-sync-kb] sync_knowledge_base.py timed out after 60 min.", flush=True)
         except Exception as exc:
             print(f"[admin/run-sync-kb] ERROR: {exc}", flush=True)
+        print(f"[memory] route=/admin/run-sync-kb rss_mb={_rss_mb():.1f} stage=end", flush=True)
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
