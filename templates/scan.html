@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>WSF Scanner — WilliamSmith Fireplaces</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    /* ── Tokens ── */
+    :root {
+      --bg:          #f6f1ea;
+      --bg-elev:     #fbf8f3;
+      --bg-sunk:     #ede6dc;
+      --ink:         #1c1714;
+      --ink-2:       #4a423b;
+      --ink-3:       #8b8278;
+      --rule:        #e2d8c8;
+      --accent:      #e07a2c;
+      --accent-deep: #b85d18;
+      --accent-soft: #f6e3d0;
+      --warn:        #c08a1a;
+      --warn-soft:   #fdf3d8;
+      --ok:          #2a7a4b;
+      --ok-soft:     #e8f5ee;
+      --bad:         #b53a2a;
+      --bad-soft:    #fbeae7;
+      --radius-sm:   6px;
+      --radius:      10px;
+      --radius-lg:   16px;
+      --font-ui:      'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-display: 'Source Serif 4', Georgia, serif;
+      --font-mono:    'JetBrains Mono', 'Fira Mono', monospace;
+      --shadow-sm:   0 1px 0 rgba(28,23,20,.04), 0 1px 3px rgba(28,23,20,.06);
+      --shadow:      0 1px 0 rgba(28,23,20,.04), 0 4px 16px rgba(28,23,20,.09);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      font-family: var(--font-ui);
+      background: var(--bg);
+      color: var(--ink);
+      min-height: 100dvh;
+      -webkit-font-smoothing: antialiased;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    /* ── Header ── */
+    .site-header {
+      background: var(--bg-elev);
+      border-bottom: 1px solid var(--rule);
+      padding: 13px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-mark { width: 24px; height: 24px; flex-shrink: 0; color: var(--accent); }
+    .brand-name {
+      font-family: var(--font-display);
+      font-size: 14px; font-weight: 600; color: var(--ink);
+      text-decoration: none;
+    }
+    .header-sep { width: 1px; height: 14px; background: var(--rule); }
+    .header-crumb { font-size: 12px; color: var(--ink-3); }
+    .header-crumb a { color: var(--ink-3); text-decoration: none; }
+    .header-crumb a:hover { color: var(--accent); }
+
+    /* ── Page ── */
+    .page {
+      max-width: 520px;
+      margin: 0 auto;
+      padding: 24px 16px 60px;
+    }
+
+    .page-eyebrow {
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-bottom: 6px;
+    }
+    .page-title {
+      font-family: var(--font-display);
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+      margin-bottom: 20px;
+    }
+
+    /* ── Section label ── */
+    .section-label {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-bottom: 8px;
+      margin-top: 20px;
+    }
+
+    /* ── Camera area ── */
+    .camera-wrap {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      max-height: 340px;
+      background: #1a1410;
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      border: 1px solid var(--rule);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #cameraVideo {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      display: none;
+    }
+    .camera-idle {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      color: rgba(255,255,255,0.35);
+      font-size: 13px;
+    }
+    .camera-idle svg { opacity: 0.3; }
+
+    /* scan reticle overlay */
+    .scan-reticle {
+      position: absolute;
+      inset: 0;
+      display: none;
+      pointer-events: none;
+    }
+    .scan-reticle::before, .scan-reticle::after {
+      content: "";
+      position: absolute;
+    }
+    /* Corner brackets */
+    .reticle-box {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 62%; height: 62%;
+      border: none;
+    }
+    .reticle-box::before, .reticle-box::after,
+    .reticle-inner::before, .reticle-inner::after {
+      content: "";
+      position: absolute;
+      width: 22px; height: 22px;
+      border-color: rgba(224,122,44,.85);
+      border-style: solid;
+    }
+    .reticle-box::before  { top: 0;    left: 0;    border-width: 3px 0 0 3px; border-radius: 3px 0 0 0; }
+    .reticle-box::after   { top: 0;    right: 0;   border-width: 3px 3px 0 0; border-radius: 0 3px 0 0; }
+    .reticle-inner::before{ bottom: 0; left: 0;    border-width: 0 0 3px 3px; border-radius: 0 0 0 3px; }
+    .reticle-inner::after { bottom: 0; right: 0;   border-width: 0 3px 3px 0; border-radius: 0 0 3px 0; }
+    /* scan line */
+    .scan-line {
+      position: absolute;
+      left: 19%; right: 19%;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(224,122,44,.8), transparent);
+      animation: scanline 2s ease-in-out infinite;
+    }
+    @keyframes scanline {
+      0%   { top: 20%; opacity: 0.3; }
+      15%  { opacity: 1; }
+      85%  { opacity: 1; }
+      100% { top: 80%; opacity: 0.3; }
+    }
+
+    /* ── Controls ── */
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .btn {
+      flex: 1;
+      padding: 11px 12px;
+      border: none;
+      border-radius: var(--radius);
+      font-family: var(--font-ui);
+      font-size: 13.5px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.12s, transform 0.1s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.38; cursor: default; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-deep); }
+    .btn-secondary { background: var(--bg-sunk); color: var(--ink-2); }
+    .btn-secondary:hover:not(:disabled) { background: var(--rule); }
+    .btn-ghost {
+      background: none;
+      border: 1px solid var(--rule);
+      color: var(--ink-2);
+    }
+    .btn-ghost:hover:not(:disabled) { border-color: rgba(224,122,44,.4); color: var(--accent); }
+
+    /* ── Unsupported banner ── */
+    .unsupported-banner {
+      display: none;
+      background: var(--warn-soft);
+      border: 1px solid rgba(192,138,26,.25);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-top: 12px;
+    }
+    .unsupported-banner p {
+      font-size: 13px;
+      color: var(--warn);
+      line-height: 1.55;
+    }
+    .unsupported-banner strong { font-weight: 600; }
+
+    /* ── Result card ── */
+    .result-card {
+      display: none;
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      margin-top: 20px;
+      box-shadow: var(--shadow);
+    }
+    .result-card.visible { display: block; }
+
+    .result-type-badge {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      background: var(--ok-soft);
+      color: var(--ok);
+      border: 1px solid rgba(42,122,75,.2);
+      border-radius: 20px;
+      padding: 2px 9px;
+      margin-bottom: 10px;
+    }
+    .result-type-badge.unknown {
+      background: var(--bg-sunk);
+      color: var(--ink-3);
+      border-color: var(--rule);
+    }
+    .result-type-badge.estimate { background: var(--accent-soft); color: var(--accent-deep); border-color: rgba(224,122,44,.25); }
+    .result-type-badge.tool     { background: #e8edf8; color: #2d5aa0; border-color: rgba(45,90,160,.2); }
+    .result-type-badge.wsf      { background: var(--ok-soft); color: var(--ok); border-color: rgba(42,122,75,.2); }
+
+    .result-value {
+      font-family: var(--font-mono);
+      font-size: 18px;
+      font-weight: 500;
+      color: var(--ink);
+      word-break: break-all;
+      margin-bottom: 4px;
+    }
+    .result-meta {
+      font-size: 11.5px;
+      color: var(--ink-3);
+      margin-bottom: 14px;
+    }
+
+    .action-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .action-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 9px 10px;
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      background: var(--bg-sunk);
+      color: var(--ink-2);
+      font-family: var(--font-ui);
+      font-size: 12px;
+      font-weight: 500;
+      text-decoration: none;
+      cursor: pointer;
+      transition: border-color 0.12s, color 0.12s, background 0.12s;
+      -webkit-tap-highlight-color: transparent;
+      text-align: center;
+    }
+    .action-btn:hover { border-color: rgba(224,122,44,.4); color: var(--accent); background: var(--bg-elev); }
+    .action-btn.full-width { grid-column: 1 / -1; }
+    .action-btn svg { flex-shrink: 0; }
+
+    /* ── Manual entry ── */
+    .manual-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .manual-input {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      background: var(--bg-elev);
+      color: var(--ink);
+      font-family: var(--font-mono);
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.12s;
+    }
+    .manual-input::placeholder { color: var(--ink-3); font-size: 13px; font-family: var(--font-ui); }
+    .manual-input:focus { border-color: var(--accent); }
+
+    /* ── History ── */
+    .history-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 28px;
+      margin-bottom: 8px;
+    }
+    .history-title {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+    }
+    .clear-btn {
+      font-size: 11.5px;
+      color: var(--ink-3);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: var(--radius-sm);
+      transition: color 0.12s;
+    }
+    .clear-btn:hover { color: var(--bad); }
+
+    .history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .history-empty {
+      font-size: 12.5px;
+      color: var(--ink-3);
+      padding: 12px 0;
+      text-align: center;
+    }
+    .history-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: border-color 0.12s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .history-item:hover { border-color: rgba(224,122,44,.35); }
+    .hist-value {
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      color: var(--ink);
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .hist-label {
+      font-size: 10.5px;
+      color: var(--ink-3);
+      flex-shrink: 0;
+    }
+    .hist-time {
+      font-size: 10px;
+      color: var(--ink-3);
+      flex-shrink: 0;
+    }
+
+    /* ── Copy feedback ── */
+    .copy-toast {
+      position: fixed;
+      bottom: 24px; left: 50%;
+      transform: translateX(-50%) translateY(12px);
+      background: var(--ink);
+      color: #fff;
+      font-size: 12.5px;
+      padding: 8px 16px;
+      border-radius: 20px;
+      opacity: 0;
+      transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none;
+      z-index: 100;
+      white-space: nowrap;
+    }
+    .copy-toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <header class="site-header">
+    <svg class="brand-mark" viewBox="0 0 32 32" fill="none">
+      <rect width="32" height="32" rx="7" fill="currentColor" opacity=".12"/>
+      <path d="M8 24 L16 8 L24 24" stroke="currentColor" stroke-width="2.2"
+            stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path d="M11 19 h10" stroke="currentColor" stroke-width="1.8"
+            stroke-linecap="round"/>
+    </svg>
+    <a class="brand-name" href="/">WilliamSmith</a>
+    <div class="header-sep"></div>
+    <span class="header-crumb">
+      <a href="/mobile">Mobile Hub</a> /
+      <a href="/">Home</a>
+    </span>
+  </header>
+
+  <!-- ── Page ── -->
+  <main class="page">
+    <div class="page-eyebrow">WSF Hub · Scanner</div>
+    <h1 class="page-title">WSF Scanner</h1>
+
+    <!-- Camera area -->
+    <div class="section-label">Camera</div>
+    <div class="camera-wrap" id="cameraWrap">
+      <video id="cameraVideo" autoplay playsinline muted></video>
+      <div class="camera-idle" id="cameraIdle">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="1.4"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/>
+          <rect x="7" y="7" width="3" height="10" rx="1"/>
+          <rect x="14" y="7" width="3" height="10" rx="1"/>
+        </svg>
+        Tap Start Camera to begin
+      </div>
+      <!-- Scan reticle shown while scanning -->
+      <div class="scan-reticle" id="scanReticle">
+        <div class="reticle-box">
+          <div class="reticle-inner"></div>
+        </div>
+        <div class="scan-line"></div>
+      </div>
+    </div>
+
+    <!-- Unsupported browser message -->
+    <div class="unsupported-banner" id="unsupportedBanner">
+      <p>
+        <strong>Camera scanning not supported in this browser.</strong><br>
+        BarcodeDetector is available in Chrome 83+ on Android and desktop.
+        Use Manual Entry below to enter a code, or try opening this page in Chrome.
+      </p>
+    </div>
+
+    <!-- Camera controls -->
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btnStart">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" stroke-linejoin="round"
+             style="display:inline;vertical-align:middle;margin-right:5px">
+          <circle cx="12" cy="12" r="10"/>
+          <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/>
+        </svg>
+        Start Camera
+      </button>
+      <button class="btn btn-secondary" id="btnStop" disabled>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" stroke-linejoin="round"
+             style="display:inline;vertical-align:middle;margin-right:5px">
+          <rect x="3" y="3" width="18" height="18" rx="2" fill="currentColor" stroke="none"/>
+        </svg>
+        Stop
+      </button>
+    </div>
+
+    <!-- Result card -->
+    <div class="result-card" id="resultCard">
+      <span class="result-type-badge" id="resultBadge">Estimate</span>
+      <div class="result-value" id="resultValue">EST12345</div>
+      <div class="result-meta" id="resultMeta"></div>
+      <div class="action-grid">
+        <button class="action-btn" id="btnCopy" onclick="copyValue()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          Copy Value
+        </button>
+        <button class="action-btn" id="btnScanAgain" onclick="scanAgain()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/>
+          </svg>
+          Scan Again
+        </button>
+        <a class="action-btn" id="btnManifest" href="#">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/>
+            <rect x="9" y="3" width="6" height="4" rx="1"/>
+          </svg>
+          Open Manifest
+        </a>
+        <a class="action-btn" id="btnAsk" href="#">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="7"/>
+            <path d="m20 20-3.5-3.5"/>
+          </svg>
+          Search Ask
+        </a>
+      </div>
+    </div>
+
+    <!-- Manual Entry -->
+    <div class="section-label" style="margin-top:24px">Manual Entry</div>
+    <div class="manual-row">
+      <input class="manual-input" id="manualInput"
+             type="text" placeholder="Type or paste a code…"
+             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <button class="btn btn-ghost" id="btnManual" onclick="submitManual()" style="flex:none;padding:10px 16px">
+        Submit
+      </button>
+    </div>
+
+    <!-- Scan History -->
+    <div class="history-header">
+      <span class="history-title">Scan History</span>
+      <button class="clear-btn" onclick="clearHistory()">Clear</button>
+    </div>
+    <div class="history-list" id="historyList">
+      <div class="history-empty" id="historyEmpty">No scans yet.</div>
+    </div>
+
+  </main>
+
+  <!-- Copy toast -->
+  <div class="copy-toast" id="copyToast">Copied!</div>
+
+  <script>
+    /* ───────────────────────────────────────────
+       WSF Scanner — v1
+       Uses native BarcodeDetector API only.
+       No external libraries. No backend writes.
+       History stored in localStorage.
+    ─────────────────────────────────────────── */
+
+    const HISTORY_KEY = 'wsf_scan_history';
+    const HISTORY_MAX = 30;
+
+    // Supported barcode formats for BarcodeDetector
+    const BARCODE_FORMATS = [
+      'qr_code', 'ean_13', 'ean_8', 'code_128', 'code_39',
+      'pdf417', 'aztec', 'data_matrix', 'upc_a', 'upc_e',
+      'itf', 'codabar', 'code_93'
+    ];
+
+    let stream    = null;
+    let detector  = null;
+    let rafId     = null;
+    let scanning  = false;
+    let lastValue = '';
+
+    const videoEl         = document.getElementById('cameraVideo');
+    const cameraIdle      = document.getElementById('cameraIdle');
+    const scanReticle     = document.getElementById('scanReticle');
+    const btnStart        = document.getElementById('btnStart');
+    const btnStop         = document.getElementById('btnStop');
+    const resultCard      = document.getElementById('resultCard');
+    const resultBadge     = document.getElementById('resultBadge');
+    const resultValue     = document.getElementById('resultValue');
+    const resultMeta      = document.getElementById('resultMeta');
+    const btnManifest     = document.getElementById('btnManifest');
+    const btnAsk          = document.getElementById('btnAsk');
+    const manualInput     = document.getElementById('manualInput');
+    const historyList     = document.getElementById('historyList');
+    const historyEmpty    = document.getElementById('historyEmpty');
+    const copyToast       = document.getElementById('copyToast');
+    const unsupportedBanner = document.getElementById('unsupportedBanner');
+
+    /* ── Browser support check ── */
+    const hasBarcodeDetector = ('BarcodeDetector' in window);
+
+    if (!hasBarcodeDetector) {
+      unsupportedBanner.style.display = 'block';
+      btnStart.disabled = true;
+      btnStart.title = 'BarcodeDetector not supported in this browser';
+    } else {
+      // Pre-flight: get supported formats and filter to what the browser supports
+      BarcodeDetector.getSupportedFormats().then(supported => {
+        const formats = BARCODE_FORMATS.filter(f => supported.includes(f));
+        detector = new BarcodeDetector({ formats: formats.length ? formats : ['qr_code'] });
+      }).catch(() => {
+        detector = new BarcodeDetector({ formats: ['qr_code', 'code_128', 'ean_13'] });
+      });
+    }
+
+    /* ── Camera start / stop ── */
+    btnStart.addEventListener('click', startCamera);
+    btnStop.addEventListener('click',  stopCamera);
+
+    async function startCamera() {
+      if (!hasBarcodeDetector) return;
+      btnStart.disabled = true;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }
+        });
+        videoEl.srcObject = stream;
+        videoEl.style.display = 'block';
+        cameraIdle.style.display = 'none';
+        scanReticle.style.display = 'block';
+        btnStop.disabled = false;
+        btnStart.disabled = true;
+        scanning = true;
+        resultCard.classList.remove('visible');
+        detectLoop();
+      } catch (err) {
+        btnStart.disabled = false;
+        const msg = err.name === 'NotAllowedError'
+          ? 'Camera permission denied. Please allow camera access and try again.'
+          : 'Could not access camera: ' + err.message;
+        showBanner(msg);
+      }
+    }
+
+    function stopCamera() {
+      scanning = false;
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+      videoEl.style.display = 'none';
+      videoEl.srcObject = null;
+      cameraIdle.style.display = 'flex';
+      scanReticle.style.display = 'none';
+      btnStart.disabled = false;
+      btnStop.disabled = true;
+    }
+
+    /* ── Detection loop ── */
+    async function detectLoop() {
+      if (!scanning || !detector) return;
+      if (videoEl.readyState >= 2) { // HAVE_CURRENT_DATA
+        try {
+          const codes = await detector.detect(videoEl);
+          if (codes.length > 0) {
+            const code = codes[0];
+            stopCamera();
+            handleScan(code.rawValue, code.format || 'unknown');
+            return;
+          }
+        } catch (_) { /* ignore mid-frame errors */ }
+      }
+      rafId = requestAnimationFrame(detectLoop);
+    }
+
+    /* ── Manual entry ── */
+    manualInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') submitManual();
+    });
+
+    function submitManual() {
+      const v = manualInput.value.trim();
+      if (!v) return;
+      handleScan(v, 'manual');
+      manualInput.value = '';
+    }
+
+    /* ── Core scan handler ── */
+    function handleScan(value, format) {
+      lastValue = value;
+      const { label, badgeClass } = classifyScan(value);
+      const ts = new Date();
+      const timeStr = ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const fmtLabel = format === 'manual' ? 'Manual entry' : (format || 'camera');
+
+      // Update result card
+      resultBadge.textContent = label;
+      resultBadge.className = 'result-type-badge ' + badgeClass;
+      resultValue.textContent = value;
+      resultMeta.textContent = timeStr + ' · ' + fmtLabel;
+
+      // Update action links
+      const enc = encodeURIComponent(value);
+      btnManifest.href = '/manifest?estimate_id=' + enc;
+      btnAsk.href      = '/ask?q=' + enc;
+
+      resultCard.classList.add('visible');
+
+      // Save to history
+      addToHistory({ value, label, format: fmtLabel, ts: ts.toISOString() });
+      renderHistory();
+    }
+
+    /* ── Scan classification ── */
+    function classifyScan(value) {
+      if (value.startsWith('EST:'))      return { label: 'Estimate',            badgeClass: 'estimate' };
+      if (value.startsWith('MANIFEST:')) return { label: 'Manifest Item',       badgeClass: 'estimate' };
+      if (value.startsWith('TOOL:'))     return { label: 'Tool',                badgeClass: 'tool'     };
+      if (value.startsWith('WSF:'))      return { label: 'WSF Code',            badgeClass: 'wsf'      };
+      if (/^\d{4,}$/.test(value))        return { label: 'Possible Estimate ID', badgeClass: 'estimate' };
+      return { label: 'Unknown Code', badgeClass: 'unknown' };
+    }
+
+    /* ── Scan again ── */
+    function scanAgain() {
+      resultCard.classList.remove('visible');
+      if (hasBarcodeDetector) startCamera();
+      else manualInput.focus();
+    }
+
+    /* ── Copy value ── */
+    function copyValue() {
+      if (!lastValue) return;
+      navigator.clipboard.writeText(lastValue).then(() => showToast('Copied!')).catch(() => {
+        // fallback for older mobile browsers
+        const ta = document.createElement('textarea');
+        ta.value = lastValue;
+        ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast('Copied!');
+      });
+    }
+
+    /* ── Toast ── */
+    function showToast(msg) {
+      copyToast.textContent = msg;
+      copyToast.classList.add('show');
+      setTimeout(() => copyToast.classList.remove('show'), 1800);
+    }
+
+    /* ── Unsupported banner (for camera errors) ── */
+    function showBanner(msg) {
+      unsupportedBanner.querySelector('p').innerHTML =
+        '<strong>Camera error.</strong><br>' + msg;
+      unsupportedBanner.style.display = 'block';
+    }
+
+    /* ── localStorage history ── */
+    function getHistory() {
+      try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
+      catch (_) { return []; }
+    }
+
+    function addToHistory(entry) {
+      const h = getHistory();
+      h.unshift(entry);
+      if (h.length > HISTORY_MAX) h.length = HISTORY_MAX;
+      try { localStorage.setItem(HISTORY_KEY, JSON.stringify(h)); } catch (_) {}
+    }
+
+    function clearHistory() {
+      try { localStorage.removeItem(HISTORY_KEY); } catch (_) {}
+      renderHistory();
+    }
+
+    function renderHistory() {
+      const h = getHistory();
+      if (!h.length) {
+        historyList.innerHTML = '<div class="history-empty" id="historyEmpty">No scans yet.</div>';
+        return;
+      }
+      historyList.innerHTML = h.map((item, i) => {
+        const d = new Date(item.ts);
+        const when = isNaN(d) ? '' : d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+          + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return `<div class="history-item" onclick="reScan(${i})" title="Tap to re-load this scan">
+          <span class="hist-value">${escHtml(item.value)}</span>
+          <span class="hist-label">${escHtml(item.label)}</span>
+          <span class="hist-time">${escHtml(when)}</span>
+        </div>`;
+      }).join('');
+    }
+
+    function reScan(index) {
+      const h = getHistory();
+      if (!h[index]) return;
+      const item = h[index];
+      handleScan(item.value, 're-loaded');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function escHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    /* ── Init ── */
+    renderHistory();
+
+    /* ── Stop camera on page hide (mobile tab switch) ── */
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && scanning) stopCamera();
+    });
+  </script>
+
+</body>
+</html>

@@ -549,6 +549,7 @@
               min="1"
               autocomplete="off"
               spellcheck="false"
+              {% if initial_estimate_id %}value="{{ initial_estimate_id }}"{% endif %}
             >
           </div>
           <button class="load-btn" id="loadBtn" type="button">Load Manifest</button>
@@ -957,6 +958,17 @@
     estInput.addEventListener('keydown', function (e) {
       if (e.key === 'Enter') loadManifest();
     });
+
+    /* ── Scanner handoff: auto-load if estimate_id came from URL ──
+       Only fires when the server passed a validated, digits-only
+       initial_estimate_id AND the session is already authorized.
+       The 350 ms delay lets the page finish rendering first.
+    ─────────────────────────────────────────────────────────────── */
+    {% if authed and initial_estimate_id %}
+    if (estInput && estInput.value) {
+      setTimeout(loadManifest, 350);
+    }
+    {% endif %}
 
   })();
   </script>

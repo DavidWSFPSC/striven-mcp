@@ -129,6 +129,8 @@ _HUB_PUBLIC = frozenset({
     ("GET", "/sop"),
     ("GET", "/triage"),
     ("GET", "/tools"),
+    ("GET", "/mobile"),
+    ("GET", "/scan"),
     ("GET", "/kb"),
     ("GET", "/manifest"),
     ("GET", "/chase-cover-calculator"),
@@ -8243,13 +8245,30 @@ def tools():
     return render_template("tools.html")
 
 
+@app.route("/mobile", methods=["GET"])
+def mobile():
+    """Mobile Hub — streamlined field launcher for phones and tablets."""
+    return render_template("mobile.html")
+
+
+@app.route("/scan", methods=["GET"])
+def scan():
+    """WSF Barcode/QR Scanner — camera scan with BarcodeDetector API, localStorage history."""
+    return render_template("scan.html")
+
+
 @app.route("/manifest", methods=["GET"])
 def manifest():
     """Material Manifest — field-ready installer package demo.
     Passes authed=True to the template when the session demo key has been validated.
+    Accepts ?estimate_id=<int> from scanner handoffs — sanitized to digits only.
     """
     authed = bool(flask_session.get("manifest_demo_ok"))
-    return render_template("manifest.html", authed=authed)
+    import re as _re
+    raw_eid = request.args.get("estimate_id", "").strip()
+    # Digits only, max 10 chars — safe to embed in template/JS
+    initial_estimate_id = _re.sub(r"[^\d]", "", raw_eid)[:10]
+    return render_template("manifest.html", authed=authed, initial_estimate_id=initial_estimate_id)
 
 
 @app.route("/manifest/session", methods=["POST"])
