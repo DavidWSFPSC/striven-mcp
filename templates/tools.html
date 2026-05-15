@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tools — WilliamSmith Fireplaces</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    /* ── Design tokens ─────────────────────────────────────────── */
+    :root {
+      --bg:          #f6f1ea;
+      --bg-elev:     #fbf8f3;
+      --bg-sunk:     #ede6dc;
+      --ink:         #1c1714;
+      --ink-2:       #4a423b;
+      --ink-3:       #8b8278;
+      --rule:        #e2d8c8;
+      --accent:      #e07a2c;
+      --accent-deep: #b85d18;
+      --accent-soft: #f6e3d0;
+      --warn:        #c08a1a;
+      --warn-soft:   #fdf3d8;
+      --ok:          #2a7a4b;
+      --ok-soft:     #e8f5ee;
+      --radius-sm:   6px;
+      --radius:      10px;
+      --radius-lg:   14px;
+      --font-ui:      'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-display: 'Source Serif 4', Georgia, serif;
+      --font-mono:    'JetBrains Mono', 'Fira Mono', monospace;
+      --shadow-sm:   0 1px 0 rgba(28,23,20,.04), 0 1px 2px rgba(28,23,20,.04);
+      --shadow:      0 1px 0 rgba(28,23,20,.04), 0 4px 12px rgba(28,23,20,.06);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: var(--font-ui);
+      background: var(--bg);
+      color: var(--ink);
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+    }
+    body::before {
+      content: "";
+      position: fixed; inset: 0; pointer-events: none;
+      background-image: repeating-linear-gradient(135deg, rgba(28,23,20,.012) 0 1px, transparent 1px 6px);
+      z-index: 0;
+    }
+
+    /* ── Site header ───────────────────────────────────────────── */
+    .site-header {
+      position: relative; z-index: 1;
+      border-bottom: 1px solid var(--rule);
+      background: var(--bg-elev);
+      padding: 14px 28px;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .brand-mark { width: 28px; height: 28px; flex-shrink: 0; color: var(--accent); }
+    .brand-name {
+      font-family: var(--font-display);
+      font-size: 15px; font-weight: 600; color: var(--ink);
+      text-decoration: none;
+    }
+    .header-sep { width: 1px; height: 16px; background: var(--rule); }
+    .header-crumb {
+      font-size: 13px; color: var(--ink-3);
+    }
+    .header-crumb a {
+      color: var(--ink-3); text-decoration: none;
+    }
+    .header-crumb a:hover { color: var(--accent); }
+
+    /* ── Page body ─────────────────────────────────────────────── */
+    .page-inner {
+      position: relative; z-index: 1;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 52px 28px 80px;
+      flex: 1;
+    }
+
+    .page-eyebrow {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-bottom: 10px;
+    }
+    .page-title {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: 30px;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+      margin-bottom: 8px;
+    }
+    .page-subtitle {
+      font-size: 14px;
+      color: var(--ink-2);
+      line-height: 1.6;
+      max-width: 580px;
+      margin-bottom: 44px;
+    }
+
+    /* ── Tool cards ────────────────────────────────────────────── */
+    .tools-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+    }
+
+    .tool-card {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius-lg);
+      padding: 22px 22px 18px;
+      text-decoration: none;
+      color: inherit;
+      cursor: pointer;
+      transition: border-color 0.15s, box-shadow 0.15s, transform 0.12s;
+      box-shadow: var(--shadow-sm);
+    }
+    .tool-card:hover {
+      border-color: rgba(224,122,44,0.45);
+      box-shadow: var(--shadow);
+      transform: translateY(-1px);
+    }
+    .tool-card.disabled {
+      cursor: default;
+      opacity: 0.72;
+    }
+    .tool-card.disabled:hover {
+      border-color: var(--rule);
+      box-shadow: var(--shadow-sm);
+      transform: none;
+    }
+
+    .tool-icon {
+      width: 38px; height: 38px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-sunk);
+      color: var(--ink-2);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: background 0.15s, color 0.15s;
+    }
+    .tool-card:not(.disabled):hover .tool-icon {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .tool-name {
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--ink);
+      display: flex; align-items: center; gap: 8px;
+    }
+
+    .badge-soon {
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      background: var(--warn-soft);
+      color: var(--warn);
+      border: 1px solid rgba(192,138,26,.2);
+      border-radius: 20px;
+      padding: 2px 8px;
+      font-weight: 500;
+    }
+
+    .tool-desc {
+      font-size: 13px;
+      color: var(--ink-2);
+      line-height: 1.55;
+      flex: 1;
+    }
+
+    .tool-cta {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--accent);
+      margin-top: 2px;
+      transition: gap 0.12s;
+    }
+    .tool-card.disabled .tool-cta { color: var(--ink-3); }
+    .tool-card:not(.disabled):hover .tool-cta { gap: 8px; }
+
+    /* ── Back link ─────────────────────────────────────────────── */
+    .back-link {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 12.5px; color: var(--ink-3);
+      text-decoration: none;
+      margin-top: 48px;
+      transition: color 0.12s;
+    }
+    .back-link:hover { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+  <!-- ── Header ─────────────────────────────────────────────────── -->
+  <header class="site-header">
+    <svg class="brand-mark" viewBox="0 0 32 32" fill="none">
+      <rect width="32" height="32" rx="7" fill="currentColor" opacity=".12"/>
+      <path d="M8 24 L16 8 L24 24" stroke="currentColor" stroke-width="2.2"
+            stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path d="M11 19 h10" stroke="currentColor" stroke-width="1.8"
+            stroke-linecap="round"/>
+    </svg>
+    <a class="brand-name" href="/">WilliamSmith Fireplaces</a>
+    <div class="header-sep"></div>
+    <span class="header-crumb">
+      <a href="/">Hub</a> / Tools
+    </span>
+  </header>
+
+  <!-- ── Page ───────────────────────────────────────────────────── -->
+  <main class="page-inner">
+
+    <div class="page-eyebrow">WSF Hub · Tools</div>
+    <h1 class="page-title">Tools</h1>
+    <p class="page-subtitle">Purpose-built utilities for field work, job planning, and operational tasks. Each tool is scoped to a single job — no context-switching required.</p>
+
+    <div class="tools-grid">
+
+      <!-- AI Triage & Dispatch -->
+      <a class="tool-card" href="/triage">
+        <div class="tool-icon">
+          <!-- headset / dispatch icon -->
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="1.8"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
+            <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
+          </svg>
+        </div>
+        <div class="tool-name">AI Triage &amp; Dispatch</div>
+        <div class="tool-desc">Service intake, callback prevention, and dispatch planning workspace. Routes calls intelligently using job history and product data.</div>
+        <div class="tool-cta">
+          Open
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2.2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14"/><path d="m13 5 7 7-7 7"/>
+          </svg>
+        </div>
+      </a>
+
+      <!-- Material Manifest -->
+      <a class="tool-card" href="/manifest">
+        <div class="tool-icon">
+          <!-- clipboard / manifest icon -->
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="1.8"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/>
+            <rect x="9" y="3" width="6" height="4" rx="1"/>
+            <path d="M9 12h6M9 16h4"/>
+          </svg>
+        </div>
+        <div class="tool-name">Material Manifest</div>
+        <div class="tool-desc">Load an estimate, organize material lines into pull lists, and review returns. Field-ready installer package from any approved job.</div>
+        <div class="tool-cta">
+          Open
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2.2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14"/><path d="m13 5 7 7-7 7"/>
+          </svg>
+        </div>
+      </a>
+
+      <!-- Chase Cover Calculator -->
+      <a class="tool-card" href="/chase-cover-calculator">
+        <div class="tool-icon">
+          <!-- ruler / calculator icon -->
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="1.8"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 20h20M6 20V10l6-6 6 6v10"/>
+            <rect x="9" y="14" width="6" height="6"/>
+          </svg>
+        </div>
+        <div class="tool-name">Chase Cover Calculator</div>
+        <div class="tool-desc">Field measurement tool for chase cover sizing. Enter dimensions on-site and get cut specs instantly — no clipboard math required.</div>
+        <div class="tool-cta">
+          Open
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2.2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14"/><path d="m13 5 7 7-7 7"/>
+          </svg>
+        </div>
+      </a>
+
+      <!-- Barcode Scanner — Coming Soon -->
+      <div class="tool-card disabled">
+        <div class="tool-icon">
+          <!-- barcode icon -->
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="1.8"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 5v4M3 15v4M7 5v14M11 5v14M15 5v4M15 15v4M19 5v14M21 5v4M21 15v4"/>
+          </svg>
+        </div>
+        <div class="tool-name">
+          Barcode Scanner
+          <span class="badge-soon">Coming Soon</span>
+        </div>
+        <div class="tool-desc">Scan tool and inventory barcodes in the field to log usage, check out equipment, and update job records without leaving the truck.</div>
+        <div class="tool-cta">
+          Not yet available
+        </div>
+      </div>
+
+    </div><!-- /.tools-grid -->
+
+    <a class="back-link" href="/">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2.2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M19 12H5"/><path d="m11 5-7 7 7 7"/>
+      </svg>
+      Back to Hub
+    </a>
+
+  </main>
+
+</body>
+</html>

@@ -128,6 +128,7 @@ _HUB_PUBLIC = frozenset({
     ("GET", "/ask"),
     ("GET", "/sop"),
     ("GET", "/triage"),
+    ("GET", "/tools"),
     ("GET", "/kb"),
     ("GET", "/manifest"),
     ("GET", "/chase-cover-calculator"),
@@ -8234,6 +8235,12 @@ def kb_vendor(vendor_name: str):
         fallback_used=fallback_used,
         vendor_meta=vendor_meta,
     )
+
+
+@app.route("/tools", methods=["GET"])
+def tools():
+    """Tools landing page — links to all purpose-built operational utilities."""
+    return render_template("tools.html")
 
 
 @app.route("/manifest", methods=["GET"])
