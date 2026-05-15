@@ -1,0 +1,12 @@
+match_type,pattern,possible_vendor,reason,review_status,notes
+prefix,6KX-,Review Needed,Possible Kozy Heat KX-36 series — IntelliFire Touch in description but brand needs product confirmation,needs_review,
+prefix,8KX-,Review Needed,Possible Kozy Heat KX-42 series — IntelliFire Touch in description but brand needs product confirmation,needs_review,
+prefix,ODLAN,Review Needed,Outdoor Lanai product family — ventless outdoor linear; brand needs confirmation,needs_review,
+prefix,ODCTGWD,Review Needed,Cottagewood outdoor wood-burning product family — brand needs confirmation,needs_review,
+prefix,ODCOUG,Review Needed,Courtyard outdoor product family — brand needs confirmation,needs_review,
+prefix,PRIMO,Review Needed,Primo linear direct vent series — WhisperTone/TrueView tech mentioned; brand needs confirmation,needs_review,
+prefix,PHOENIX,Review Needed,Phoenix TrueView gas fireplace series — WhisperTone tech mentioned; brand needs confirmation,needs_review,
+prefix,BIR,Review Needed,Birmingham wood-burning fireplace series — uses SL1100 pipe; brand needs confirmation,needs_review,
+prefix,DRT,Review Needed,DRT see-through direct vent louverless fireplace — brand needs confirmation,needs_review,
+prefix,DVCT,Review Needed,DVCT Rushmore TruFlame direct vent series — Rushmore is a Majestic line but model code needs confirmation,needs_review,
+prefix,VRL,Review Needed,VRL vent-free linear gas fireplace series — brand needs confirmation,needs_review,

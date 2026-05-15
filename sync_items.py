@@ -13,15 +13,21 @@ Table DDL (run once in Supabase SQL editor):
       item_id     bigint PRIMARY KEY,
       name        text,
       description text,
+      item_number text,
       item_type   text,
       category    text,
       price       numeric,
       is_active   bool,
       synced_at   timestamptz DEFAULT now()
   );
-  CREATE INDEX IF NOT EXISTS idx_items_name     ON items(name);
-  CREATE INDEX IF NOT EXISTS idx_items_category ON items(category);
-  CREATE INDEX IF NOT EXISTS idx_items_active   ON items(is_active);
+  CREATE INDEX IF NOT EXISTS idx_items_name        ON items(name);
+  CREATE INDEX IF NOT EXISTS idx_items_item_number ON items(item_number);
+  CREATE INDEX IF NOT EXISTS idx_items_category    ON items(category);
+  CREATE INDEX IF NOT EXISTS idx_items_active      ON items(is_active);
+
+  -- If upgrading an existing table, run once in Supabase SQL editor:
+  --   ALTER TABLE items ADD COLUMN IF NOT EXISTS item_number text;
+  --   CREATE INDEX IF NOT EXISTS idx_items_item_number ON items(item_number);
 
 Usage:
     python sync_items.py
@@ -125,6 +131,7 @@ def _transform(r: dict) -> dict:
         "item_id":     r.get("id") or r.get("Id"),
         "name":        r.get("name") or r.get("Name"),
         "description": r.get("description") or r.get("Description"),
+        "item_number": r.get("itemNumber") or r.get("ItemNumber"),
         "item_type": (
             item_type.get("name") or item_type.get("Name")
             if isinstance(item_type, dict) else str(item_type) if item_type else None
@@ -150,7 +157,8 @@ def _upsert(client, records: list[dict]) -> None:
 
 
 def main() -> None:
-    sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+    sb_key = os.getenv("SUPABASE_SERVICE_KEY") or os.environ["SUPABASE_KEY"]
+    sb = create_client(os.environ["SUPABASE_URL"], sb_key)
 
     token    = _get_token()
     raw_items = _fetch_all_items(token)

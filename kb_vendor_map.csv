@@ -1,0 +1,28 @@
+match_type,pattern,vendor,notes
+# --- Real Fyre / Peterson ---
+prefix,G10-,Real Fyre,Peterson/Real Fyre G10-series gas log sets (e.g. G10-24/30-01V)
+prefix,G16-,Real Fyre,Peterson/Real Fyre G16-series gas log sets
+prefix,G18-,Real Fyre,Peterson/Real Fyre G18-series gas log sets
+prefix,G24-,Real Fyre,Peterson/Real Fyre G24-series gas log sets
+prefix,G31-,Real Fyre,Peterson/Real Fyre G31-series gas log sets (e.g. G31-24/30-2VPT)
+prefix,G45-,Real Fyre,Peterson/Real Fyre G45-series gas log sets
+prefix,G46-,Real Fyre,Peterson/Real Fyre G46-series gas log sets
+prefix,G52-,Real Fyre,Peterson/Real Fyre G52 Radiant Fyre burner series
+# --- Sierra Flame ---
+prefix,SF-SCN,Sierra Flame,Sierra Flame SCN-series linear fireplaces (e.g. SF-SCN55)
+# --- Isokern / Earthcore ---
+prefix,820,Isokern,Isokern Magnum fireplace systems (82036/82042/82048/82060)
+prefix,810,Isokern,Vent-Free Isokern firebox series (81036/81042/81046)
+prefix,80S,Isokern,Standard Isokern Firebox Kit series (80S36/80S42)
+prefix,13ACECO,Isokern,Isokern ACO chimney flue/caps/offsets/anchor plates
+prefix,13INECO,Isokern,Isokern INECO insulated chimney flue
+prefix,SL11,Isokern,Isokern SL11 series chimney pipe sections
+prefix,ISO-SET,Isokern,Earthcore/Isokern ISO-SET refractory mortar
+exact,MP50,Isokern,Earthcore Adhesive (5 Gallon Bucket)
+# --- DuraVent ---
+prefix,DVP,DuraVent,DuraVent DVP direct vent pipe and termination caps
+prefix,58DVA,DuraVent,DuraVent 5x8 DVA direct vent pipe sections
+# --- Dimplex ---
+contains,optimyst,Dimplex,Dimplex Optimyst Pro electric fireplace cassettes
+# --- VITA Fireplaces ---
+prefix,VITA,VITA Fireplaces,VITA Fireplaces suspended/wall-mount wood-burning series

@@ -9,3 +9,7 @@ venv/
 
 # Render / deployment artifacts
 *.log
+
+# KB importer generated audit outputs (dry-run artifacts — not source-controlled)
+kb_import_unknowns.csv
+kb_import_vendor_summary.csv
