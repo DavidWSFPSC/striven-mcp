@@ -413,6 +413,55 @@
     .hist-label { font-size: 10.5px; color: var(--ink-3); flex-shrink: 0; }
     .hist-time  { font-size: 10px;   color: var(--ink-3); flex-shrink: 0; }
 
+    /* ── Active scan status line ── */
+    .scan-status {
+      display: none;
+      font-size: 12px;
+      color: var(--ink-3);
+      text-align: center;
+      padding: 7px 0 0;
+      font-family: var(--font-mono);
+      letter-spacing: 0.04em;
+    }
+    .scan-status.visible { display: block; }
+
+    /* ── Scanning tips ── */
+    .scan-tips {
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-top: 12px;
+    }
+    .tips-label {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-bottom: 8px;
+    }
+    .tips-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .tips-list li {
+      font-size: 12.5px;
+      color: var(--ink-2);
+      line-height: 1.45;
+      padding-left: 14px;
+      position: relative;
+    }
+    .tips-list li::before {
+      content: "·";
+      position: absolute;
+      left: 3px;
+      color: var(--accent);
+      font-weight: 700;
+    }
+
     /* ── Copy toast ── */
     .copy-toast {
       position: fixed;
@@ -489,6 +538,11 @@
     <!-- Status banner (compat / warn / error) -->
     <div class="status-banner" id="statusBanner"></div>
 
+    <!-- Active scan status (shown while camera is running) -->
+    <div class="scan-status" id="scanStatus">
+      Point camera at a flat barcode or QR code
+    </div>
+
     <!-- Camera controls -->
     <div class="btn-row">
       <button class="btn btn-primary" id="btnStart" disabled>
@@ -510,6 +564,18 @@
         </svg>
         Stop
       </button>
+    </div>
+
+    <!-- Scanning tips -->
+    <div class="scan-tips">
+      <div class="tips-label">Tips for 1D barcodes</div>
+      <ul class="tips-list">
+        <li>Test first on a flat, clean product barcode.</li>
+        <li>Hold the phone 6–12 inches away.</li>
+        <li>Keep the barcode flat and well lit.</li>
+        <li>Avoid glare and wrinkled receipt paper.</li>
+        <li>Try rotating the phone sideways for long barcodes.</li>
+      </ul>
     </div>
 
     <!-- Result card (unchanged structure) -->
@@ -583,9 +649,9 @@
 
   <script>
     /* ───────────────────────────────────────────────────────────────
-       WSF Scanner — v2
-       Priority: BarcodeDetector (native) → html5-qrcode (fallback) → manual only
-       CDN: https://unpkg.com/html5-qrcode  (loaded dynamically, only if needed)
+       WSF Scanner — v2.1
+       Priority: BarcodeDetector (native) → html5-qrcode@2.3.8 (fallback) → manual only
+       Formats: QR_CODE, CODE_128, CODE_39, EAN_13, UPC_A, UPC_E, ITF + more
        All successful scans flow through handleScan().
        No backend writes. History in localStorage only.
     ─────────────────────────────────────────────────────────────── */
@@ -633,6 +699,7 @@
     const historyList  = document.getElementById('historyList');
     const copyToast    = document.getElementById('copyToast');
     const statusBanner = document.getElementById('statusBanner');
+    const scanStatusEl = document.getElementById('scanStatus');
 
     /* ════════════════════════════════════════════
        INIT — detect capabilities, load fallback
@@ -660,7 +727,7 @@
         if (typeof Html5Qrcode !== 'undefined') {
           hasHtml5Qr = true;
           btnStart.disabled = false;
-          showBanner('compat', 'Using compatibility scanner for this browser.');
+          showBanner('compat', 'Compatibility scanner · QR + common 1D formats (CODE 128, EAN-13, UPC, ITF…)');
           return;
         }
       } catch (_) { /* CDN failed to load */ }
@@ -709,6 +776,7 @@
     function onCameraStart() {
       cameraIdle.style.display = 'none';
       scanReticle.style.display = 'block';
+      scanStatusEl.classList.add('visible');
       btnStart.disabled = true;
       btnStop.disabled  = false;
       resultCard.classList.remove('visible');
@@ -718,6 +786,7 @@
     function onCameraStop() {
       cameraIdle.style.display = 'flex';
       scanReticle.style.display = 'none';
+      scanStatusEl.classList.remove('visible');
       btnStart.disabled = false;
       btnStop.disabled  = true;
     }
@@ -778,15 +847,59 @@
       btnStart.disabled = true;
       try {
         h5qr = new Html5Qrcode('html5qr-reader');
+
+        /* ── Explicit format list using Html5QrcodeSupportedFormats enum ──
+           Passing formatsToSupport activates 1D barcode decoding.
+           Without this, html5-qrcode defaults to QR_CODE only.
+        ── */
+        const F = (typeof Html5QrcodeSupportedFormats !== 'undefined')
+          ? Html5QrcodeSupportedFormats
+          : null;
+        const formatsToSupport = F ? [
+          F.QR_CODE,
+          F.CODE_128,   // most common warehouse/product barcode
+          F.CODE_39,
+          F.CODE_93,
+          F.EAN_13,     // retail product barcodes
+          F.EAN_8,
+          F.UPC_A,      // US retail (12-digit)
+          F.UPC_E,      // compact UPC
+          F.ITF,        // interleaved 2-of-5, common on shipping boxes
+          F.CODABAR,
+          F.DATA_MATRIX,
+          F.PDF_417,
+          F.AZTEC,
+        ] : [];         // empty = library default (QR only), safe fallback
+
+        /* ── Scan region: wide horizontal strip favours 1D barcodes
+           while still large enough to capture QR codes.
+           Uses a responsive function so it adapts to container size.
+        ── */
+        const qrbox = function(viewW, viewH) {
+          return {
+            width:  Math.floor(viewW * 0.88),         // ~88% of width
+            height: Math.floor(Math.min(viewH, viewW) * 0.48), // ~48% of shorter side
+          };
+        };
+
+        const config = {
+          fps: 15,                    // frames per second — higher = faster detection
+          qrbox,                      // wide region for 1D + adequate for QR
+          aspectRatio: 1.0,           // match square container
+          rememberLastUsedCamera: true,
+          formatsToSupport,           // explicit 1D + QR formats
+          disableFlip: false,         // allow both camera orientations
+        };
+
         await h5qr.start(
           { facingMode: 'environment' },
-          { fps: 10 },
+          config,
           /* onScanSuccess */ (decodedText, result) => {
             const fmt = (result && result.result && result.result.format
               && result.result.format.formatName) || 'camera';
             stopHtml5QrCamera().then(() => handleScan(decodedText, fmt));
           },
-          /* onScanError  */ (_) => { /* per-frame miss — ignore */ }
+          /* onScanError  */ (_) => { /* per-frame miss — normal, ignore */ }
         );
         h5qrReader.style.display = 'block';
         h5qrActive = true;
