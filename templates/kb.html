@@ -40,7 +40,7 @@
     }
     .rule { border: 0; border-top: 1px solid var(--rule); margin: 36px 0; }
 
-    /* ── Error banner ────────────────────────────────────────── */
+    /* ── Error / empty / data-source banners ────────────────── */
     .error-banner {
       background: var(--bad-soft);
       border: 1px solid rgba(176,74,44,0.25);
@@ -50,6 +50,30 @@
       color: var(--bad);
       margin-bottom: 32px;
     }
+    .empty-banner {
+      background: var(--warn-soft);
+      border: 1px solid rgba(192,138,26,.28);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      font-size: 13.5px;
+      color: var(--warn);
+      margin-bottom: 32px;
+    }
+    .empty-banner strong { font-weight: 600; }
+    .data-source-note {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      font-size: 12.5px;
+      color: var(--ink-3);
+      line-height: 1.5;
+      margin-bottom: 28px;
+    }
+    .data-source-note strong { color: var(--ink-2); }
 
     /* ── Stat grid ───────────────────────────────────────────── */
     .stat-grid {
@@ -385,7 +409,22 @@
 
         {% if error %}
         <div class="error-banner">
-          Could not load coverage data from the database. Check the Supabase connection and try again.
+          Could not load coverage data — Supabase connection failed. Check the connection and try again.
+        </div>
+        {% elif index_empty %}
+        <div class="empty-banner">
+          <strong>KB product index is empty.</strong>
+          Import or refresh the profitability SKU report to populate vendor coverage.
+          Until then, the stat grid and vendor table will show no data.
+        </div>
+        {% else %}
+        <div class="data-source-note">
+          <span>&#9432;</span>
+          <span>
+            <strong>Data source:</strong>
+            Vendor/SKU coverage is based on the latest imported profitability report.
+            If vendors or revenue look incomplete, refresh the profitability SKU import.
+          </span>
         </div>
         {% endif %}
 

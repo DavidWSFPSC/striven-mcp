@@ -7879,6 +7879,7 @@ def triage():
 @app.route("/kb", methods=["GET"])
 def kb():
     """KB Coverage dashboard — vendor documentation coverage from kb_product_index."""
+    db_error = False
     try:
         res = (
             _sb_client()
@@ -7891,6 +7892,10 @@ def kb():
     except Exception as exc:
         print(f"[/kb] Supabase error: {exc}", flush=True)
         rows = []
+        db_error = True
+
+    # Distinguish a real DB failure from a legitimately empty index
+    index_empty = (not db_error) and (len(rows) == 0)
 
     def _fmt_currency(v):
         if v is None:
@@ -8006,7 +8011,8 @@ def kb():
         q_start_here=q_start_here,
         q_website_gaps=q_website_gaps,
         q_whyfyre=q_whyfyre,
-        error=len(rows) == 0,
+        error=db_error,
+        index_empty=index_empty,
     )
 
 
@@ -8209,7 +8215,7 @@ def kb_vendor(vendor_name: str):
                 "vendor, total_unique_skus, total_revenue, "
                 "kb_doc_count, coverage_status, has_install_manual"
             )
-            .ilike("vendor", vendor_name)
+            .ilike("vendor", f"%{safe}%")
             .limit(1)
             .execute()
         )
@@ -8218,19 +8224,13 @@ def kb_vendor(vendor_name: str):
     except Exception as vm_exc:
         print(f"[kb_vendor] vendor_meta error: {vm_exc}", flush=True)
 
-    def _fmt_cur_plain(v):
-        try:
-            return f"${float(v):,.2f}"
-        except (TypeError, ValueError):
-            return "—"
-
     return render_template(
         "kb_vendor.html",
         vendor_name=vendor_name,
         lines=lines,
         error=error,
         unique_estimates=unique_estimates,
-        total_line_revenue=_fmt_cur_plain(total_line_revenue),
+        total_line_revenue=_fmt_cur(total_line_revenue),
         most_recent_date=most_recent_date,
         match_method=match_method,
         matched_catalog_items=matched_catalog_items,
