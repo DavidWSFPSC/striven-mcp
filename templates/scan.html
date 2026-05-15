@@ -118,11 +118,36 @@
       align-items: center;
       justify-content: center;
     }
+    /* Native BarcodeDetector video element */
     #cameraVideo {
       width: 100%; height: 100%;
       object-fit: cover;
       display: none;
     }
+    /* html5-qrcode fallback container — fills camera-wrap */
+    #html5qr-reader {
+      position: absolute;
+      inset: 0;
+      display: none;
+      overflow: hidden;
+      background: #1a1410;
+    }
+    /* Override html5-qrcode injected element styles */
+    #html5qr-reader video {
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: cover !important;
+      display: block !important;
+    }
+    /* Keep canvas off-screen — used internally for detection */
+    #html5qr-reader canvas {
+      position: absolute !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+      width: 1px !important;
+      height: 1px !important;
+    }
+
     .camera-idle {
       display: flex;
       flex-direction: column;
@@ -130,6 +155,8 @@
       gap: 10px;
       color: rgba(255,255,255,0.35);
       font-size: 13px;
+      position: relative;
+      z-index: 1;
     }
     .camera-idle svg { opacity: 0.3; }
 
@@ -139,12 +166,8 @@
       inset: 0;
       display: none;
       pointer-events: none;
+      z-index: 2;
     }
-    .scan-reticle::before, .scan-reticle::after {
-      content: "";
-      position: absolute;
-    }
-    /* Corner brackets */
     .reticle-box {
       position: absolute;
       top: 50%; left: 50%;
@@ -164,7 +187,6 @@
     .reticle-box::after   { top: 0;    right: 0;   border-width: 3px 3px 0 0; border-radius: 0 3px 0 0; }
     .reticle-inner::before{ bottom: 0; left: 0;    border-width: 0 0 3px 3px; border-radius: 0 0 0 3px; }
     .reticle-inner::after { bottom: 0; right: 0;   border-width: 0 3px 3px 0; border-radius: 0 0 3px 0; }
-    /* scan line */
     .scan-line {
       position: absolute;
       left: 19%; right: 19%;
@@ -210,21 +232,31 @@
     }
     .btn-ghost:hover:not(:disabled) { border-color: rgba(224,122,44,.4); color: var(--accent); }
 
-    /* ── Unsupported banner ── */
-    .unsupported-banner {
+    /* ── Status banner ── */
+    .status-banner {
       display: none;
-      background: var(--warn-soft);
-      border: 1px solid rgba(192,138,26,.25);
       border-radius: var(--radius);
-      padding: 14px 16px;
-      margin-top: 12px;
-    }
-    .unsupported-banner p {
+      padding: 12px 16px;
+      margin-top: 10px;
       font-size: 13px;
-      color: var(--warn);
       line-height: 1.55;
     }
-    .unsupported-banner strong { font-weight: 600; }
+    .status-banner strong { font-weight: 600; }
+    .status-banner.compat {
+      background: var(--ok-soft);
+      border: 1px solid rgba(42,122,75,.2);
+      color: var(--ok);
+    }
+    .status-banner.warn {
+      background: var(--warn-soft);
+      border: 1px solid rgba(192,138,26,.25);
+      color: var(--warn);
+    }
+    .status-banner.error {
+      background: var(--bad-soft);
+      border: 1px solid rgba(181,58,42,.2);
+      color: var(--bad);
+    }
 
     /* ── Result card ── */
     .result-card {
@@ -251,11 +283,7 @@
       padding: 2px 9px;
       margin-bottom: 10px;
     }
-    .result-type-badge.unknown {
-      background: var(--bg-sunk);
-      color: var(--ink-3);
-      border-color: var(--rule);
-    }
+    .result-type-badge.unknown  { background: var(--bg-sunk); color: var(--ink-3); border-color: var(--rule); }
     .result-type-badge.estimate { background: var(--accent-soft); color: var(--accent-deep); border-color: rgba(224,122,44,.25); }
     .result-type-badge.tool     { background: #e8edf8; color: #2d5aa0; border-color: rgba(45,90,160,.2); }
     .result-type-badge.wsf      { background: var(--ok-soft); color: var(--ok); border-color: rgba(42,122,75,.2); }
@@ -299,7 +327,6 @@
       text-align: center;
     }
     .action-btn:hover { border-color: rgba(224,122,44,.4); color: var(--accent); background: var(--bg-elev); }
-    .action-btn.full-width { grid-column: 1 / -1; }
     .action-btn svg { flex-shrink: 0; }
 
     /* ── Manual entry ── */
@@ -383,18 +410,10 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .hist-label {
-      font-size: 10.5px;
-      color: var(--ink-3);
-      flex-shrink: 0;
-    }
-    .hist-time {
-      font-size: 10px;
-      color: var(--ink-3);
-      flex-shrink: 0;
-    }
+    .hist-label { font-size: 10.5px; color: var(--ink-3); flex-shrink: 0; }
+    .hist-time  { font-size: 10px;   color: var(--ink-3); flex-shrink: 0; }
 
-    /* ── Copy feedback ── */
+    /* ── Copy toast ── */
     .copy-toast {
       position: fixed;
       bottom: 24px; left: 50%;
@@ -410,10 +429,7 @@
       z-index: 100;
       white-space: nowrap;
     }
-    .copy-toast.show {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
-    }
+    .copy-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   </style>
 </head>
 <body>
@@ -443,7 +459,13 @@
     <!-- Camera area -->
     <div class="section-label">Camera</div>
     <div class="camera-wrap" id="cameraWrap">
+      <!-- Native BarcodeDetector video -->
       <video id="cameraVideo" autoplay playsinline muted></video>
+
+      <!-- html5-qrcode fallback container -->
+      <div id="html5qr-reader"></div>
+
+      <!-- Idle placeholder -->
       <div class="camera-idle" id="cameraIdle">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none"
              stroke="currentColor" stroke-width="1.4"
@@ -454,7 +476,8 @@
         </svg>
         Tap Start Camera to begin
       </div>
-      <!-- Scan reticle shown while scanning -->
+
+      <!-- Scan reticle (shown while any scanner is active) -->
       <div class="scan-reticle" id="scanReticle">
         <div class="reticle-box">
           <div class="reticle-inner"></div>
@@ -463,18 +486,12 @@
       </div>
     </div>
 
-    <!-- Unsupported browser message -->
-    <div class="unsupported-banner" id="unsupportedBanner">
-      <p>
-        <strong>Camera scanning not supported in this browser.</strong><br>
-        BarcodeDetector is available in Chrome 83+ on Android and desktop.
-        Use Manual Entry below to enter a code, or try opening this page in Chrome.
-      </p>
-    </div>
+    <!-- Status banner (compat / warn / error) -->
+    <div class="status-banner" id="statusBanner"></div>
 
     <!-- Camera controls -->
     <div class="btn-row">
-      <button class="btn btn-primary" id="btnStart">
+      <button class="btn btn-primary" id="btnStart" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
              stroke="currentColor" stroke-width="2.2"
              stroke-linecap="round" stroke-linejoin="round"
@@ -495,7 +512,7 @@
       </button>
     </div>
 
-    <!-- Result card -->
+    <!-- Result card (unchanged structure) -->
     <div class="result-card" id="resultCard">
       <span class="result-type-badge" id="resultBadge">Estimate</span>
       <div class="result-value" id="resultValue">EST12345</div>
@@ -556,7 +573,7 @@
       <button class="clear-btn" onclick="clearHistory()">Clear</button>
     </div>
     <div class="history-list" id="historyList">
-      <div class="history-empty" id="historyEmpty">No scans yet.</div>
+      <div class="history-empty">No scans yet.</div>
     </div>
 
   </main>
@@ -565,69 +582,150 @@
   <div class="copy-toast" id="copyToast">Copied!</div>
 
   <script>
-    /* ───────────────────────────────────────────
-       WSF Scanner — v1
-       Uses native BarcodeDetector API only.
-       No external libraries. No backend writes.
-       History stored in localStorage.
-    ─────────────────────────────────────────── */
+    /* ───────────────────────────────────────────────────────────────
+       WSF Scanner — v2
+       Priority: BarcodeDetector (native) → html5-qrcode (fallback) → manual only
+       CDN: https://unpkg.com/html5-qrcode  (loaded dynamically, only if needed)
+       All successful scans flow through handleScan().
+       No backend writes. History in localStorage only.
+    ─────────────────────────────────────────────────────────────── */
 
     const HISTORY_KEY = 'wsf_scan_history';
     const HISTORY_MAX = 30;
 
-    // Supported barcode formats for BarcodeDetector
     const BARCODE_FORMATS = [
       'qr_code', 'ean_13', 'ean_8', 'code_128', 'code_39',
       'pdf417', 'aztec', 'data_matrix', 'upc_a', 'upc_e',
       'itf', 'codabar', 'code_93'
     ];
 
-    let stream    = null;
-    let detector  = null;
-    let rafId     = null;
-    let scanning  = false;
+    /* ── Capability flags (set during init) ── */
+    let hasBarcodeDetector = false;
+    let hasHtml5Qr         = false;
+
+    /* ── Native scanner state ── */
+    let stream   = null;   // MediaStream
+    let detector = null;   // BarcodeDetector instance
+    let rafId    = null;   // requestAnimationFrame id
+    let scanning = false;  // native loop running
+
+    /* ── html5-qrcode state ── */
+    let h5qr       = null;   // Html5Qrcode instance
+    let h5qrActive = false;  // h5qr currently scanning
+
+    /* ── Shared state ── */
     let lastValue = '';
 
-    const videoEl         = document.getElementById('cameraVideo');
-    const cameraIdle      = document.getElementById('cameraIdle');
-    const scanReticle     = document.getElementById('scanReticle');
-    const btnStart        = document.getElementById('btnStart');
-    const btnStop         = document.getElementById('btnStop');
-    const resultCard      = document.getElementById('resultCard');
-    const resultBadge     = document.getElementById('resultBadge');
-    const resultValue     = document.getElementById('resultValue');
-    const resultMeta      = document.getElementById('resultMeta');
-    const btnManifest     = document.getElementById('btnManifest');
-    const btnAsk          = document.getElementById('btnAsk');
-    const manualInput     = document.getElementById('manualInput');
-    const historyList     = document.getElementById('historyList');
-    const historyEmpty    = document.getElementById('historyEmpty');
-    const copyToast       = document.getElementById('copyToast');
-    const unsupportedBanner = document.getElementById('unsupportedBanner');
+    /* ── DOM refs ── */
+    const videoEl      = document.getElementById('cameraVideo');
+    const h5qrReader   = document.getElementById('html5qr-reader');
+    const cameraIdle   = document.getElementById('cameraIdle');
+    const scanReticle  = document.getElementById('scanReticle');
+    const btnStart     = document.getElementById('btnStart');
+    const btnStop      = document.getElementById('btnStop');
+    const resultCard   = document.getElementById('resultCard');
+    const resultBadge  = document.getElementById('resultBadge');
+    const resultValue  = document.getElementById('resultValue');
+    const resultMeta   = document.getElementById('resultMeta');
+    const btnManifest  = document.getElementById('btnManifest');
+    const btnAsk       = document.getElementById('btnAsk');
+    const manualInput  = document.getElementById('manualInput');
+    const historyList  = document.getElementById('historyList');
+    const copyToast    = document.getElementById('copyToast');
+    const statusBanner = document.getElementById('statusBanner');
 
-    /* ── Browser support check ── */
-    const hasBarcodeDetector = ('BarcodeDetector' in window);
+    /* ════════════════════════════════════════════
+       INIT — detect capabilities, load fallback
+    ════════════════════════════════════════════ */
+    async function init() {
+      renderHistory();
 
-    if (!hasBarcodeDetector) {
-      unsupportedBanner.style.display = 'block';
+      /* 1 ── Try native BarcodeDetector ── */
+      if ('BarcodeDetector' in window) {
+        hasBarcodeDetector = true;
+        try {
+          const supported = await BarcodeDetector.getSupportedFormats();
+          const formats = BARCODE_FORMATS.filter(f => supported.includes(f));
+          detector = new BarcodeDetector({ formats: formats.length ? formats : ['qr_code'] });
+        } catch (_) {
+          detector = new BarcodeDetector({ formats: ['qr_code', 'code_128', 'ean_13'] });
+        }
+        btnStart.disabled = false;
+        return;
+      }
+
+      /* 2 ── Try html5-qrcode fallback (needed for iOS Safari / iOS Chrome) ── */
+      try {
+        await loadScript('https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js');
+        if (typeof Html5Qrcode !== 'undefined') {
+          hasHtml5Qr = true;
+          btnStart.disabled = false;
+          showBanner('compat', 'Using compatibility scanner for this browser.');
+          return;
+        }
+      } catch (_) { /* CDN failed to load */ }
+
+      /* 3 ── Neither available — manual entry only ── */
+      showBanner('warn', 'Camera scanning is unavailable in this browser. Manual entry still works.');
       btnStart.disabled = true;
-      btnStart.title = 'BarcodeDetector not supported in this browser';
-    } else {
-      // Pre-flight: get supported formats and filter to what the browser supports
-      BarcodeDetector.getSupportedFormats().then(supported => {
-        const formats = BARCODE_FORMATS.filter(f => supported.includes(f));
-        detector = new BarcodeDetector({ formats: formats.length ? formats : ['qr_code'] });
-      }).catch(() => {
-        detector = new BarcodeDetector({ formats: ['qr_code', 'code_128', 'ean_13'] });
+    }
+
+    /* ── Dynamic script loader ── */
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        if (document.querySelector('script[src="' + src + '"]')) { resolve(); return; }
+        const s = document.createElement('script');
+        s.src = src;
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
       });
     }
 
-    /* ── Camera start / stop ── */
+    /* ════════════════════════════════════════════
+       CAMERA — unified start / stop (dispatches
+       to native or html5-qrcode based on capability)
+    ════════════════════════════════════════════ */
     btnStart.addEventListener('click', startCamera);
     btnStop.addEventListener('click',  stopCamera);
 
     async function startCamera() {
-      if (!hasBarcodeDetector) return;
+      if (hasBarcodeDetector) {
+        await startNativeCamera();
+      } else if (hasHtml5Qr) {
+        await startHtml5QrCamera();
+      }
+    }
+
+    async function stopCamera() {
+      if (hasBarcodeDetector) {
+        stopNativeCamera();
+      } else if (hasHtml5Qr) {
+        await stopHtml5QrCamera();
+      }
+    }
+
+    /* ── Shared UI helpers ── */
+    function onCameraStart() {
+      cameraIdle.style.display = 'none';
+      scanReticle.style.display = 'block';
+      btnStart.disabled = true;
+      btnStop.disabled  = false;
+      resultCard.classList.remove('visible');
+      hideBanner();
+    }
+
+    function onCameraStop() {
+      cameraIdle.style.display = 'flex';
+      scanReticle.style.display = 'none';
+      btnStart.disabled = false;
+      btnStop.disabled  = true;
+    }
+
+    /* ════════════════════════════════════════════
+       NATIVE — BarcodeDetector + getUserMedia
+    ════════════════════════════════════════════ */
+    async function startNativeCamera() {
       btnStart.disabled = true;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -635,49 +733,130 @@
         });
         videoEl.srcObject = stream;
         videoEl.style.display = 'block';
-        cameraIdle.style.display = 'none';
-        scanReticle.style.display = 'block';
-        btnStop.disabled = false;
-        btnStart.disabled = true;
         scanning = true;
-        resultCard.classList.remove('visible');
+        onCameraStart();
         detectLoop();
       } catch (err) {
         btnStart.disabled = false;
         const msg = err.name === 'NotAllowedError'
-          ? 'Camera permission denied. Please allow camera access and try again.'
+          ? 'Camera permission was denied. Enable camera access or use Manual Entry.'
           : 'Could not access camera: ' + err.message;
-        showBanner(msg);
+        showBanner('error', msg);
       }
     }
 
-    function stopCamera() {
+    function stopNativeCamera() {
       scanning = false;
       if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
       if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
       videoEl.style.display = 'none';
       videoEl.srcObject = null;
-      cameraIdle.style.display = 'flex';
-      scanReticle.style.display = 'none';
-      btnStart.disabled = false;
-      btnStop.disabled = true;
+      onCameraStop();
     }
 
-    /* ── Detection loop ── */
     async function detectLoop() {
       if (!scanning || !detector) return;
-      if (videoEl.readyState >= 2) { // HAVE_CURRENT_DATA
+      if (videoEl.readyState >= 2) {
         try {
           const codes = await detector.detect(videoEl);
           if (codes.length > 0) {
             const code = codes[0];
-            stopCamera();
-            handleScan(code.rawValue, code.format || 'unknown');
+            stopNativeCamera();
+            handleScan(code.rawValue, code.format || 'camera');
             return;
           }
         } catch (_) { /* ignore mid-frame errors */ }
       }
       rafId = requestAnimationFrame(detectLoop);
+    }
+
+    /* ════════════════════════════════════════════
+       HTML5-QRCODE — fallback for iOS and browsers
+       without BarcodeDetector
+    ════════════════════════════════════════════ */
+    async function startHtml5QrCamera() {
+      btnStart.disabled = true;
+      try {
+        h5qr = new Html5Qrcode('html5qr-reader');
+        await h5qr.start(
+          { facingMode: 'environment' },
+          { fps: 10 },
+          /* onScanSuccess */ (decodedText, result) => {
+            const fmt = (result && result.result && result.result.format
+              && result.result.format.formatName) || 'camera';
+            stopHtml5QrCamera().then(() => handleScan(decodedText, fmt));
+          },
+          /* onScanError  */ (_) => { /* per-frame miss — ignore */ }
+        );
+        h5qrReader.style.display = 'block';
+        h5qrActive = true;
+        onCameraStart();
+      } catch (err) {
+        h5qrActive = false;
+        if (h5qr) { try { h5qr.clear(); } catch (_) {} h5qr = null; }
+        h5qrReader.style.display = 'none';
+        btnStart.disabled = false;
+        const msg = (err && (err.name === 'NotAllowedError' || /permission/i.test(String(err))))
+          ? 'Camera permission was denied. Enable camera access or use Manual Entry.'
+          : 'Could not start camera: ' + String(err);
+        showBanner('error', msg);
+      }
+    }
+
+    async function stopHtml5QrCamera() {
+      if (h5qr) {
+        try { await h5qr.stop(); } catch (_) {}
+        try { h5qr.clear(); }     catch (_) {}
+        h5qr = null;
+      }
+      h5qrActive = false;
+      h5qrReader.style.display = 'none';
+      onCameraStop();
+    }
+
+    /* ════════════════════════════════════════════
+       CORE SCAN HANDLER — identical regardless
+       of scan method (native / h5qr / manual / re-loaded)
+    ════════════════════════════════════════════ */
+    function handleScan(value, format) {
+      lastValue = value;
+      const { label, badgeClass } = classifyScan(value);
+      const ts      = new Date();
+      const timeStr = ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const fmtLabel = format === 'manual'    ? 'Manual entry'
+                     : format === 're-loaded' ? 'Re-loaded'
+                     : (format || 'camera');
+
+      resultBadge.textContent = label;
+      resultBadge.className   = 'result-type-badge ' + badgeClass;
+      resultValue.textContent = value;
+      resultMeta.textContent  = timeStr + ' · ' + fmtLabel;
+
+      const enc = encodeURIComponent(value);
+      btnManifest.href = '/manifest?estimate_id=' + enc;
+      btnAsk.href      = '/ask?q=' + enc;
+
+      resultCard.classList.add('visible');
+
+      addToHistory({ value, label, format: fmtLabel, ts: ts.toISOString() });
+      renderHistory();
+    }
+
+    /* ── Scan classification (unchanged) ── */
+    function classifyScan(value) {
+      if (value.startsWith('EST:'))      return { label: 'Estimate',             badgeClass: 'estimate' };
+      if (value.startsWith('MANIFEST:')) return { label: 'Manifest Item',        badgeClass: 'estimate' };
+      if (value.startsWith('TOOL:'))     return { label: 'Tool',                 badgeClass: 'tool'     };
+      if (value.startsWith('WSF:'))      return { label: 'WSF Code',             badgeClass: 'wsf'      };
+      if (/^\d{4,}$/.test(value))        return { label: 'Possible Estimate ID', badgeClass: 'estimate' };
+      return { label: 'Unknown Code', badgeClass: 'unknown' };
+    }
+
+    /* ── Scan Again ── */
+    function scanAgain() {
+      resultCard.classList.remove('visible');
+      startCamera();  // dispatches to native or h5qr; no-op if neither capable
+      if (!hasBarcodeDetector && !hasHtml5Qr) manualInput.focus();
     }
 
     /* ── Manual entry ── */
@@ -692,54 +871,10 @@
       manualInput.value = '';
     }
 
-    /* ── Core scan handler ── */
-    function handleScan(value, format) {
-      lastValue = value;
-      const { label, badgeClass } = classifyScan(value);
-      const ts = new Date();
-      const timeStr = ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const fmtLabel = format === 'manual' ? 'Manual entry' : (format || 'camera');
-
-      // Update result card
-      resultBadge.textContent = label;
-      resultBadge.className = 'result-type-badge ' + badgeClass;
-      resultValue.textContent = value;
-      resultMeta.textContent = timeStr + ' · ' + fmtLabel;
-
-      // Update action links
-      const enc = encodeURIComponent(value);
-      btnManifest.href = '/manifest?estimate_id=' + enc;
-      btnAsk.href      = '/ask?q=' + enc;
-
-      resultCard.classList.add('visible');
-
-      // Save to history
-      addToHistory({ value, label, format: fmtLabel, ts: ts.toISOString() });
-      renderHistory();
-    }
-
-    /* ── Scan classification ── */
-    function classifyScan(value) {
-      if (value.startsWith('EST:'))      return { label: 'Estimate',            badgeClass: 'estimate' };
-      if (value.startsWith('MANIFEST:')) return { label: 'Manifest Item',       badgeClass: 'estimate' };
-      if (value.startsWith('TOOL:'))     return { label: 'Tool',                badgeClass: 'tool'     };
-      if (value.startsWith('WSF:'))      return { label: 'WSF Code',            badgeClass: 'wsf'      };
-      if (/^\d{4,}$/.test(value))        return { label: 'Possible Estimate ID', badgeClass: 'estimate' };
-      return { label: 'Unknown Code', badgeClass: 'unknown' };
-    }
-
-    /* ── Scan again ── */
-    function scanAgain() {
-      resultCard.classList.remove('visible');
-      if (hasBarcodeDetector) startCamera();
-      else manualInput.focus();
-    }
-
-    /* ── Copy value ── */
+    /* ── Copy value (unchanged) ── */
     function copyValue() {
       if (!lastValue) return;
       navigator.clipboard.writeText(lastValue).then(() => showToast('Copied!')).catch(() => {
-        // fallback for older mobile browsers
         const ta = document.createElement('textarea');
         ta.value = lastValue;
         ta.style.position = 'fixed'; ta.style.opacity = '0';
@@ -757,14 +892,22 @@
       setTimeout(() => copyToast.classList.remove('show'), 1800);
     }
 
-    /* ── Unsupported banner (for camera errors) ── */
-    function showBanner(msg) {
-      unsupportedBanner.querySelector('p').innerHTML =
-        '<strong>Camera error.</strong><br>' + msg;
-      unsupportedBanner.style.display = 'block';
+    /* ── Status banner ──
+       type: 'compat' | 'warn' | 'error'
+    ── */
+    function showBanner(type, msg) {
+      statusBanner.className = 'status-banner ' + type;
+      statusBanner.textContent = msg;
+      statusBanner.style.display = 'block';
     }
 
-    /* ── localStorage history ── */
+    function hideBanner() {
+      statusBanner.style.display = 'none';
+    }
+
+    /* ════════════════════════════════════════════
+       localStorage HISTORY (unchanged)
+    ════════════════════════════════════════════ */
     function getHistory() {
       try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
       catch (_) { return []; }
@@ -785,11 +928,11 @@
     function renderHistory() {
       const h = getHistory();
       if (!h.length) {
-        historyList.innerHTML = '<div class="history-empty" id="historyEmpty">No scans yet.</div>';
+        historyList.innerHTML = '<div class="history-empty">No scans yet.</div>';
         return;
       }
       historyList.innerHTML = h.map((item, i) => {
-        const d = new Date(item.ts);
+        const d    = new Date(item.ts);
         const when = isNaN(d) ? '' : d.toLocaleDateString([], { month: 'short', day: 'numeric' })
           + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         return `<div class="history-item" onclick="reScan(${i})" title="Tap to re-load this scan">
@@ -803,8 +946,7 @@
     function reScan(index) {
       const h = getHistory();
       if (!h[index]) return;
-      const item = h[index];
-      handleScan(item.value, 're-loaded');
+      handleScan(h[index].value, 're-loaded');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
@@ -816,13 +958,15 @@
         .replace(/"/g, '&quot;');
     }
 
-    /* ── Init ── */
-    renderHistory();
-
-    /* ── Stop camera on page hide (mobile tab switch) ── */
+    /* ── Stop camera when user switches tabs / backgrounds app ── */
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden && scanning) stopCamera();
+      if (!document.hidden) return;
+      if (scanning)   stopNativeCamera();
+      if (h5qrActive) stopHtml5QrCamera();
     });
+
+    /* ── Kick off ── */
+    init();
   </script>
 
 </body>
