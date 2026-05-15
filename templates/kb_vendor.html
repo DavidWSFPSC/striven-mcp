@@ -308,7 +308,10 @@
 
         <div class="page-eyebrow">KB Coverage · Vendor Drill-Down</div>
         <h1 class="page-title">{{ vendor_name }}</h1>
-        <p class="page-subtitle">Estimates where this vendor appeared as a matched line item</p>
+        <p class="page-subtitle">Matched evidence from current Striven text and catalog fields</p>
+        <p style="font-size:12.5px;color:var(--ink-3);margin:-28px 0 32px;line-height:1.5;">
+          These are matchable examples — not a guaranteed complete vendor sales record.
+        </p>
 
         {% if error %}
         <div class="error-banner">
@@ -326,12 +329,12 @@
         <!-- ── Summary cards ──────────────────────────────────── -->
         <div class="stat-grid">
           <div class="stat-card">
-            <div class="stat-label">Matched Line Items</div>
+            <div class="stat-label">Text-Matched Line Items</div>
             <div class="stat-value">{{ lines | length }}</div>
             <div class="stat-sub">{{ match_method }}</div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Unique Estimates</div>
+            <div class="stat-label">Text-Matched Estimates</div>
             <div class="stat-value">{{ unique_estimates }}</div>
             <div class="stat-sub">distinct jobs</div>
           </div>
@@ -347,14 +350,39 @@
           </div>
         </div>
 
+        {% set _sku_count = vendor_meta.total_unique_skus if vendor_meta.total_unique_skus else 0 %}
+        {% if _sku_count > (lines | length) * 2 %}
+        <div style="
+          background: var(--warn-soft);
+          border: 1px solid rgba(192,138,26,0.30);
+          border-radius: var(--radius-sm);
+          padding: 12px 16px;
+          font-size: 12.5px;
+          color: var(--warn);
+          margin-bottom: 16px;
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+        ">
+          <span style="font-size:15px;flex-shrink:0;margin-top:1px;">⚠</span>
+          <span>
+            <strong>Mapping gap:</strong> The KB index shows <strong>{{ _sku_count }} unique SKUs</strong>
+            for this vendor, but only <strong>{{ lines | length }} line item{{ 's' if lines | length != 1 else '' }}</strong>
+            were text-matched here. Many model-number-only line items may not appear because
+            no vendor→SKU mapping table exists in the current schema.
+          </span>
+        </div>
+        {% endif %}
+
         <div class="note-bar">
+          <strong>Data sources:</strong>
           {% if matched_catalog_items > 0 %}
-            Matched via <strong>{{ matched_catalog_items }} catalog SKU{{ 's' if matched_catalog_items != 1 else '' }}</strong> from the items table, plus vendor name text search across line item names and descriptions.
+            Matched via <strong>{{ matched_catalog_items }} catalog entry{{ 's' if matched_catalog_items != 1 else '' }}</strong> from the items table (Path A), plus vendor name text search across line item names (Path B) and descriptions (Path C).
           {% else %}
-            Matched by vendor name text search across line item names and descriptions.
-            Model-number-only line items may not appear — no vendor→SKU mapping table exists in the current schema.
+            Matched by vendor name text search across line item names (Path B) and descriptions (Path C).
+            No catalog entries matched — model-number-only line items may not appear.
           {% endif %}
-          Job address is not stored on estimates. Revenue shown is matched line totals, not full estimate value.
+          Job address is not stored on estimates. Revenue shown is matched line totals only, not full estimate value.
         </div>
 
         <!-- ── Search + table ─────────────────────────────────── -->

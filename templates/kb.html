@@ -480,7 +480,7 @@
               <ul class="queue-vendor-list">
                 {% for v in q_start_here %}
                 <li>
-                  <a class="qv-name" href="{{ url_for('kb_vendor', vendor_name=v.vendor) }}" style="text-decoration:none;color:inherit;">{{ v.vendor }}</a>
+                  <a class="qv-name" href="{{ url_for('kb_vendor', vendor_name=v.vendor) }}" title="View matched evidence →" style="text-decoration:none;color:inherit;">{{ v.vendor }}</a>
                   <span class="qv-meta">{{ v.revenue_fmt }} · {{ v.workstream }}</span>
                 </li>
                 {% endfor %}
@@ -509,7 +509,7 @@
               <ul class="queue-vendor-list">
                 {% for v in q_website_gaps %}
                 <li>
-                  <a class="qv-name" href="{{ url_for('kb_vendor', vendor_name=v.vendor) }}" style="text-decoration:none;color:inherit;">{{ v.vendor }}</a>
+                  <a class="qv-name" href="{{ url_for('kb_vendor', vendor_name=v.vendor) }}" title="View matched evidence →" style="text-decoration:none;color:inherit;">{{ v.vendor }}</a>
                   <span class="qv-meta">{{ v.revenue_fmt }} · {{ v.kb_doc_count }} docs</span>
                 </li>
                 {% endfor %}
@@ -538,7 +538,7 @@
               <ul class="queue-vendor-list">
                 {% for v in q_whyfyre %}
                 <li>
-                  <a class="qv-name" href="{{ url_for('kb_vendor', vendor_name=v.vendor) }}" style="text-decoration:none;color:inherit;">{{ v.vendor }}</a>
+                  <a class="qv-name" href="{{ url_for('kb_vendor', vendor_name=v.vendor) }}" title="View matched evidence →" style="text-decoration:none;color:inherit;">{{ v.vendor }}</a>
                   <span class="qv-meta">{{ v.revenue_fmt }} · {{ v.kb_doc_count }} docs</span>
                 </li>
                 {% endfor %}
@@ -580,7 +580,7 @@
               <tbody>
                 {% for v in vendors %}
                 <tr>
-                  <td class="vendor-cell"><a href="{{ url_for('kb_vendor', vendor_name=v.vendor) }}" style="color:inherit;text-decoration:none;border-bottom:1px dotted var(--rule-strong);">{{ v.vendor }}</a></td>
+                  <td class="vendor-cell"><a href="{{ url_for('kb_vendor', vendor_name=v.vendor) }}" title="View matched evidence →" style="color:inherit;text-decoration:none;border-bottom:1px dotted var(--rule-strong);">{{ v.vendor }}</a></td>
                   <td>
                     <span class="badge {{ v.coverage_status }}">
                       <span class="badge-dot"></span>

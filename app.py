@@ -8156,6 +8156,25 @@ def kb_vendor(vendor_name: str):
     ]
     most_recent_date = max(dates) if dates else "—"
 
+    # ── vendor_meta from kb_product_index ─────────────────────────
+    vendor_meta: dict = {}
+    try:
+        vm_sb = _sb_client()
+        vm_res = (
+            vm_sb.table("kb_product_index")
+            .select(
+                "vendor, total_unique_skus, total_revenue, "
+                "kb_doc_count, coverage_status, has_install_manual"
+            )
+            .ilike("vendor", vendor_name)
+            .limit(1)
+            .execute()
+        )
+        if vm_res.data:
+            vendor_meta = vm_res.data[0]
+    except Exception as vm_exc:
+        print(f"[kb_vendor] vendor_meta error: {vm_exc}", flush=True)
+
     def _fmt_cur_plain(v):
         try:
             return f"${float(v):,.2f}"
@@ -8173,6 +8192,7 @@ def kb_vendor(vendor_name: str):
         match_method=match_method,
         matched_catalog_items=matched_catalog_items,
         fallback_used=fallback_used,
+        vendor_meta=vendor_meta,
     )
 
 
